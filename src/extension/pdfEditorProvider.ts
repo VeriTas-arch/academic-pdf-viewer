@@ -8,9 +8,9 @@ export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
 
 class PdfDocument implements vscode.CustomDocument {
-    constructor(public readonly uri: vscode.Uri) {}
+    constructor(public readonly uri: vscode.Uri) { }
 
-    dispose(): void {}
+    dispose(): void { }
 }
 
 export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<PdfDocument> {

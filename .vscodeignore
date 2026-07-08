@@ -1,6 +1,9 @@
 .vscode/**
 .vscode-test/**
 node_modules/**
+dist/**
+ref/**
+test/**
 .npm-cache*/**
 .vendor-vscode-pdf*/**
 vscode-pdfviewer-main/**
@@ -12,9 +15,11 @@ webview/**
 scripts/**
 .gitignore
 .yarnrc
+note.md
 vsc-extension-quickstart.md
-**/tsconfig.json
+tsconfig*.json
 **/eslint.config.mjs
 **/*.map
 **/*.ts
+*.vsix
 **/.vscode-test.*

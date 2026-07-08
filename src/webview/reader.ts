@@ -1,36 +1,61 @@
 /// <reference path="./globals.d.ts" />
+
 "use strict";
+
 (function () {
+    type PdfJsApp = any;
+    type PdfJsViewer = any;
+    type NavigationDirection = "back" | "forward";
+
+    interface NavigationPoint {
+        pageNumber: number;
+        scrollTop: number;
+        scrollLeft: number;
+        scale: number;
+        pdfLeft: number | null;
+        pdfTop: number | null;
+    }
+
+    type NavigationMessage =
+        | { type: "navigation.back" }
+        | { type: "navigation.forward" };
+
     if (window.PDFViewerApplicationOptions) {
         window.PDFViewerApplicationOptions.set("disableHistory", true);
         window.PDFViewerApplicationOptions.set("useOnlyCssZoom", true);
     }
+
     const vscode = acquireVsCodeApi();
     const pressedNavigationKeys = {
         back: false,
         forward: false
     };
+
     class NavigationHistory {
-        _onNavigate;
-        _backStack;
-        _forwardStack;
-        constructor(onNavigate) {
+        _onNavigate: (location: NavigationPoint) => void;
+        _backStack: NavigationPoint[];
+        _forwardStack: NavigationPoint[];
+
+        constructor(onNavigate: (location: NavigationPoint) => void) {
             this._onNavigate = onNavigate;
             this._backStack = [];
             this._forwardStack = [];
         }
+
         reset() {
             this._backStack = [];
             this._forwardStack = [];
         }
-        pushDeparture(location) {
+
+        pushDeparture(location: NavigationPoint | null): void {
             if (!location || locationsEqual(this._backStack[this._backStack.length - 1], location)) {
                 return;
             }
             this._backStack.push(location);
             this._forwardStack = [];
         }
-        back(currentLocation) {
+
+        back(currentLocation: NavigationPoint | null): void {
             if (this._backStack.length === 0) {
                 return;
             }
@@ -42,7 +67,8 @@
                 this._onNavigate(destination);
             }
         }
-        forward(currentLocation) {
+
+        forward(currentLocation: NavigationPoint | null): void {
             if (this._forwardStack.length === 0) {
                 return;
             }
@@ -55,7 +81,8 @@
             }
         }
     }
-    function normalizeLocation(location) {
+
+    function normalizeLocation(location: NavigationPoint | null): NavigationPoint | null {
         if (!location) {
             return null;
         }
@@ -74,7 +101,8 @@
             pdfTop
         };
     }
-    function locationsEqual(a, b) {
+
+    function locationsEqual(a: NavigationPoint | undefined | null, b: NavigationPoint | undefined | null): boolean {
         if (!a || !b) {
             return false;
         }
@@ -85,20 +113,25 @@
             && a.pdfLeft === b.pdfLeft
             && a.pdfTop === b.pdfTop;
     }
-    function getViewer() {
+
+    function getViewer(): PdfJsViewer | null {
         return window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer;
     }
-    function getContainer() {
+
+    function getContainer(): HTMLElement | null {
         const viewer = getViewer();
         return viewer && viewer.container || document.getElementById("viewerContainer");
     }
-    function captureLocation() {
+
+    function captureLocation(): NavigationPoint | null {
         const viewer = getViewer();
         const container = getContainer();
         if (!viewer || !container) {
             return null;
         }
+
         const pdfLocation = viewer._location;
+
         return normalizeLocation({
             pageNumber: viewer.currentPageNumber,
             scrollTop: container.scrollTop,
@@ -108,12 +141,14 @@
             pdfTop: pdfLocation ? pdfLocation.top : null
         });
     }
-    function restoreLocation(location) {
+
+    function restoreLocation(location: NavigationPoint): void {
         const viewer = getViewer();
         const container = getContainer();
         if (!viewer || !container || !location) {
             return;
         }
+
         restoring = true;
         const app = window.PDFViewerApplication;
         const pdfLeft = typeof location.pdfLeft === "number" && Number.isFinite(location.pdfLeft) ? location.pdfLeft : 0;
@@ -134,13 +169,15 @@
             finishRestore(location);
             return;
         }
+
         viewer.currentScaleValue = String(location.scale);
         if (app && app.pdfLinkService) {
             app.pdfLinkService.goToPage(location.pageNumber);
         }
         finishRestore(location);
     }
-    function canRestoreWithPdfDestination(location, viewer) {
+
+    function canRestoreWithPdfDestination(location: NavigationPoint, viewer: PdfJsViewer): boolean {
         const hasPdfPosition = typeof location.pdfLeft === "number"
             && Number.isFinite(location.pdfLeft)
             && typeof location.pdfTop === "number"
@@ -150,7 +187,8 @@
             && Number.isFinite(location.scale)
             && typeof viewer.scrollPageIntoView === "function";
     }
-    function finishRestore(location) {
+
+    function finishRestore(location: NavigationPoint): void {
         const container = getContainer();
         if (!container) {
             restoring = false;
@@ -164,36 +202,42 @@
             });
         });
     }
-    function recordDeparture() {
+
+    function recordDeparture(): void {
         if (restoring || !history) {
             return;
         }
         history.pushDeparture(captureLocation());
     }
-    function patchExplicitNavigation(app) {
+
+    function patchExplicitNavigation(app: PdfJsApp): void {
         const linkService = app.pdfLinkService;
         if (linkService && !linkService.__academicHistoryPatched) {
             const goToDestination = linkService.goToDestination.bind(linkService);
-            linkService.goToDestination = function (...args) {
+            linkService.goToDestination = function (...args: unknown[]) {
                 recordDeparture();
                 return goToDestination(...args);
             };
+
             const goToPage = linkService.goToPage.bind(linkService);
-            linkService.goToPage = function (...args) {
+            linkService.goToPage = function (...args: unknown[]) {
                 recordDeparture();
                 return goToPage(...args);
             };
+
             const setHash = linkService.setHash.bind(linkService);
-            linkService.setHash = function (...args) {
+            linkService.setHash = function (...args: unknown[]) {
                 recordDeparture();
                 return setHash(...args);
             };
+
             linkService.__academicHistoryPatched = true;
         }
+
         const viewer = app.pdfViewer;
         if (viewer && !viewer.__academicHistoryPatched && typeof viewer._setCurrentPageNumber === "function") {
             const setCurrentPageNumber = viewer._setCurrentPageNumber.bind(viewer);
-            viewer._setCurrentPageNumber = function (pageNumber, resetCurrentPageView) {
+            viewer._setCurrentPageNumber = function (pageNumber: number, resetCurrentPageView: boolean) {
                 if (resetCurrentPageView && pageNumber !== viewer.currentPageNumber) {
                     recordDeparture();
                 }
@@ -202,7 +246,8 @@
             viewer.__academicHistoryPatched = true;
         }
     }
-    function handleNavigationMessage(data, allowPressedKey = false) {
+
+    function handleNavigationMessage(data: NavigationMessage | unknown, allowPressedKey = false): void {
         if (!history) {
             return;
         }
@@ -214,22 +259,23 @@
                 return;
             }
             history.back(captureLocation());
-        }
-        else if (data.type === "navigation.forward") {
+        } else if (data.type === "navigation.forward") {
             if (!allowPressedKey && pressedNavigationKeys.forward) {
                 return;
             }
             history.forward(captureLocation());
         }
     }
-    function isNavigationMessage(data) {
+
+    function isNavigationMessage(data: unknown): data is NavigationMessage {
         return typeof data === "object"
             && data !== null
             && "type" in data
-            && (data.type === "navigation.back"
-                || data.type === "navigation.forward");
+            && ((data as { type: unknown }).type === "navigation.back"
+                || (data as { type: unknown }).type === "navigation.forward");
     }
-    function handleKeyDown(event) {
+
+    function handleKeyDown(event: KeyboardEvent): void {
         if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
             return;
         }
@@ -240,8 +286,7 @@
             }
             pressedNavigationKeys.back = true;
             handleNavigationMessage({ type: "navigation.back" }, true);
-        }
-        else if (event.key === "ArrowRight") {
+        } else if (event.key === "ArrowRight") {
             event.preventDefault();
             if (event.repeat || pressedNavigationKeys.forward) {
                 return;
@@ -250,19 +295,19 @@
             handleNavigationMessage({ type: "navigation.forward" }, true);
         }
     }
-    function handleKeyUp(event) {
+
+    function handleKeyUp(event: KeyboardEvent): void {
         if (event.key === "ArrowLeft") {
             releaseNavigationKey("back");
-        }
-        else if (event.key === "ArrowRight") {
+        } else if (event.key === "ArrowRight") {
             releaseNavigationKey("forward");
-        }
-        else if (event.key === "Alt") {
+        } else if (event.key === "Alt") {
             releaseNavigationKey("back");
             releaseNavigationKey("forward");
         }
     }
-    function releaseNavigationKey(direction) {
+
+    function releaseNavigationKey(direction: NavigationDirection): void {
         if (!pressedNavigationKeys[direction]) {
             return;
         }
@@ -272,26 +317,32 @@
             direction
         });
     }
-    let history = null;
+
+    let history: NavigationHistory | null = null;
     let restoring = false;
-    async function initialize() {
+
+    async function initialize(): Promise<void> {
         const app = window.PDFViewerApplication;
         if (!app) {
             return;
         }
+
         await app.initializedPromise;
         history = new NavigationHistory(restoreLocation);
         patchExplicitNavigation(app);
+
         app.eventBus.on("documentloaded", () => {
             if (history) {
                 history.reset();
             }
             patchExplicitNavigation(app);
         });
+
         window.addEventListener("message", event => handleNavigationMessage(event.data));
         window.addEventListener("keydown", handleKeyDown, true);
         window.addEventListener("keyup", handleKeyUp, true);
     }
+
     initialize().catch(error => {
         console.error("Failed to initialize Academic PDF navigation layer.", error);
     });

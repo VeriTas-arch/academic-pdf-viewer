@@ -1,0 +1,20 @@
+{
+    "compilerOptions": {
+        "module": "None",
+        "target": "ES2022",
+        "outDir": "assets/academic",
+        "rootDir": "src/webview",
+        "lib": [
+            "ES2022",
+            "DOM"
+        ],
+        "sourceMap": false,
+        "strict": false,
+        "noImplicitAny": true,
+        "noEmitOnError": true,
+        "ignoreDeprecations": "6.0"
+    },
+    "include": [
+        "src/webview/**/*.ts"
+    ]
+}
