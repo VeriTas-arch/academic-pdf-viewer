@@ -135,10 +135,12 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('web', 'viewer.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('pdf.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'reader.css'))}">
+<link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
+<script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>`;
 
         return this.viewerHtml

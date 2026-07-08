@@ -1,0 +1,68 @@
+.academic-citation-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.academic-citation-link {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.academic-citation-link:hover,
+.academic-citation-link:focus-visible {
+  background: color-mix(in srgb, var(--vscode-editorLink-activeForeground, #3794ff) 24%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--vscode-editorLink-activeForeground, #3794ff) 55%, transparent);
+}
+
+.academic-citation-popup {
+  position: fixed;
+  z-index: 10000;
+  display: none;
+  width: min(760px, calc(100vw - 16px));
+  max-height: min(820px, calc(100vh - 16px));
+  overflow: auto;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1f1f1f));
+  color: var(--vscode-editorWidget-foreground, var(--vscode-editor-foreground, #cccccc));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.academic-citation-popup.is-open {
+  display: block;
+}
+
+.academic-citation-popup__meta {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(127, 127, 127, 0.35));
+  color: var(--vscode-descriptionForeground, currentColor);
+  font-size: 11px;
+}
+
+.academic-citation-popup__loading,
+.academic-citation-popup__text {
+  padding: 8px 9px 10px;
+}
+
+.academic-citation-popup__preview {
+  max-height: min(440px, calc(100vh - 170px));
+  overflow: auto;
+  border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(127, 127, 127, 0.35));
+  background: #ffffff;
+}
+
+.academic-citation-popup__image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
