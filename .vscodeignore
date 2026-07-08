@@ -1,6 +1,15 @@
 .vscode/**
 .vscode-test/**
+node_modules/**
+.npm-cache*/**
+.vendor-vscode-pdf*/**
+vscode-pdfviewer-main/**
+assets/pdf.js/**
+assets/main.mjs
+assets/main.css
 src/**
+webview/**
+scripts/**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md

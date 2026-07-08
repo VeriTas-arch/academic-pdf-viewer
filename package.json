@@ -1,7 +1,7 @@
 {
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
-    "description": "",
+    "description": "A VS Code PDF reader for academic papers.",
     "version": "0.0.1",
     "engines": {
         "vscode": "^1.125.0"
@@ -9,27 +9,58 @@
     "categories": [
         "Other"
     ],
-    "activationEvents": [],
+    "activationEvents": [
+        "onCustomEditor:academicPdfViewer.pdf"
+    ],
     "main": "./out/extension.js",
     "contributes": {
+        "customEditors": [
+            {
+                "viewType": "academicPdfViewer.pdf",
+                "displayName": "Academic PDF Viewer",
+                "selector": [
+                    {
+                        "filenamePattern": "*.pdf"
+                    }
+                ],
+                "priority": "default"
+            }
+        ],
         "commands": [
             {
-                "command": "academic-pdf-viewer.helloWorld",
-                "title": "Hello World"
+                "command": "academicPdfViewer.navigateBack",
+                "title": "PDF: Navigate Back"
+            },
+            {
+                "command": "academicPdfViewer.navigateForward",
+                "title": "PDF: Navigate Forward"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "academicPdfViewer.navigateBack",
+                "key": "alt+left",
+                "when": "activeCustomEditorId == academicPdfViewer.pdf"
+            },
+            {
+                "command": "academicPdfViewer.navigateForward",
+                "key": "alt+right",
+                "when": "activeCustomEditorId == academicPdfViewer.pdf"
             }
         ]
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
-        "compile": "tsc -p ./",
-        "lint": "eslint src"
+        "compile": "npm run compile:extension",
+        "compile:extension": "tsc -p ./",
+        "lint": "eslint \"src/**/*.ts\""
     },
     "devDependencies": {
-        "@types/vscode": "^1.125.0",
         "@types/node": "24.x",
-        "typescript-eslint": "^8.61.1",
+        "@types/vscode": "^1.125.0",
         "eslint": "^10.5.0",
-        "typescript": "^6.0.3"
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.61.1"
     },
     "overrides": {
         "diff": "^8.0.4",
