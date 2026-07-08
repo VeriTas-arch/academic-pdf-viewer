@@ -10,10 +10,10 @@ export function activate(context: vscode.ExtensionContext) {
             supportsMultipleEditorsPerDocument: true,
         }),
         vscode.commands.registerCommand('academicPdfViewer.navigateBack', () => {
-            provider.postToActive({ type: 'navigation.back' });
+            provider.navigate('back');
         }),
         vscode.commands.registerCommand('academicPdfViewer.navigateForward', () => {
-            provider.postToActive({ type: 'navigation.forward' });
+            provider.navigate('forward');
         }),
     );
 }

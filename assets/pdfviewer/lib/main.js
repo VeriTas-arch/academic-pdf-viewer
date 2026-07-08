@@ -74,7 +74,11 @@
       })
     })
 
-    window.addEventListener('message', async function () {
+    window.addEventListener('message', async function (event) {
+      if (event.data && typeof event.data.type === 'string' && event.data.type.startsWith('navigation.')) {
+        return
+      }
+
       // Prevents flickering of page when PDF is reloaded
       const oldResetView = PDFViewerApplication.pdfViewer._resetView
       PDFViewerApplication.pdfViewer._resetView = function () {

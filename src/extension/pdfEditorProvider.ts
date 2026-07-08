@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { readFileSync } from 'node:fs';
 
-import type { ExtensionToWebviewMessage } from '../shared/protocol';
+import type { ExtensionToWebviewMessage, NavigationDirection, WebviewToExtensionMessage } from '../shared/protocol';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 
@@ -14,7 +14,10 @@ class PdfDocument implements vscode.CustomDocument {
 }
 
 export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<PdfDocument> {
+    private static readonly navigationKeyFallbackReleaseMs = 800;
+
     private readonly panels = new Set<vscode.WebviewPanel>();
+    private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
 
@@ -52,6 +55,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             }
         });
 
+        panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
+            this.handleWebviewMessage(message);
+        });
+
         panel.webview.html = this.createHtml(panel.webview, document.uri);
     }
 
@@ -59,8 +66,51 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         void this.activePanel?.webview.postMessage(message);
     }
 
+    navigate(direction: NavigationDirection): void {
+        if (this.navigationKeyLocks.has(direction)) {
+            this.armNavigationKeyFallbackRelease(direction);
+            return;
+        }
+
+        this.armNavigationKeyFallbackRelease(direction);
+        this.postToActive({
+            type: direction === 'back' ? 'navigation.back' : 'navigation.forward',
+        });
+    }
+
+    private handleWebviewMessage(message: WebviewToExtensionMessage): void {
+        if (message.type === 'navigation.keyUp') {
+            this.releaseNavigationKeyLock(message.direction);
+        }
+    }
+
+    private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {
+        const existingTimer = this.navigationKeyLocks.get(direction);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(() => {
+            this.navigationKeyLocks.delete(direction);
+        }, PdfEditorProvider.navigationKeyFallbackReleaseMs);
+        this.navigationKeyLocks.set(direction, timer);
+    }
+
+    private releaseNavigationKeyLock(direction: NavigationDirection): void {
+        const timer = this.navigationKeyLocks.get(direction);
+        if (!timer) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this.navigationKeyLocks.delete(direction);
+    }
+
     private createHtml(webview: vscode.Webview, pdfUri: vscode.Uri): string {
         const webviewPdfUri = webview.asWebviewUri(pdfUri);
+        const assetUri = (...paths: string[]): string => webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'assets', ...paths),
+        ).toString();
         const libUri = (...paths: string[]): string => webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'assets', 'pdfviewer', 'lib', ...paths),
         ).toString();
@@ -84,9 +134,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <link rel="resource" type="application/l10n" href="${escapeHtmlAttribute(libUri('web', 'locale', 'locale.properties'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('web', 'viewer.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('pdf.css'))}">
+<link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'reader.css'))}">
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.js'))}"></script>
+<script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>`;
 
         return this.viewerHtml

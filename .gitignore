@@ -5,7 +5,8 @@ node_modules
 *.vsix
 
 # Reference
-vscode-pdfviewer-main/
+ref
+note.md
 
 # Vendored PDF.js sourcemaps are large and not needed at runtime.
 assets/pdfviewer/lib/**/*.map
