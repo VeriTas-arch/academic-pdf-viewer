@@ -9,9 +9,6 @@
     "categories": [
         "Other"
     ],
-    "activationEvents": [
-        "onCustomEditor:academicPdfViewer.pdf"
-    ],
     "main": "./out/extension.js",
     "contributes": {
         "customEditors": [
