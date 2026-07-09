@@ -3,6 +3,13 @@
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
     "version": "0.0.1",
+    "icon": "image/icon.png",
+    "publisher": "ovolab-veritas",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/VeriTas-arch/academic-pdf-viewer"
+    },
+    "license": "MIT",
     "engines": {
         "vscode": "^1.125.0"
     },
