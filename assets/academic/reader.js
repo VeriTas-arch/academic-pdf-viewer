@@ -292,6 +292,7 @@
         }
         event.preventDefault();
         event.stopImmediatePropagation();
+        window.dispatchEvent(new CustomEvent("academic-pdf-wheel-zoom"));
         if (document.visibilityState === "hidden") {
             return;
         }

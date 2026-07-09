@@ -2,17 +2,19 @@
 "use strict";
 (function () {
     const OPEN_DELAY_MS = 120;
-    const CLOSE_DELAY_MS = 400;
+    const CLOSE_DELAY_MS = 120;
     const TEXT_RADIUS_PX = 90;
     const MIN_PREVIEW_SCALE = 1.25;
     const MAX_PREVIEW_SCALE = 3.2;
-    const MAX_PREVIEW_PIXELS = 6400000;
+    const MAX_PREVIEW_PIXELS = 25600000;
     const PREVIEW_MARGIN_FALLBACK_RATIO = 0.08;
     const TEXT_BOUND_PADDING_PX = 28;
     const PREVIEW_TARGET_RADIUS = 10;
     const HIT_PADDING_PX = 2;
     const MIN_HIT_HEIGHT_PX = 10;
     const SCALE_RENDER_DEBOUNCE_MS = 140;
+    const MAX_PREVIEW_CACHE_ENTRIES = 16;
+    const WHEEL_ZOOM_SUPPRESS_HOVER_MS = 260;
     class HoverDelayer {
         _openTimer;
         _closeTimer;
@@ -60,10 +62,15 @@
         _hoverDelayer;
         _previewCache;
         _textCache;
+        _pageCache;
+        _annotationCache;
+        _textContentCache;
         _pageRenderIds;
         _previewRequestId;
         _popup;
         _scaleRenderTimer;
+        _suppressHoverUntil;
+        _activeRenderTask;
         constructor(app) {
             this._app = app;
             this._eventBus = app.eventBus;
@@ -71,16 +78,24 @@
             this._hoverDelayer = new HoverDelayer();
             this._previewCache = new Map();
             this._textCache = new Map();
+            this._pageCache = new Map();
+            this._annotationCache = new Map();
+            this._textContentCache = new Map();
             this._pageRenderIds = new Map();
             this._previewRequestId = 0;
             this._popup = this._createPopup();
             this._scaleRenderTimer = null;
+            this._suppressHoverUntil = 0;
+            this._activeRenderTask = null;
         }
         initialize() {
             this._eventBus.on("documentloaded", () => {
                 this._pdfDocument = this._app.pdfDocument;
-                this._previewCache.clear();
+                this._clearPreviewCache();
                 this._textCache.clear();
+                this._pageCache.clear();
+                this._annotationCache.clear();
+                this._textContentCache.clear();
                 this._pageRenderIds.clear();
                 this._cancelScheduledScaleRender();
                 this._hidePopup();
@@ -97,6 +112,10 @@
             this._eventBus.on("scalechanged", () => {
                 this._hidePopup();
                 this._scheduleScaleRender();
+            });
+            window.addEventListener("academic-pdf-wheel-zoom", () => {
+                this._suppressHoverUntil = performance.now() + WHEEL_ZOOM_SUPPRESS_HOVER_MS;
+                this._hidePopup();
             });
         }
         _scheduleScaleRender() {
@@ -134,8 +153,7 @@
                 return;
             }
             this._clearPageOverlays(pageView.div);
-            const page = await this._pdfDocument.getPage(pageNumber);
-            const annotations = await page.getAnnotations({ intent: "display" });
+            const annotations = await this._getPageAnnotations(pageNumber);
             if (this._pageRenderIds.get(pageNumber) !== renderId) {
                 return;
             }
@@ -145,6 +163,20 @@
                 }
                 this._appendOverlay(pageView, annotation, pageNumber);
             }
+        }
+        _getPageAnnotations(pageNumber) {
+            const cached = this._annotationCache.get(pageNumber);
+            if (cached) {
+                return cached;
+            }
+            const promise = this._getPage(pageNumber)
+                .then((page) => page.getAnnotations({ intent: "display" }))
+                .catch((error) => {
+                this._annotationCache.delete(pageNumber);
+                throw error;
+            });
+            this._annotationCache.set(pageNumber, promise);
+            return promise;
         }
         _appendOverlay(pageView, annotation, pageNumber) {
             const rect = viewportRect(pageView.viewport, annotation.rect);
@@ -167,6 +199,9 @@
                 dest: annotation.dest
             };
             overlay.addEventListener("pointerenter", () => {
+                if (this._isHoverSuppressed()) {
+                    return;
+                }
                 this._hoverDelayer.open(() => this._showPopup(overlay, link));
             });
             overlay.addEventListener("pointerleave", () => {
@@ -181,12 +216,16 @@
             layer.append(overlay);
         }
         async _showPopup(anchor, link) {
+            if (this._isHoverSuppressed()) {
+                return;
+            }
+            this._cancelActiveRenderTask();
             const requestId = ++this._previewRequestId;
             const destination = await this._resolveDestination(link.dest).catch((error) => {
                 console.warn("Failed to resolve PDF link destination.", error);
                 return null;
             });
-            if (!destination || requestId !== this._previewRequestId) {
+            if (!destination || requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
             this._popup.classList.add("is-open");
@@ -205,19 +244,23 @@
                     return null;
                 })
             ]);
-            if (requestId !== this._previewRequestId) {
+            if (requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
+        ${image?.src ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
-            this._bindPreviewScroll(image, anchor);
+            this._bindPreviewScroll(image?.src ? image : null, anchor);
             requestAnimationFrame(() => this._positionPopup(anchor));
+        }
+        _isHoverSuppressed() {
+            return performance.now() < this._suppressHoverUntil;
         }
         _hidePopup() {
             this._previewRequestId++;
+            this._cancelActiveRenderTask();
             this._hoverDelayer.cancelOpen();
             this._popup.classList.remove("is-open");
             this._popup.innerHTML = "";
@@ -311,12 +354,12 @@
             if (cachedText !== undefined) {
                 return cachedText;
             }
-            const page = await this._pdfDocument.getPage(destination.pageNumber);
+            const page = await this._getPage(destination.pageNumber);
             const viewport = page.getViewport({ scale: 1 });
             const targetY = Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)[1]
                 : null;
-            const textContent = await page.getTextContent();
+            const textContent = await this._getPageTextContent(destination.pageNumber);
             const lines = collectNearbyLines(textContent.items, viewport, targetY);
             const text = lines.slice(0, 4).join(" ");
             this._textCache.set(key, text);
@@ -326,15 +369,17 @@
             const key = `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
             const cachedPreview = this._previewCache.get(key);
             if (cachedPreview !== undefined) {
+                this._previewCache.delete(key);
+                this._previewCache.set(key, cachedPreview);
                 return cachedPreview;
             }
-            const page = await this._pdfDocument.getPage(destination.pageNumber);
+            const page = await this._getPage(destination.pageNumber);
             let scale = getPreviewScale(this._app.pdfViewer);
             let viewport = page.getViewport({ scale });
             let point = Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                 : [0, 0];
-            let textBounds = await this._getPageTextBounds(page, viewport);
+            let textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
             let crop = getPreviewCrop(viewport, textBounds);
             const maxPixelScale = Math.sqrt(MAX_PREVIEW_PIXELS / (crop.width * crop.height));
             if (maxPixelScale < 1) {
@@ -343,7 +388,7 @@
                 point = Number.isFinite(destination.pdfY)
                     ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                     : [0, 0];
-                textBounds = await this._getPageTextBounds(page, viewport);
+                textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
                 crop = getPreviewCrop(viewport, textBounds);
             }
             const croppedViewport = page.getViewport({
@@ -366,10 +411,29 @@
             }
             context.fillStyle = "#ffffff";
             context.fillRect(0, 0, canvas.width, canvas.height);
-            await page.render({
+            const renderTask = page.render({
                 canvasContext: context,
                 viewport: croppedViewport
-            }).promise;
+            });
+            this._activeRenderTask = renderTask;
+            try {
+                await renderTask.promise;
+            }
+            catch (error) {
+                if (isRenderingCancelled(error)) {
+                    return {
+                        src: "",
+                        targetXRatio: 0,
+                        targetYRatio: 0
+                    };
+                }
+                throw error;
+            }
+            finally {
+                if (this._activeRenderTask === renderTask) {
+                    this._activeRenderTask = null;
+                }
+            }
             drawPreviewTarget(context, point, crop);
             const dataUrl = canvas.toDataURL("image/png");
             canvas.width = 0;
@@ -379,11 +443,61 @@
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
-            this._previewCache.set(key, image);
+            this._rememberImagePreview(key, image);
             return image;
         }
-        async _getPageTextBounds(page, viewport) {
-            const textContent = await page.getTextContent();
+        _getPageTextContent(pageNumber) {
+            const cached = this._textContentCache.get(pageNumber);
+            if (cached) {
+                return cached;
+            }
+            const promise = this._getPage(pageNumber)
+                .then((page) => page.getTextContent())
+                .catch((error) => {
+                this._textContentCache.delete(pageNumber);
+                throw error;
+            });
+            this._textContentCache.set(pageNumber, promise);
+            return promise;
+        }
+        _getPage(pageNumber) {
+            const cached = this._pageCache.get(pageNumber);
+            if (cached) {
+                return cached;
+            }
+            const promise = this._pdfDocument.getPage(pageNumber)
+                .catch((error) => {
+                this._pageCache.delete(pageNumber);
+                throw error;
+            });
+            this._pageCache.set(pageNumber, promise);
+            return promise;
+        }
+        _rememberImagePreview(key, image) {
+            if (this._previewCache.has(key)) {
+                this._previewCache.delete(key);
+            }
+            this._previewCache.set(key, image);
+            while (this._previewCache.size > MAX_PREVIEW_CACHE_ENTRIES) {
+                const oldestKey = this._previewCache.keys().next().value;
+                if (oldestKey === undefined) {
+                    return;
+                }
+                this._previewCache.delete(oldestKey);
+            }
+        }
+        _clearPreviewCache() {
+            this._previewCache.clear();
+        }
+        _cancelActiveRenderTask() {
+            if (!this._activeRenderTask) {
+                return;
+            }
+            this._activeRenderTask.cancel();
+            this._activeRenderTask = null;
+        }
+        async _getPageTextBounds(pageNumber, viewport) {
+            const textContent = await this._getPageTextContent(pageNumber);
             let minX = Infinity;
             let maxX = -Infinity;
             for (const item of textContent.items) {
@@ -552,6 +666,9 @@
     }
     function clamp(value, min, max) {
         return Math.min(Math.max(value, min), max);
+    }
+    function isRenderingCancelled(error) {
+        return error instanceof Error && error.name === "RenderingCancelledException";
     }
     function preventDefaultDrag(event) {
         event.preventDefault();
