@@ -5,7 +5,8 @@ export type ExtensionToWebviewMessage =
 export type NavigationDirection = 'back' | 'forward';
 
 export type WebviewToExtensionMessage =
-    | { type: 'navigation.keyUp'; direction: NavigationDirection };
+    | { type: 'navigation.keyUp'; direction: NavigationDirection }
+    | { type: 'workbench.showCommands' };
 
 export interface NavigationPoint {
     pageNumber: number;

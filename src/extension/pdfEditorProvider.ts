@@ -81,6 +81,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private handleWebviewMessage(message: WebviewToExtensionMessage): void {
         if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
+        } else if (message.type === 'workbench.showCommands') {
+            void vscode.commands.executeCommand('workbench.action.showCommands');
         }
     }
 
@@ -138,6 +140,17 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.js'))}"></script>
+<script>
+window.addEventListener("keydown", function (event) {
+  if (event.keyCode === 80 && (event.ctrlKey || event.metaKey) && !event.altKey) {
+    if (event.shiftKey && !event.repeat) {
+      window.dispatchEvent(new CustomEvent("academic-pdf-show-commands"));
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
+</script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}"></script>

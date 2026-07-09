@@ -67,6 +67,7 @@
     const PREVIEW_TARGET_RADIUS = 10;
     const HIT_PADDING_PX = 2;
     const MIN_HIT_HEIGHT_PX = 10;
+    const SCALE_RENDER_DEBOUNCE_MS = 140;
 
     class HoverDelayer {
         _openTimer: Timer;
@@ -124,6 +125,7 @@
         _pageRenderIds: Map<number, number>;
         _previewRequestId: number;
         _popup: HTMLDivElement;
+        _scaleRenderTimer: Timer;
 
         constructor(app: PdfJsApp) {
             this._app = app;
@@ -135,6 +137,7 @@
             this._pageRenderIds = new Map();
             this._previewRequestId = 0;
             this._popup = this._createPopup();
+            this._scaleRenderTimer = null;
         }
 
         initialize(): void {
@@ -143,19 +146,42 @@
                 this._previewCache.clear();
                 this._textCache.clear();
                 this._pageRenderIds.clear();
+                this._cancelScheduledScaleRender();
                 this._hidePopup();
                 this._clearAllOverlays();
                 this._renderVisiblePages();
             });
 
-            this._eventBus.on("pagerendered", (event: { pageNumber: number }) => {
+            this._eventBus.on("pagerendered", (event: { pageNumber: number; cssTransform?: boolean }) => {
+                if (event.cssTransform) {
+                    this._scheduleScaleRender();
+                    return;
+                }
                 this._renderPage(event.pageNumber);
             });
 
             this._eventBus.on("scalechanged", () => {
                 this._hidePopup();
-                this._renderVisiblePages();
+                this._scheduleScaleRender();
             });
+        }
+
+        _scheduleScaleRender(): void {
+            if (this._scaleRenderTimer) {
+                clearTimeout(this._scaleRenderTimer);
+            }
+            this._scaleRenderTimer = setTimeout(() => {
+                this._scaleRenderTimer = null;
+                this._renderVisiblePages();
+            }, SCALE_RENDER_DEBOUNCE_MS);
+        }
+
+        _cancelScheduledScaleRender(): void {
+            if (!this._scaleRenderTimer) {
+                return;
+            }
+            clearTimeout(this._scaleRenderTimer);
+            this._scaleRenderTimer = null;
         }
 
         async _renderVisiblePages(): Promise<void> {
@@ -266,7 +292,7 @@
 
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt=""></div>` : ""}
+        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
             this._bindPreviewScroll(image, anchor);
@@ -283,6 +309,8 @@
         _createPopup(): HTMLDivElement {
             const popup = document.createElement("div");
             popup.className = "academic-citation-popup";
+            popup.draggable = false;
+            popup.addEventListener("dragstart", preventDefaultDrag);
             popup.addEventListener("wheel", (event: WheelEvent) => {
                 event.stopPropagation();
             }, { passive: false });
@@ -635,6 +663,11 @@
 
     function clamp(value: number, min: number, max: number): number {
         return Math.min(Math.max(value, min), max);
+    }
+
+    function preventDefaultDrag(event: DragEvent): void {
+        event.preventDefault();
+        event.stopPropagation();
     }
 
     function choosePopupPlacement(anchorRect: DOMRect, popupRect: DOMRect, margin: number): PopupPlacement {

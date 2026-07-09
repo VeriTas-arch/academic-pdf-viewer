@@ -10,6 +10,12 @@
         back: false,
         forward: false
     };
+    const minScale = 0.1;
+    const maxScale = 10;
+    const wheelZoomBase = 1.1;
+    let pendingWheelZoomDelta = 0;
+    let pendingWheelZoomPoint = null;
+    let pendingWheelZoomAnimationFrame = null;
     class NavigationHistory {
         _onNavigate;
         _backStack;
@@ -272,6 +278,89 @@
             direction
         });
     }
+    function handleWheel(event) {
+        const app = window.PDFViewerApplication;
+        const viewer = app && app.pdfViewer;
+        if (!viewer || viewer.isInPresentationMode) {
+            return;
+        }
+        const supportedKeys = app.supportedMouseWheelZoomModifierKeys || {};
+        const isZoomWheel = event.ctrlKey && supportedKeys.ctrlKey
+            || event.metaKey && supportedKeys.metaKey;
+        if (!isZoomWheel) {
+            return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (document.visibilityState === "hidden") {
+            return;
+        }
+        pendingWheelZoomDelta += getWheelZoomDelta(event);
+        pendingWheelZoomPoint = {
+            clientX: event.clientX,
+            clientY: event.clientY
+        };
+        if (pendingWheelZoomAnimationFrame === null) {
+            pendingWheelZoomAnimationFrame = requestAnimationFrame(applyPendingWheelZoom);
+        }
+    }
+    function getWheelZoomDelta(event) {
+        const delta = normalizeWheelEventDirection(event);
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE || event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+            return Math.abs(delta) >= 1
+                ? Math.sign(delta)
+                : delta;
+        }
+        const pixelsPerLineScale = 30;
+        return delta / pixelsPerLineScale;
+    }
+    function normalizeWheelEventDirection(event) {
+        let delta = Math.hypot(event.deltaX, event.deltaY);
+        const angle = Math.atan2(event.deltaY, event.deltaX);
+        if (-0.25 * Math.PI < angle && angle < 0.75 * Math.PI) {
+            delta = -delta;
+        }
+        return delta;
+    }
+    function applyPendingWheelZoom() {
+        pendingWheelZoomAnimationFrame = null;
+        const delta = pendingWheelZoomDelta;
+        const point = pendingWheelZoomPoint;
+        pendingWheelZoomDelta = 0;
+        pendingWheelZoomPoint = null;
+        if (!point || Math.abs(delta) < 0.001) {
+            return;
+        }
+        const viewer = getViewer();
+        if (!viewer || viewer.isInPresentationMode || document.visibilityState === "hidden") {
+            return;
+        }
+        const previousScale = viewer.currentScale;
+        const nextScale = roundScale(clamp(previousScale * Math.pow(wheelZoomBase, delta), minScale, maxScale));
+        if (Math.abs(nextScale - previousScale) < 0.0001) {
+            return;
+        }
+        viewer.currentScaleValue = String(nextScale);
+        preserveZoomCenter(viewer, point, previousScale, viewer.currentScale);
+    }
+    function roundScale(scale) {
+        return Math.round(scale * 10000) / 10000;
+    }
+    function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+    }
+    function preserveZoomCenter(viewer, point, previousScale, currentScale) {
+        const container = viewer.container;
+        if (!container || !previousScale) {
+            return;
+        }
+        const scaleCorrectionFactor = currentScale / previousScale - 1;
+        const rect = container.getBoundingClientRect();
+        const dx = point.clientX - rect.left;
+        const dy = point.clientY - rect.top;
+        container.scrollLeft += dx * scaleCorrectionFactor;
+        container.scrollTop += dy * scaleCorrectionFactor;
+    }
     let history = null;
     let restoring = false;
     async function initialize() {
@@ -291,6 +380,12 @@
         window.addEventListener("message", event => handleNavigationMessage(event.data));
         window.addEventListener("keydown", handleKeyDown, true);
         window.addEventListener("keyup", handleKeyUp, true);
+        window.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+        window.addEventListener("academic-pdf-show-commands", () => {
+            vscode.postMessage({
+                type: "workbench.showCommands"
+            });
+        });
     }
     initialize().catch(error => {
         console.error("Failed to initialize Academic PDF navigation layer.", error);
