@@ -1,71 +1,49 @@
-# academic-pdf-viewer README
+# Academic PDF Viewer
 
-This is the README for your extension "academic-pdf-viewer". After writing up a brief description, we recommend including the following sections.
+Academic PDF Viewer is a VS Code PDF reader focused on paper-reading workflows. It opens `.pdf` files directly in a PDF.js-based custom editor and adds citation-aware previews and navigation behavior on top of the standard PDF viewer experience.
+
+![Academic PDF Viewer citation preview](https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/snapshot.png)
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- Opens PDFs as the default custom editor in VS Code.
+- Uses the full PDF.js viewer interface for search, zoom, outline, page navigation, text selection, and annotation layers.
+- Highlights native PDF citation/link annotations.
+- Shows a hover preview for citation targets, including a cropped page image and nearby text.
+- Clicks citation overlays to jump to the target reference or figure location.
+- Maintains an internal PDF navigation history for `Alt+Left` and `Alt+Right`.
+- Improves `Ctrl/Cmd+Wheel` zoom responsiveness inside the webview.
+- Keeps `Ctrl/Cmd+Shift+P` available for the VS Code command palette instead of PDF printing.
 
-For example if there is an image subfolder under your extension project workspace:
+## Usage
 
-\!\[feature X\]\(images/feature-x.png\)
+Open any `.pdf` file in VS Code. The extension registers `Academic PDF Viewer` as the default PDF custom editor.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+Keyboard shortcuts:
 
-## Requirements
+- `Alt+Left`: navigate back within the PDF viewer history.
+- `Alt+Right`: navigate forward within the PDF viewer history.
+- `Ctrl/Cmd+Wheel`: zoom around the mouse position.
+- `Ctrl/Cmd+Shift+P`: open the VS Code command palette.
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+## Citation Preview
 
-## Extension Settings
+The current release uses citation and link annotations already embedded in the PDF. Many publisher and LaTeX-generated papers include these links for references, figures, equations, or sections. When such links are available, Academic PDF Viewer draws a lightweight overlay and shows a preview of the destination on hover.
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+PDFs without embedded citation/link annotations are still readable as normal PDFs, but citation previews may not appear.
 
-For example:
+## Known Limitations
 
-This extension contributes the following settings:
+- Citation detection currently depends on native PDF link annotations.
+- Preview quality depends on the PDF's embedded link destinations and text layer.
+- GROBID-based citation extraction is not included in this release.
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+## Development
 
-## Known Issues
+```bash
+npm install
+npm run compile
+npm run lint
+```
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+Launch the extension host from VS Code with `F5`, then open a PDF file.

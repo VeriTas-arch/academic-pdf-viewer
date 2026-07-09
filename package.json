@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "0.0.1",
+    "version": "1.0.1",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -14,8 +14,20 @@
         "vscode": "^1.125.0"
     },
     "categories": [
+        "Visualization",
         "Other"
     ],
+    "keywords": [
+        "pdf",
+        "academic",
+        "citation",
+        "reader",
+        "viewer"
+    ],
+    "galleryBanner": {
+        "color": "#111827",
+        "theme": "dark"
+    },
     "main": "./out/extension.js",
     "contributes": {
         "customEditors": [
@@ -66,9 +78,5 @@
         "eslint": "^10.5.0",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.61.1"
-    },
-    "overrides": {
-        "diff": "^8.0.4",
-        "serialize-javascript": "^7.0.6"
     }
 }

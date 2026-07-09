@@ -16,6 +16,7 @@ scripts/**
 .gitignore
 .yarnrc
 note.md
+image/snapshot.png
 vsc-extension-quickstart.md
 tsconfig*.json
 **/eslint.config.mjs
