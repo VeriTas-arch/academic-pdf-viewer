@@ -12,6 +12,16 @@ All notable changes to the Academic PDF Viewer extension are documented in this 
 - Centralized PDF.js private API access behind small helper functions.
 - Cleaned VSIX packaging rules and removed template/legacy build artifacts from the workspace.
 
+## [1.0.1] - 2026-07-09
+
+### Changed
+
+- Improved `Ctrl/Cmd+Wheel` zoom responsiveness with requestAnimationFrame batching and cursor-centered scroll preservation.
+- Debounced citation overlay rebuilding during PDF.js CSS transform zoom updates.
+- Routed `Ctrl/Cmd+Shift+P` from the PDF webview back to the VS Code command palette while suppressing PDF.js print handling.
+- Disabled dragging inside citation preview popups to avoid corrupting the active PDF view.
+- Refined README, extension metadata, and VSIX packaging rules for the initial marketplace-ready release.
+
 ## [0.0.1] - 2026-07-09
 
 ### Added
