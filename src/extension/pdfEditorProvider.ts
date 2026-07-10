@@ -32,6 +32,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     async resolveCustomEditor(document: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
         this.panels.add(panel);
         this.activePanel = panel;
+        const panelDisposables: vscode.Disposable[] = [];
 
         panel.webview.options = {
             enableScripts: true,
@@ -42,22 +43,29 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             ],
         };
 
-        panel.onDidChangeViewState(event => {
-            if (event.webviewPanel.active) {
-                this.activePanel = event.webviewPanel;
-            }
-        });
+        panelDisposables.push(
+            panel.onDidChangeViewState(event => {
+                if (event.webviewPanel.active) {
+                    this.activePanel = event.webviewPanel;
+                }
+            }),
+        );
 
         panel.onDidDispose(() => {
+            for (const disposable of panelDisposables) {
+                disposable.dispose();
+            }
             this.panels.delete(panel);
             if (this.activePanel === panel) {
                 this.activePanel = this.panels.values().next().value;
             }
         });
 
-        panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
-            this.handleWebviewMessage(message);
-        });
+        panelDisposables.push(
+            panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
+                this.handleWebviewMessage(message);
+            }),
+        );
 
         panel.webview.html = this.createHtml(panel.webview, document.uri);
     }

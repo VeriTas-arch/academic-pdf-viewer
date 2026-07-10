@@ -104,14 +104,14 @@
         if (!viewer || !container) {
             return null;
         }
-        const pdfLocation = viewer._location;
+        const pdfLocation = getPdfLocation(viewer);
         return normalizeLocation({
             pageNumber: viewer.currentPageNumber,
             scrollTop: container.scrollTop,
             scrollLeft: container.scrollLeft,
             scale: viewer.currentScale,
-            pdfLeft: pdfLocation ? pdfLocation.left : null,
-            pdfTop: pdfLocation ? pdfLocation.top : null
+            pdfLeft: pdfLocation.left,
+            pdfTop: pdfLocation.top
         });
     }
     function restoreLocation(location) {
@@ -178,7 +178,7 @@
     }
     function patchExplicitNavigation(app) {
         const linkService = app.pdfLinkService;
-        if (linkService && !linkService.__academicHistoryPatched) {
+        if (linkService && !isAcademicHistoryPatched(linkService)) {
             const goToDestination = linkService.goToDestination.bind(linkService);
             linkService.goToDestination = function (...args) {
                 recordDeparture();
@@ -194,18 +194,18 @@
                 recordDeparture();
                 return setHash(...args);
             };
-            linkService.__academicHistoryPatched = true;
+            markAcademicHistoryPatched(linkService);
         }
         const viewer = app.pdfViewer;
-        if (viewer && !viewer.__academicHistoryPatched && typeof viewer._setCurrentPageNumber === "function") {
-            const setCurrentPageNumber = viewer._setCurrentPageNumber.bind(viewer);
+        const setCurrentPageNumber = getSetCurrentPageNumber(viewer);
+        if (viewer && !isAcademicHistoryPatched(viewer) && setCurrentPageNumber) {
             viewer._setCurrentPageNumber = function (pageNumber, resetCurrentPageView) {
                 if (resetCurrentPageView && pageNumber !== viewer.currentPageNumber) {
                     recordDeparture();
                 }
                 return setCurrentPageNumber(pageNumber, resetCurrentPageView);
             };
-            viewer.__academicHistoryPatched = true;
+            markAcademicHistoryPatched(viewer);
         }
     }
     function handleNavigationMessage(data, allowPressedKey = false) {
@@ -361,6 +361,25 @@
         const dy = point.clientY - rect.top;
         container.scrollLeft += dx * scaleCorrectionFactor;
         container.scrollTop += dy * scaleCorrectionFactor;
+    }
+    function getPdfLocation(viewer) {
+        const location = viewer._location;
+        return {
+            left: typeof location?.left === "number" ? location.left : null,
+            top: typeof location?.top === "number" ? location.top : null
+        };
+    }
+    function getSetCurrentPageNumber(viewer) {
+        if (!viewer || typeof viewer._setCurrentPageNumber !== "function") {
+            return null;
+        }
+        return viewer._setCurrentPageNumber.bind(viewer);
+    }
+    function isAcademicHistoryPatched(target) {
+        return Boolean(target.__academicHistoryPatched);
+    }
+    function markAcademicHistoryPatched(target) {
+        target.__academicHistoryPatched = true;
     }
     let history = null;
     let restoring = false;

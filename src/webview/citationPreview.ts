@@ -211,7 +211,7 @@
 
         async _renderVisiblePages(): Promise<void> {
             await this._app.pdfViewer.pagesPromise;
-            for (const pageView of this._app.pdfViewer._pages) {
+            for (const pageView of getPdfViewerPages(this._app.pdfViewer)) {
                 if (pageView && pageView.renderingState === 3) {
                     this._renderPage(pageView.id);
                 }
@@ -315,6 +315,14 @@
                 return;
             }
 
+            const cachedText = this._textCache.get(textPreviewKey(destination));
+            const cachedImage = this._getCachedImagePreview(destination);
+            if (cachedText !== undefined && cachedImage !== undefined) {
+                this._popup.classList.add("is-open");
+                this._renderPopupContent(destination, cachedText, cachedImage, anchor);
+                return;
+            }
+
             this._popup.classList.add("is-open");
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
@@ -335,12 +343,21 @@
             if (requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
+            this._renderPopupContent(destination, text, image?.src ? image : null, anchor);
+        }
+
+        _renderPopupContent(
+            destination: ResolvedDestination,
+            text: string,
+            image: ImagePreview | null,
+            anchor: HTMLElement
+        ): void {
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image?.src ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
+        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
-            this._bindPreviewScroll(image?.src ? image : null, anchor);
+            this._bindPreviewScroll(image, anchor);
             requestAnimationFrame(() => this._positionPopup(anchor));
         }
 
@@ -425,7 +442,7 @@
             if (Number.isInteger(destRef)) {
                 pageNumber = destRef + 1;
             } else if (destRef && typeof destRef === "object") {
-                pageNumber = this._app.pdfLinkService._cachedPageNumber(destRef);
+                pageNumber = getCachedPageNumber(this._app.pdfLinkService, destRef);
                 if (!pageNumber) {
                     pageNumber = (await this._pdfDocument.getPageIndex(destRef)) + 1;
                     this._app.pdfLinkService.cachePageRef(pageNumber, destRef);
@@ -445,7 +462,7 @@
         }
 
         async _getTextPreview(destination: ResolvedDestination): Promise<string> {
-            const key = `${destination.pageNumber}:${Math.round(destination.pdfY || 0)}`;
+            const key = textPreviewKey(destination);
             const cachedText = this._textCache.get(key);
             if (cachedText !== undefined) {
                 return cachedText;
@@ -464,11 +481,9 @@
         }
 
         async _getImagePreview(destination: ResolvedDestination): Promise<ImagePreview> {
-            const key = `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
-            const cachedPreview = this._previewCache.get(key);
-            if (cachedPreview !== undefined) {
-                this._previewCache.delete(key);
-                this._previewCache.set(key, cachedPreview);
+            const key = imagePreviewKey(destination);
+            const cachedPreview = this._getCachedImagePreview(destination);
+            if (cachedPreview) {
                 return cachedPreview;
             }
 
@@ -545,6 +560,16 @@
             };
             this._rememberImagePreview(key, image);
             return image;
+        }
+
+        _getCachedImagePreview(destination: ResolvedDestination): ImagePreview | undefined {
+            const key = imagePreviewKey(destination);
+            const cachedPreview = this._previewCache.get(key);
+            if (cachedPreview !== undefined) {
+                this._previewCache.delete(key);
+                this._previewCache.set(key, cachedPreview);
+            }
+            return cachedPreview;
         }
 
         _getPageTextContent(pageNumber: number): Promise<PdfJsTextContent> {
@@ -691,6 +716,24 @@
 
     function numberOrNull(value: unknown): number | null {
         return typeof value === "number" ? value : null;
+    }
+
+    function textPreviewKey(destination: ResolvedDestination): string {
+        return `${destination.pageNumber}:${Math.round(destination.pdfY || 0)}`;
+    }
+
+    function imagePreviewKey(destination: ResolvedDestination): string {
+        return `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
+    }
+
+    function getPdfViewerPages(pdfViewer: any): PdfJsPageView[] {
+        return Array.isArray(pdfViewer?._pages) ? pdfViewer._pages : [];
+    }
+
+    function getCachedPageNumber(pdfLinkService: any, destRef: object): number | null {
+        return typeof pdfLinkService?._cachedPageNumber === "function"
+            ? pdfLinkService._cachedPageNumber(destRef)
+            : null;
     }
 
     function collectNearbyLines(items: any[], viewport: PdfJsViewport, targetY: number | null): string[] {

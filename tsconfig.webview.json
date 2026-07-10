@@ -9,7 +9,7 @@
             "DOM"
         ],
         "sourceMap": false,
-        "strict": false,
+        "strict": true,
         "noImplicitAny": true,
         "noEmitOnError": true,
         "ignoreDeprecations": "6.0"

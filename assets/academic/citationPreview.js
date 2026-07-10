@@ -136,7 +136,7 @@
         }
         async _renderVisiblePages() {
             await this._app.pdfViewer.pagesPromise;
-            for (const pageView of this._app.pdfViewer._pages) {
+            for (const pageView of getPdfViewerPages(this._app.pdfViewer)) {
                 if (pageView && pageView.renderingState === 3) {
                     this._renderPage(pageView.id);
                 }
@@ -228,6 +228,13 @@
             if (!destination || requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
+            const cachedText = this._textCache.get(textPreviewKey(destination));
+            const cachedImage = this._getCachedImagePreview(destination);
+            if (cachedText !== undefined && cachedImage !== undefined) {
+                this._popup.classList.add("is-open");
+                this._renderPopupContent(destination, cachedText, cachedImage, anchor);
+                return;
+            }
             this._popup.classList.add("is-open");
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
@@ -247,12 +254,15 @@
             if (requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
+            this._renderPopupContent(destination, text, image?.src ? image : null, anchor);
+        }
+        _renderPopupContent(destination, text, image, anchor) {
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image?.src ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
+        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
-            this._bindPreviewScroll(image?.src ? image : null, anchor);
+            this._bindPreviewScroll(image, anchor);
             requestAnimationFrame(() => this._positionPopup(anchor));
         }
         _isHoverSuppressed() {
@@ -331,7 +341,7 @@
                 pageNumber = destRef + 1;
             }
             else if (destRef && typeof destRef === "object") {
-                pageNumber = this._app.pdfLinkService._cachedPageNumber(destRef);
+                pageNumber = getCachedPageNumber(this._app.pdfLinkService, destRef);
                 if (!pageNumber) {
                     pageNumber = (await this._pdfDocument.getPageIndex(destRef)) + 1;
                     this._app.pdfLinkService.cachePageRef(pageNumber, destRef);
@@ -349,7 +359,7 @@
             };
         }
         async _getTextPreview(destination) {
-            const key = `${destination.pageNumber}:${Math.round(destination.pdfY || 0)}`;
+            const key = textPreviewKey(destination);
             const cachedText = this._textCache.get(key);
             if (cachedText !== undefined) {
                 return cachedText;
@@ -366,11 +376,9 @@
             return text;
         }
         async _getImagePreview(destination) {
-            const key = `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
-            const cachedPreview = this._previewCache.get(key);
-            if (cachedPreview !== undefined) {
-                this._previewCache.delete(key);
-                this._previewCache.set(key, cachedPreview);
+            const key = imagePreviewKey(destination);
+            const cachedPreview = this._getCachedImagePreview(destination);
+            if (cachedPreview) {
                 return cachedPreview;
             }
             const page = await this._getPage(destination.pageNumber);
@@ -445,6 +453,15 @@
             };
             this._rememberImagePreview(key, image);
             return image;
+        }
+        _getCachedImagePreview(destination) {
+            const key = imagePreviewKey(destination);
+            const cachedPreview = this._previewCache.get(key);
+            if (cachedPreview !== undefined) {
+                this._previewCache.delete(key);
+                this._previewCache.set(key, cachedPreview);
+            }
+            return cachedPreview;
         }
         _getPageTextContent(pageNumber) {
             const cached = this._textContentCache.get(pageNumber);
@@ -578,6 +595,20 @@
     }
     function numberOrNull(value) {
         return typeof value === "number" ? value : null;
+    }
+    function textPreviewKey(destination) {
+        return `${destination.pageNumber}:${Math.round(destination.pdfY || 0)}`;
+    }
+    function imagePreviewKey(destination) {
+        return `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
+    }
+    function getPdfViewerPages(pdfViewer) {
+        return Array.isArray(pdfViewer?._pages) ? pdfViewer._pages : [];
+    }
+    function getCachedPageNumber(pdfLinkService, destRef) {
+        return typeof pdfLinkService?._cachedPageNumber === "function"
+            ? pdfLinkService._cachedPageNumber(destRef)
+            : null;
     }
     function collectNearbyLines(items, viewport, targetY) {
         const rows = [];
