@@ -12,7 +12,7 @@
 			"preLaunchTask": "npm: compile",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
-				"${workspaceFolder}/test"
+				"${workspaceFolder}/tests"
 			],
 			"outFiles": [
 				"${workspaceFolder}/out/**/*.js"
