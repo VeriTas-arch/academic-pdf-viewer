@@ -9,7 +9,7 @@ Academic PDF Viewer is a VS Code PDF reader focused on paper-reading workflows. 
 - Opens PDFs as the default custom editor in VS Code.
 - Uses the full PDF.js viewer interface for search, zoom, outline, page navigation, text selection, and annotation layers.
 - Highlights native PDF citation/link annotations.
-- Shows a hover preview for citation targets, including a cropped page image and nearby text.
+- Shows a `Ctrl`-hover preview for citation targets, including a cropped page image and nearby text.
 - Clicks citation overlays to jump to the target reference or figure location.
 - Maintains an internal PDF navigation history for `Alt+Left` and `Alt+Right`.
 - Improves `Ctrl/Cmd+Wheel` zoom responsiveness inside the webview.
@@ -26,11 +26,15 @@ Keyboard shortcuts:
 - `Ctrl/Cmd+Wheel`: zoom around the mouse position.
 - `Ctrl/Cmd+Shift+P`: open the VS Code command palette.
 
+Run `PDF: Toggle Link Preview` from the command palette to enable or disable `Ctrl`-hover previews. The choice is saved in the `academicPdfViewer.linkPreview.enabled` setting. You can assign your preferred shortcut to the command from VS Code's Keyboard Shortcuts editor.
+
 ## Citation Preview
 
-The current release uses citation and link annotations already embedded in the PDF. Many publisher and LaTeX-generated papers include these links for references, figures, equations, or sections. When such links are available, Academic PDF Viewer draws a lightweight overlay and shows a preview of the destination on hover.
+The current release uses citation and link annotations already embedded in the PDF. Many publisher and LaTeX-generated papers include these links for references, figures, equations, or sections. When such links are available, Academic PDF Viewer draws a lightweight overlay and shows a preview of the destination while you hold `Ctrl` and hover over the link. You can press `Ctrl` before moving onto the link or while the pointer is already over it; releasing `Ctrl` closes the preview.
 
 PDFs without embedded citation/link annotations are still readable as normal PDFs, but citation previews may not appear.
+
+Preview popups do not capture pointer input, so PDF links and the outline remain clickable while a preview is visible.
 
 ## Known Limitations
 

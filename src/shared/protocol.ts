@@ -1,6 +1,8 @@
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
-    | { type: 'navigation.forward' };
+    | { type: 'navigation.forward' }
+    | { type: 'document.reload'; url: string }
+    | { type: 'linkPreview.setEnabled'; enabled: boolean };
 
 export type NavigationDirection = 'back' | 'forward';
 

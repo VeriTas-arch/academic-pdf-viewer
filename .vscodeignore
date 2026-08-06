@@ -6,6 +6,7 @@ node_modules/**
 dist/**
 ref/**
 test/**
+tests/**
 src/**
 .gitignore
 note.md

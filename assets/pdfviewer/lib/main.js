@@ -75,7 +75,7 @@
     })
 
     window.addEventListener('message', async function (event) {
-      if (event.data && typeof event.data.type === 'string' && event.data.type.startsWith('navigation.')) {
+      if (!event.data || event.data.type !== 'document.reload') {
         return
       }
 
@@ -90,11 +90,14 @@
       }
 
       // Changing the fingerprint fools pdf.js into keeping scroll position
-      const doc = await pdfjsLib.getDocument(loadOpts).promise
-      doc._pdfInfo.fingerprints = [config.path]
-      PDFViewerApplication.load(doc)
-
-      PDFViewerApplication.pdfViewer._resetView = oldResetView
+      try {
+        const reloadOpts = Object.assign({}, loadOpts, { url: event.data.url || config.path })
+        const doc = await pdfjsLib.getDocument(reloadOpts).promise
+        doc._pdfInfo.fingerprints = [config.path]
+        PDFViewerApplication.load(doc)
+      } finally {
+        PDFViewerApplication.pdfViewer._resetView = oldResetView
+      }
     });
   }, { once: true });
 

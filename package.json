@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -50,8 +50,38 @@
             {
                 "command": "academicPdfViewer.navigateForward",
                 "title": "PDF: Navigate Forward"
+            },
+            {
+                "command": "academicPdfViewer.reload",
+                "title": "PDF: Reload",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "academicPdfViewer.toggleLinkPreview",
+                "title": "PDF: Toggle Link Preview",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf"
             }
         ],
+        "configuration": {
+            "title": "Academic PDF Viewer",
+            "properties": {
+                "academicPdfViewer.linkPreview.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "scope": "window",
+                    "description": "Show a destination preview when holding Control and hovering over internal PDF links."
+                }
+            }
+        },
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "academicPdfViewer.reload",
+                    "when": "activeCustomEditorId == academicPdfViewer.pdf",
+                    "group": "navigation"
+                }
+            ]
+        },
         "keybindings": [
             {
                 "command": "academicPdfViewer.navigateBack",

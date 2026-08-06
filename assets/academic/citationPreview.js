@@ -1,7 +1,7 @@
 /// <reference path="./globals.d.ts" />
 "use strict";
 (function () {
-    const OPEN_DELAY_MS = 120;
+    const OPEN_DELAY_MS = 200;
     const CLOSE_DELAY_MS = 120;
     const TEXT_RADIUS_PX = 90;
     const MIN_PREVIEW_SCALE = 1.25;
@@ -71,6 +71,9 @@
         _scaleRenderTimer;
         _suppressHoverUntil;
         _activeRenderTask;
+        _enabled;
+        _controlPressed;
+        _hoveredPreview;
         constructor(app) {
             this._app = app;
             this._eventBus = app.eventBus;
@@ -87,6 +90,9 @@
             this._scaleRenderTimer = null;
             this._suppressHoverUntil = 0;
             this._activeRenderTask = null;
+            this._enabled = readInitialEnabled();
+            this._controlPressed = false;
+            this._hoveredPreview = null;
         }
         initialize() {
             this._eventBus.on("documentloaded", () => {
@@ -99,10 +105,16 @@
                 this._pageRenderIds.clear();
                 this._cancelScheduledScaleRender();
                 this._hidePopup();
+                this._hoveredPreview = null;
                 this._clearAllOverlays();
-                this._renderVisiblePages();
+                if (this._enabled) {
+                    this._renderVisiblePages();
+                }
             });
             this._eventBus.on("pagerendered", (event) => {
+                if (!this._enabled) {
+                    return;
+                }
                 if (event.cssTransform) {
                     this._scheduleScaleRender();
                     return;
@@ -111,12 +123,68 @@
             });
             this._eventBus.on("scalechanged", () => {
                 this._hidePopup();
-                this._scheduleScaleRender();
+                if (this._enabled) {
+                    this._scheduleScaleRender();
+                }
             });
             window.addEventListener("academic-pdf-wheel-zoom", () => {
                 this._suppressHoverUntil = performance.now() + WHEEL_ZOOM_SUPPRESS_HOVER_MS;
                 this._hidePopup();
             });
+            window.addEventListener("message", event => {
+                const message = event.data;
+                if (isSetEnabledMessage(message)) {
+                    this._setEnabled(message.enabled);
+                }
+            });
+            window.addEventListener("keydown", event => {
+                if (event.key !== "Control" || event.repeat) {
+                    return;
+                }
+                this._controlPressed = true;
+                this._openHoveredPreview(true);
+            }, true);
+            window.addEventListener("keyup", event => {
+                if (event.key === "Control") {
+                    this._releaseControl();
+                }
+            }, true);
+            window.addEventListener("blur", () => this._releaseControl());
+        }
+        _openHoveredPreview(immediate = false) {
+            const hovered = this._hoveredPreview;
+            if (!this._enabled || !this._controlPressed || !hovered?.anchor.isConnected || this._isHoverSuppressed()) {
+                return;
+            }
+            const open = () => {
+                if (this._controlPressed && this._hoveredPreview === hovered) {
+                    this._showPopup(hovered.anchor, hovered.link);
+                }
+            };
+            if (immediate) {
+                this._hoverDelayer.cancelOpen();
+                open();
+            }
+            else {
+                this._hoverDelayer.open(open);
+            }
+        }
+        _releaseControl() {
+            this._controlPressed = false;
+            this._hidePopup();
+        }
+        _setEnabled(enabled) {
+            if (this._enabled === enabled) {
+                return;
+            }
+            this._enabled = enabled;
+            this._hoveredPreview = null;
+            this._cancelScheduledScaleRender();
+            this._hidePopup();
+            this._clearAllOverlays();
+            if (enabled) {
+                this._renderVisiblePages();
+            }
         }
         _scheduleScaleRender() {
             if (this._scaleRenderTimer) {
@@ -136,6 +204,9 @@
         }
         async _renderVisiblePages() {
             await this._app.pdfViewer.pagesPromise;
+            if (!this._enabled) {
+                return;
+            }
             for (const pageView of getPdfViewerPages(this._app.pdfViewer)) {
                 if (pageView && pageView.renderingState === 3) {
                     this._renderPage(pageView.id);
@@ -143,7 +214,7 @@
             }
         }
         async _renderPage(pageNumber) {
-            if (!this._pdfDocument) {
+            if (!this._enabled || !this._pdfDocument) {
                 return;
             }
             const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
@@ -154,7 +225,7 @@
             }
             this._clearPageOverlays(pageView.div);
             const annotations = await this._getPageAnnotations(pageNumber);
-            if (this._pageRenderIds.get(pageNumber) !== renderId) {
+            if (!this._enabled || this._pageRenderIds.get(pageNumber) !== renderId) {
                 return;
             }
             for (const annotation of annotations) {
@@ -191,20 +262,22 @@
             overlay.style.top = `${rect.top}px`;
             overlay.style.width = `${rect.width}px`;
             overlay.style.height = `${rect.height}px`;
-            overlay.setAttribute("aria-label", "Preview PDF link destination");
+            overlay.setAttribute("aria-label", "PDF link. Hold Control to preview destination.");
             const link = {
                 id: `${pageNumber}:${annotation.id || JSON.stringify(annotation.rect)}`,
                 sourcePageNumber: pageNumber,
                 rect,
                 dest: annotation.dest
             };
-            overlay.addEventListener("pointerenter", () => {
-                if (this._isHoverSuppressed()) {
-                    return;
-                }
-                this._hoverDelayer.open(() => this._showPopup(overlay, link));
+            overlay.addEventListener("pointerenter", (event) => {
+                this._hoveredPreview = { anchor: overlay, link };
+                this._controlPressed = event.ctrlKey;
+                this._openHoveredPreview();
             });
             overlay.addEventListener("pointerleave", () => {
+                if (this._hoveredPreview?.anchor === overlay) {
+                    this._hoveredPreview = null;
+                }
                 this._hoverDelayer.close(() => this._hidePopup());
             });
             overlay.addEventListener("click", (event) => {
@@ -280,13 +353,6 @@
             popup.className = "academic-citation-popup";
             popup.draggable = false;
             popup.addEventListener("dragstart", preventDefaultDrag);
-            popup.addEventListener("wheel", (event) => {
-                event.stopPropagation();
-            }, { passive: false });
-            popup.addEventListener("pointerenter", () => this._hoverDelayer.cancelClose());
-            popup.addEventListener("pointerleave", () => {
-                this._hoverDelayer.close(() => this._hidePopup());
-            });
             document.body.append(popup);
             return popup;
         }
@@ -295,12 +361,6 @@
             if (!preview) {
                 return;
             }
-            preview.addEventListener("wheel", (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                preview.scrollTop += event.deltaY;
-                preview.scrollLeft += event.deltaX;
-            }, { passive: false });
             if (!image) {
                 return;
             }
@@ -562,6 +622,28 @@
             && annotation.subtype === "Link"
             && annotation.dest
             && Array.isArray(annotation.rect);
+    }
+    function isSetEnabledMessage(message) {
+        return typeof message === "object"
+            && message !== null
+            && "type" in message
+            && message.type === "linkPreview.setEnabled"
+            && "enabled" in message
+            && typeof message.enabled === "boolean";
+    }
+    function readInitialEnabled() {
+        const configElement = document.getElementById("pdf-preview-config");
+        const config = configElement?.getAttribute("data-config");
+        if (!config) {
+            return true;
+        }
+        try {
+            const settings = JSON.parse(config);
+            return settings.linkPreviewEnabled !== false;
+        }
+        catch {
+            return true;
+        }
     }
     function viewportRect(viewport, pdfRect) {
         const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(pdfRect);

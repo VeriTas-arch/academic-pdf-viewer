@@ -2,6 +2,24 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.0.3] - 2026-08-06
+
+### Added
+
+- Added a `PDF: Reload` editor action that reloads the active PDF from disk while preserving its current reading position.
+- Added a persistent `academicPdfViewer.linkPreview.enabled` setting and `PDF: Toggle Link Preview` command for completely disabling or re-enabling link previews.
+
+### Changed
+
+- Changed destination previews from automatic hover to explicit `Ctrl`-hover so ordinary link and outline navigation remains unobstructed.
+- Made previews open immediately when `Ctrl` is pressed over an already-hovered link, while retaining a 200 ms delay when entering a link with `Ctrl` already held.
+- Made preview popups pointer-transparent and cancel pending rendering when `Ctrl` is released or the PDF webview loses focus.
+
+### Fixed
+
+- Prevented destination preview popups from intercepting clicks intended for PDF links or the outline in constrained editor layouts.
+- Reloaded PDFs through a cache-busted URL so changes on disk become visible without reopening the editor.
+
 ## [1.0.2] - 2026-07-10
 
 ### Changed

@@ -17,6 +17,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private static readonly navigationKeyFallbackReleaseMs = 800;
 
     private readonly panels = new Set<vscode.WebviewPanel>();
+    private readonly panelDocuments = new Map<vscode.WebviewPanel, vscode.Uri>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
@@ -31,6 +32,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     async resolveCustomEditor(document: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
         this.panels.add(panel);
+        this.panelDocuments.set(panel, document.uri);
         this.activePanel = panel;
         const panelDisposables: vscode.Disposable[] = [];
 
@@ -56,6 +58,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 disposable.dispose();
             }
             this.panels.delete(panel);
+            this.panelDocuments.delete(panel);
             if (this.activePanel === panel) {
                 this.activePanel = this.panels.values().next().value;
             }
@@ -84,6 +87,57 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.postToActive({
             type: direction === 'back' ? 'navigation.back' : 'navigation.forward',
         });
+    }
+
+    reloadActive(): void {
+        const panel = this.activePanel;
+        const documentUri = panel && this.panelDocuments.get(panel);
+        if (!panel || !documentUri) {
+            return;
+        }
+
+        const pdfUri = panel.webview.asWebviewUri(documentUri);
+        const reloadQuery = `academicPdfReload=${Date.now()}`;
+        const url = pdfUri.with({
+            query: pdfUri.query ? `${pdfUri.query}&${reloadQuery}` : reloadQuery,
+        }).toString();
+
+        void panel.webview.postMessage({
+            type: 'document.reload',
+            url,
+        } satisfies ExtensionToWebviewMessage);
+    }
+
+    async toggleLinkPreviewActive(): Promise<boolean | undefined> {
+        const documentUri = this.activePanel && this.panelDocuments.get(this.activePanel);
+        if (!documentUri) {
+            return undefined;
+        }
+
+        const configuration = vscode.workspace.getConfiguration('academicPdfViewer', documentUri);
+        const setting = 'linkPreview.enabled';
+        const enabled = configuration.get<boolean>(setting, true);
+        const inspected = configuration.inspect<boolean>(setting);
+        const target = inspected?.workspaceValue !== undefined
+            ? vscode.ConfigurationTarget.Workspace
+            : vscode.ConfigurationTarget.Global;
+
+        await configuration.update(setting, !enabled, target);
+        this.refreshLinkPreviewConfiguration();
+        return vscode.workspace.getConfiguration('academicPdfViewer', documentUri).get<boolean>(setting, true);
+    }
+
+    refreshLinkPreviewConfiguration(): void {
+        for (const panel of this.panels) {
+            const documentUri = this.panelDocuments.get(panel);
+            if (!documentUri) {
+                continue;
+            }
+            void panel.webview.postMessage({
+                type: 'linkPreview.setEnabled',
+                enabled: this.isLinkPreviewEnabled(documentUri),
+            } satisfies ExtensionToWebviewMessage);
+        }
     }
 
     private handleWebviewMessage(message: WebviewToExtensionMessage): void {
@@ -128,6 +182,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             cMapUrl: `${libUri('web', 'cmaps')}/`,
             path: webviewPdfUri.toString(),
             standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
+            linkPreviewEnabled: this.isLinkPreviewEnabled(pdfUri),
             defaults: {
                 cursor: 'text',
                 scale: 'auto',
@@ -167,6 +222,12 @@ window.addEventListener("keydown", function (event) {
         return this.viewerHtml
             .replace('<title>PDF.js viewer</title>', `${injectedHead}\n<title>Academic PDF Viewer</title>`)
             .trim();
+    }
+
+    private isLinkPreviewEnabled(documentUri: vscode.Uri): boolean {
+        return vscode.workspace
+            .getConfiguration('academicPdfViewer', documentUri)
+            .get<boolean>('linkPreview.enabled', true);
     }
 }
 
