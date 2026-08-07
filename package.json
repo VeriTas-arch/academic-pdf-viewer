@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -105,8 +105,8 @@
     "devDependencies": {
         "@types/node": "24.x",
         "@types/vscode": "^1.125.0",
-        "eslint": "^10.5.0",
+        "eslint": "^10.8.0",
         "typescript": "^6.0.3",
-        "typescript-eslint": "^8.61.1"
+        "typescript-eslint": "^8.66.0"
     }
 }
