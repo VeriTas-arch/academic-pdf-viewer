@@ -195,6 +195,7 @@
         try {
             const loadingTask = pdfjsLib.getDocument({
                 data: new Uint8Array(message.originalData),
+                isEvalSupported: false,
                 useWorkerFetch: false,
                 cMapUrl: config.cMapUrl,
                 cMapPacked: true,

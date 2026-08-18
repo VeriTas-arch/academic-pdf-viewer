@@ -49,6 +49,73 @@ export type WebviewToExtensionMessage =
         error?: string;
     };
 
+const pdfDebugEvents: ReadonlySet<string> = new Set([
+    'viewerInitializing',
+    'viewerInitialized',
+    'workerSourcePrepared',
+    'workerSourceFallback',
+    'opened',
+    'firstPageRendered',
+    'failed',
+    'emptyRevision',
+    'unhandledRejection',
+    'windowError',
+    'diffComputed',
+    'diffTextFallback',
+    'diffFailed',
+]);
+
+const maximumDebugStringLength = 8 * 1024;
+
+export function isWebviewToExtensionMessage(value: unknown): value is WebviewToExtensionMessage {
+    if (!isRecord(value) || typeof value.type !== 'string') {
+        return false;
+    }
+
+    switch (value.type) {
+        case 'navigation.keyUp':
+            return value.direction === 'back' || value.direction === 'forward';
+        case 'workbench.showCommands':
+        case 'webview.ready':
+            return true;
+        case 'pdf.debug':
+            return typeof value.event === 'string'
+                && pdfDebugEvents.has(value.event)
+                && isOptionalDebugString(value.fingerprint)
+                && isOptionalDebugString(value.originalFingerprint)
+                && isOptionalDebugString(value.error)
+                && isOptionalFiniteNumber(value.durationMs)
+                && isOptionalFiniteNumber(value.pages)
+                && isOptionalFiniteNumber(value.pageNumber)
+                && isOptionalFiniteNumber(value.regions)
+                && isOptionalFiniteNumber(value.changedPixels)
+                && isOptionalFiniteNumber(value.sizeBytes)
+                && (value.strategy === undefined
+                    || value.strategy === 'page'
+                    || value.strategy === 'raster'
+                    || value.strategy === 'text')
+                && (value.workerSource === undefined
+                    || value.workerSource === 'blob'
+                    || value.workerSource === 'mainThreadFallback');
+        default:
+            return false;
+    }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+function isOptionalDebugString(value: unknown): boolean {
+    return value === undefined
+        || (typeof value === 'string' && value.length <= maximumDebugStringLength);
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+    return value === undefined
+        || (typeof value === 'number' && Number.isFinite(value));
+}
+
 export interface NavigationPoint {
     pageNumber: number;
     scrollTop: number;

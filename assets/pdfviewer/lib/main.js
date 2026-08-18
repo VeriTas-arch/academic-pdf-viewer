@@ -161,6 +161,7 @@
     }
 
     const loadOpts = {
+      isEvalSupported: false,
       useWorkerFetch: false,
       cMapUrl: config.cMapUrl,
       cMapPacked: true,

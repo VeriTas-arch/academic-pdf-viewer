@@ -8,7 +8,9 @@ ref/**
 test/**
 tests/**
 src/**
+scripts/**
 .gitignore
+.markdownlint.json
 note.md
 image/snapshot.png
 image/git_diff.png

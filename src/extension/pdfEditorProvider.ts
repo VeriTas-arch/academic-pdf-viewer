@@ -3,13 +3,18 @@ import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, sep } from 'node:path';
 
-import type { ExtensionToWebviewMessage, NavigationDirection, WebviewToExtensionMessage } from '../shared/protocol';
+import {
+    isWebviewToExtensionMessage,
+    type ExtensionToWebviewMessage,
+    type NavigationDirection,
+    type WebviewToExtensionMessage,
+} from '../shared/protocol';
 import type { DevLogFields, DevLogger } from './devLogger';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
-const MAX_GIT_OUTPUT_BYTES = 512 * 1024 * 1024;
+const MAX_PDF_BYTES = 512 * 1024 * 1024;
 
 async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
     const startedAt = Date.now();
@@ -18,9 +23,15 @@ async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('pdf.read.start', { ...fields, source });
 
     try {
-        const data = uri.scheme === 'git'
-            ? await readGitBlob(uri, logger)
-            : await vscode.workspace.fs.readFile(uri);
+        let data: Uint8Array;
+        if (uri.scheme === 'git') {
+            data = await readGitBlob(uri, logger);
+        } else {
+            const stat = await vscode.workspace.fs.stat(uri);
+            assertPdfSize(stat.size);
+            data = await vscode.workspace.fs.readFile(uri);
+        }
+        assertPdfSize(data.byteLength);
         logger?.info('pdf.read.done', {
             ...fields,
             source,
@@ -61,7 +72,23 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('git.blob.start', fields);
 
     try {
-        const data = await runGit(['cat-file', 'blob', objectName], repositoryRoot, true);
+        const sizeOutput = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, true);
+        if (sizeOutput.byteLength === 0) {
+            logger?.warn('git.blob.missing', {
+                ...fields,
+                bytes: 0,
+                durationMs: Date.now() - startedAt,
+            });
+            return new Uint8Array();
+        }
+
+        const size = Number(sizeOutput.toString('utf8').trim());
+        if (!Number.isSafeInteger(size) || size < 0) {
+            throw new Error(`Git returned an invalid PDF size for ${objectName}.`);
+        }
+        assertPdfSize(size);
+
+        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, true);
         const resultFields = {
             ...fields,
             bytes: data.byteLength,
@@ -101,13 +128,22 @@ function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
     return copy;
 }
 
+function assertPdfSize(size: number): void {
+    if (!Number.isSafeInteger(size) || size < 0) {
+        throw new Error('PDF has an invalid file size.');
+    }
+    if (size > MAX_PDF_BYTES) {
+        throw new Error('PDF exceeds the 512 MiB safety limit.');
+    }
+}
+
 function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Buffer> {
     const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
     return new Promise((resolve, reject) => {
         execFile(configuredGitPath || 'git', args, {
             cwd,
             encoding: null,
-            maxBuffer: MAX_GIT_OUTPUT_BYTES,
+            maxBuffer: MAX_PDF_BYTES,
         }, (error, stdout, stderr) => {
             if (!error) {
                 resolve(stdout);
@@ -195,7 +231,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         });
 
         panelDisposables.push(
-            panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
+            panel.webview.onDidReceiveMessage((message: unknown) => {
+                if (!isWebviewToExtensionMessage(message)) {
+                    this.logger?.warn('webview.message.rejected');
+                    return;
+                }
                 this.handleWebviewMessage(message, panel, document);
             }),
         );

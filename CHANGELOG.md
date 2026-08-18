@@ -2,6 +2,18 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.0.5] - 2026-08-18
+
+### Security
+
+- Explicitly disabled PDF.js JavaScript evaluation while retaining the existing PDF scripting and webview CSP restrictions.
+- Added runtime validation for messages crossing from the PDF webview into the extension host.
+- Rejected local and Git-backed PDF data above 512 MiB before loading the complete document into extension memory.
+
+### Changed
+
+- Cleaned generated extension and webview output before release builds to prevent stale files from entering the VSIX.
+
 ## [1.0.4] - 2026-08-18
 
 ### Added
