@@ -111,8 +111,8 @@
     "devDependencies": {
         "@types/node": "24.x",
         "@types/vscode": "^1.125.0",
-        "eslint": "^10.8.0",
+        "eslint": "^10.8.1",
         "typescript": "^6.0.3",
-        "typescript-eslint": "^8.66.0"
+        "typescript-eslint": "^8.67.0"
     }
 }
