@@ -4,20 +4,42 @@ import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, sep } from 'node:path';
 
 import type { ExtensionToWebviewMessage, NavigationDirection, WebviewToExtensionMessage } from '../shared/protocol';
+import type { DevLogFields, DevLogger } from './devLogger';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
 const MAX_GIT_OUTPUT_BYTES = 512 * 1024 * 1024;
 
-async function readPdfData(uri: vscode.Uri): Promise<Uint8Array> {
-    if (uri.scheme === 'git') {
-        return readGitBlob(uri);
+async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
+    const startedAt = Date.now();
+    const fields = describePdfUri(uri);
+    const source = uri.scheme === 'git' ? 'gitBlob' : 'workspaceFs';
+    logger?.info('pdf.read.start', { ...fields, source });
+
+    try {
+        const data = uri.scheme === 'git'
+            ? await readGitBlob(uri, logger)
+            : await vscode.workspace.fs.readFile(uri);
+        logger?.info('pdf.read.done', {
+            ...fields,
+            source,
+            bytes: data.byteLength,
+            durationMs: Date.now() - startedAt,
+        });
+        return data;
+    } catch (error) {
+        logger?.error('pdf.read.failed', error, {
+            ...fields,
+            source,
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
     }
-    return vscode.workspace.fs.readFile(uri);
 }
 
-async function readGitBlob(uri: vscode.Uri): Promise<Uint8Array> {
+async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
+    const startedAt = Date.now();
     const query = JSON.parse(uri.query) as Record<string, unknown>;
     if (typeof query.path !== 'string' || typeof query.ref !== 'string') {
         throw new Error(`Invalid Git URI: ${uri.toString()}`);
@@ -35,7 +57,42 @@ async function readGitBlob(uri: vscode.Uri): Promise<Uint8Array> {
     const objectName = query.ref === '~' || query.ref === ''
         ? `:${gitPath}`
         : `${query.ref}:${gitPath}`;
-    return runGit(['cat-file', 'blob', objectName], repositoryRoot, true);
+    const fields = { repositoryRoot, objectName };
+    logger?.info('git.blob.start', fields);
+
+    try {
+        const data = await runGit(['cat-file', 'blob', objectName], repositoryRoot, true);
+        const resultFields = {
+            ...fields,
+            bytes: data.byteLength,
+            durationMs: Date.now() - startedAt,
+        };
+        if (data.byteLength === 0) {
+            logger?.warn('git.blob.missing', resultFields);
+        } else {
+            logger?.info('git.blob.done', resultFields);
+        }
+        return data;
+    } catch (error) {
+        logger?.error('git.blob.failed', error, {
+            ...fields,
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
+    }
+}
+
+function describePdfUri(uri: vscode.Uri): DevLogFields {
+    if (uri.scheme !== 'git') {
+        return { scheme: uri.scheme, path: uri.fsPath };
+    }
+
+    try {
+        const query = JSON.parse(uri.query) as Record<string, unknown>;
+        return { scheme: uri.scheme, path: query.path, ref: query.ref };
+    } catch {
+        return { scheme: uri.scheme, uri: uri.toString() };
+    }
 }
 
 function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Buffer> {
@@ -79,16 +136,23 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
 
-    constructor(private readonly context: vscode.ExtensionContext) {
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly logger?: DevLogger,
+    ) {
         this.viewerHtml = readViewerHtml(context);
     }
 
     async openCustomDocument(uri: vscode.Uri): Promise<PdfDocument> {
-        const data = await readPdfData(uri);
+        const data = await readPdfData(uri, this.logger);
         return new PdfDocument(uri, data);
     }
 
     async resolveCustomEditor(document: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
+        this.logger?.info('editor.resolve', {
+            ...describePdfUri(document.uri),
+            bytes: document.data.byteLength,
+        });
         this.panels.add(panel);
         this.panelDocuments.set(panel, document);
         this.activePanel = panel;
@@ -133,6 +197,12 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         documents: vscode.CustomEditorDiffDocuments<PdfDocument>,
         panels: vscode.CustomEditorSideBySideDiffWebviewPanels,
     ): Promise<void> {
+        this.logger?.info('diff.resolve', {
+            originalUri: documents.original.uri.toString(),
+            originalBytes: documents.original.data.byteLength,
+            modifiedUri: documents.modified.uri.toString(),
+            modifiedBytes: documents.modified.data.byteLength,
+        });
         await Promise.all([
             this.resolveCustomEditor(documents.original, panels.original),
             this.resolveCustomEditor(documents.modified, panels.modified),
@@ -163,7 +233,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
 
         try {
-            document.data = await readPdfData(document.uri);
+            document.data = await readPdfData(document.uri, this.logger);
             await this.postDocument(panel, document, true);
         } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
@@ -210,7 +280,24 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         document: PdfDocument,
     ): void {
         if (message.type === 'webview.ready') {
-            void this.postDocument(panel, document, false);
+            this.logger?.info('webview.ready', {
+                ...describePdfUri(document.uri),
+                bytes: document.data.byteLength,
+            });
+            void this.postDocument(panel, document, false).catch(() => undefined);
+        } else if (message.type === 'pdf.debug') {
+            const fields = {
+                ...describePdfUri(document.uri),
+                fingerprint: message.fingerprint,
+                durationMs: message.durationMs,
+                pages: message.pages,
+                pageNumber: message.pageNumber,
+            };
+            if (message.event === 'failed') {
+                this.logger?.error('pdfjs.failed', message.error ?? 'Unknown PDF.js error', fields);
+            } else {
+                this.logger?.info(`pdfjs.${message.event}`, fields);
+            }
         } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
         } else if (message.type === 'workbench.showCommands') {
@@ -223,16 +310,37 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         document: PdfDocument,
         preserveView: boolean,
     ): Promise<void> {
+        const startedAt = Date.now();
         const data = new ArrayBuffer(document.data.byteLength);
         new Uint8Array(data).set(document.data);
 
-        await panel.webview.postMessage({
-            type: 'document.load',
-            data,
+        const fields = {
+            ...describePdfUri(document.uri),
+            bytes: document.data.byteLength,
             isEmptyRevision: document.data.byteLength === 0,
-            fingerprint: document.uri.toString(),
             preserveView,
-        } satisfies ExtensionToWebviewMessage);
+        };
+        try {
+            const delivered = await panel.webview.postMessage({
+                type: 'document.load',
+                data,
+                isEmptyRevision: document.data.byteLength === 0,
+                fingerprint: document.uri.toString(),
+                preserveView,
+            } satisfies ExtensionToWebviewMessage);
+            const resultFields = { ...fields, delivered, durationMs: Date.now() - startedAt };
+            if (delivered) {
+                this.logger?.info('webview.document.posted', resultFields);
+            } else {
+                this.logger?.warn('webview.document.notDelivered', resultFields);
+            }
+        } catch (error) {
+            this.logger?.error('webview.document.failed', error, {
+                ...fields,
+                durationMs: Date.now() - startedAt,
+            });
+            throw error;
+        }
     }
 
     private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {
@@ -266,6 +374,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         ).toString();
         const settings = {
             cMapUrl: `${libUri('web', 'cmaps')}/`,
+            debug: this.logger !== undefined,
             standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
             linkPreviewEnabled: this.isLinkPreviewEnabled(pdfUri),
             defaults: {

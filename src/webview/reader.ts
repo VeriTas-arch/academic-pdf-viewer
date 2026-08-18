@@ -29,6 +29,9 @@
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
+    window.addEventListener("academic-pdf-debug", event => {
+        vscode.postMessage((event as CustomEvent<unknown>).detail);
+    });
     const pressedNavigationKeys = {
         back: false,
         forward: false

@@ -1,9 +1,15 @@
 import * as vscode from 'vscode';
 
+import { createDevLogger } from './extension/devLogger';
 import { PDF_VIEW_TYPE, PdfEditorProvider } from './extension/pdfEditorProvider';
 
 export function activate(context: vscode.ExtensionContext) {
-    const provider = new PdfEditorProvider(context);
+    const logger = createDevLogger(context);
+    logger?.info('extension.activate', {
+        extensionMode: 'development',
+        version: context.extension.packageJSON.version,
+    });
+    const provider = new PdfEditorProvider(context, logger);
 
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(PDF_VIEW_TYPE, provider, {

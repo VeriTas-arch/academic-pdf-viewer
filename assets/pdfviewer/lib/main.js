@@ -48,6 +48,17 @@
       cMapPacked: true,
       standardFontDataUrl: config.standardFontDataUrl
     }
+    const reportDebug = (event, fields) => {
+      if (!config.debug) {
+        return
+      }
+      window.dispatchEvent(new CustomEvent('academic-pdf-debug', {
+        detail: { type: 'pdf.debug', event, ...fields }
+      }))
+    }
+    const elapsedSince = startedAt => Math.round(performance.now() - startedAt)
+    let pendingFirstPageRender = null
+
     PDFViewerApplication.initializedPromise.then(() => {
       const defaults = config.defaults
       const optsOnLoad = () => {
@@ -63,6 +74,20 @@
         PDFViewerApplication.eventBus.off('documentloaded', optsOnLoad)
       }
       PDFViewerApplication.eventBus.on('documentloaded', optsOnLoad)
+      PDFViewerApplication.eventBus.on('pagerendered', event => {
+        if (!pendingFirstPageRender || !pendingFirstPageRender.opened) {
+          return
+        }
+
+        const pending = pendingFirstPageRender
+        pendingFirstPageRender = null
+        reportDebug('firstPageRendered', {
+          fingerprint: pending.fingerprint,
+          durationMs: elapsedSince(pending.startedAt),
+          pages: PDFViewerApplication.pdfDocument && PDFViewerApplication.pdfDocument.numPages,
+          pageNumber: event.pageNumber
+        })
+      })
     })
 
     window.addEventListener('message', async function (event) {
@@ -70,17 +95,30 @@
         return
       }
 
+      const startedAt = performance.now()
+      const fingerprint = typeof event.data.fingerprint === 'string' ? event.data.fingerprint : ''
       await PDFViewerApplication.initializedPromise
       if (event.data.isEmptyRevision) {
+        pendingFirstPageRender = null
         if (PDFViewerApplication.pdfLoadingTask) {
           await PDFViewerApplication.close()
         }
         showDocumentState('This file does not exist in this revision.')
+        reportDebug('emptyRevision', {
+          fingerprint,
+          durationMs: elapsedSince(startedAt)
+        })
         return
       }
 
       if (!(event.data.data instanceof ArrayBuffer)) {
-        console.error('Failed to load PDF document: invalid binary payload.')
+        const error = 'Invalid binary payload.'
+        console.error(`Failed to load PDF document: ${error}`)
+        reportDebug('failed', {
+          fingerprint,
+          durationMs: elapsedSince(startedAt),
+          error
+        })
         return
       }
       const data = new Uint8Array(event.data.data)
@@ -105,10 +143,26 @@
         }
       }
 
+      const pendingRender = { fingerprint, startedAt, opened: false }
+      pendingFirstPageRender = pendingRender
       try {
         await PDFViewerApplication.open(data, loadOpts)
+        pendingRender.opened = true
+        reportDebug('opened', {
+          fingerprint,
+          durationMs: elapsedSince(startedAt),
+          pages: PDFViewerApplication.pdfDocument && PDFViewerApplication.pdfDocument.numPages
+        })
       } catch (error) {
+        if (pendingFirstPageRender === pendingRender) {
+          pendingFirstPageRender = null
+        }
         console.error('Failed to load PDF document.', error)
+        reportDebug('failed', {
+          fingerprint,
+          durationMs: elapsedSince(startedAt),
+          error: error instanceof Error ? error.message : String(error)
+        })
       } finally {
         PDFViewerApplication.load = oldLoad
         viewer._resetView = oldResetView
