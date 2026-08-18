@@ -6,7 +6,7 @@ node_modules/**
 dist/**
 ref/**
 test/**
-tests/**
+manual-tests/**
 src/**
 scripts/**
 .gitignore
