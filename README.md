@@ -8,7 +8,13 @@ Academic PDF Viewer brings paper reading and PDF revision review into VS Code. I
 > - **Preview:** Hold `Ctrl` over a linked citation, figure, equation, or section to preview its destination.
 > - **Compare (Preview):** Open a changed or staged PDF from Source Control to view both Git revisions side by side, with optional changed-region highlights.
 
-![Academic PDF Viewer citation preview](https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/snapshot.png)
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/snapshot.png"
+    alt="Academic PDF Viewer citation preview"
+    width="85%"
+  >
+</p>
 
 ## Contents
 
@@ -49,7 +55,7 @@ If another editor is selected, right-click the PDF tab, choose `Reopen Editor Wi
 | Open the VS Code command palette | `Ctrl/Cmd+Shift+P` | Overrides PDF.js printing only while the PDF editor is active. |
 | `PDF: Reload` | None | Also available from the editor title bar. |
 | `PDF: Toggle Link Preview` | None | Enables or disables `Ctrl`-hover previews. |
-| `PDF: Toggle Diff Highlights` | None | Available while a PDF diff editor is active. |
+| `PDF: Toggle Diff Highlights` | `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS) | Available while a PDF diff editor is active. |
 
 Commands without a default shortcut can be assigned from VS Code's Keyboard Shortcuts editor.
 
@@ -67,7 +73,13 @@ Git-aware PDF comparison is currently distributed as a Preview VSIX through [Git
 
 VS Code Insiders is the officially supported environment for Proposed API extensions. A Stable build may also work when it contains the same proposal (the current preview is tested with VS Code 1.133), but this is not guaranteed across VS Code updates.
 
-![Academic PDF Viewer Git diff preview](https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/git_diff.png)
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/git_diff.png"
+    alt="Academic PDF Viewer Git diff preview"
+    width="100%"
+  >
+</p>
 
 *Git-aware PDF comparison showing the tracked revision on the left, the working-tree revision on the right, and optional changed-region highlights.*
 
@@ -115,7 +127,7 @@ When testing with a compatible VS Code Stable build, replace `code-insiders` wit
 1. Open a folder containing a Git repository.
 2. Modify or stage a tracked PDF.
 3. Select the PDF entry in the Source Control view. VS Code opens the relevant Git revisions side by side with the original revision on the left and the modified revision on the right.
-4. Run `PDF: Toggle Diff Highlights` to show or hide changed-region markers on the modified PDF.
+4. Press `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS), or run `PDF: Toggle Diff Highlights`, to show or hide changed-region markers on the modified PDF.
 
 The revision pair follows the Source Control entry selected by VS Code. PDFs that are not being compared continue to open as normal PDF editors.
 

@@ -8,6 +8,7 @@ All notable changes to the Academic PDF Viewer extension are documented in this 
 
 - Added side-by-side custom editor diffs for modified and staged PDFs through VS Code's proposed `customEditorDiffs` API.
 - Added optional changed-region highlights on the modified PDF, using text-aware comparison with a raster fallback.
+- Added `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS) as the default shortcut for toggling PDF diff highlights.
 - Added development-only diagnostic logging for document loading, PDF.js initialization, Worker startup, citation previews, and PDF diff computation.
 
 ### Changed

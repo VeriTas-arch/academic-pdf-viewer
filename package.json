@@ -108,7 +108,7 @@
                 "command": "academicPdfViewer.toggleDiffHighlights",
                 "key": "ctrl+alt+d",
                 "mac": "cmd+alt+d",
-                "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.developmentMode"
+                "when": "activeCustomEditorId == academicPdfViewer.pdf"
             }
         ]
     },
