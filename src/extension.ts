@@ -9,11 +9,6 @@ export function activate(context: vscode.ExtensionContext) {
         extensionMode: 'development',
         version: context.extension.packageJSON.version,
     });
-    void vscode.commands.executeCommand(
-        'setContext',
-        'academicPdfViewer.developmentMode',
-        context.extensionMode === vscode.ExtensionMode.Development,
-    );
     const provider = new PdfEditorProvider(context, logger);
 
     context.subscriptions.push(
@@ -54,8 +49,4 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
     );
-}
-
-export function deactivate(): void {
-    // No extension-wide resources to dispose.
 }

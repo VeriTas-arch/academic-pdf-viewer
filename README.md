@@ -162,8 +162,14 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history and notable changes.
 
 ```bash
 npm install
-npm run compile
-npm run lint
+npm run check
+```
+
+Run the local tests explicitly when needed; they are not part of the build or
+VSIX prepublish path:
+
+```bash
+npm test
 ```
 
 Launch the extension host from VS Code with `F5`, then open a PDF file.

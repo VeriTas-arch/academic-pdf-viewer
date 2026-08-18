@@ -397,7 +397,7 @@
             }
             const destRef = explicitDest[0];
             let pageNumber = null;
-            if (Number.isInteger(destRef)) {
+            if (typeof destRef === "number" && Number.isInteger(destRef)) {
                 pageNumber = destRef + 1;
             }
             else if (destRef && typeof destRef === "object") {
@@ -406,7 +406,7 @@
                     pageNumber = (await this._pdfDocument.getPageIndex(destRef)) + 1;
                 }
             }
-            if (!Number.isInteger(pageNumber)) {
+            if (typeof pageNumber !== "number" || !Number.isInteger(pageNumber)) {
                 return null;
             }
             const position = getDestinationPosition(explicitDest);
@@ -425,7 +425,7 @@
             }
             const page = await this._getPage(destination.pageNumber);
             const viewport = page.getViewport({ scale: 1 });
-            const targetY = Number.isFinite(destination.pdfY)
+            const targetY = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)[1]
                 : null;
             const textContent = await this._getPageTextContent(destination.pageNumber);
@@ -443,7 +443,7 @@
             const page = await this._getPage(destination.pageNumber);
             let scale = getPreviewScale(this._app.pdfViewer);
             let viewport = page.getViewport({ scale });
-            let point = Number.isFinite(destination.pdfY)
+            let point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                 : [0, 0];
             let textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
@@ -452,7 +452,7 @@
             if (maxPixelScale < 1) {
                 scale *= maxPixelScale;
                 viewport = page.getViewport({ scale });
-                point = Number.isFinite(destination.pdfY)
+                point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                     ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                     : [0, 0];
                 textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
@@ -577,7 +577,10 @@
             let minX = Infinity;
             let maxX = -Infinity;
             for (const item of textContent.items) {
-                if (!item.str || !item.str.trim()) {
+                if (typeof item.str !== "string"
+                    || !item.str.trim()
+                    || !Array.isArray(item.transform)
+                    || typeof item.width !== "number") {
                     continue;
                 }
                 const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
@@ -617,9 +620,9 @@
         }
     }
     function isInternalLinkAnnotation(annotation) {
-        return annotation
-            && annotation.subtype === "Link"
-            && annotation.dest
+        return annotation.subtype === "Link"
+            && (Array.isArray(annotation.dest)
+                || typeof annotation.dest === "string" && annotation.dest.length > 0)
             && Array.isArray(annotation.rect);
     }
     function isSetEnabledMessage(message) {
@@ -695,7 +698,7 @@
     function collectNearbyLines(items, viewport, targetY) {
         const rows = [];
         for (const item of items) {
-            if (!item.str || !item.str.trim()) {
+            if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
                 continue;
             }
             const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);

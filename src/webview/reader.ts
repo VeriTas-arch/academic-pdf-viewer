@@ -3,8 +3,6 @@
 "use strict";
 
 (function () {
-    type PdfJsApp = any;
-    type PdfJsViewer = any;
     type NavigationDirection = "back" | "forward";
 
     interface NavigationPoint {
@@ -223,7 +221,7 @@
         history.pushDeparture(captureLocation());
     }
 
-    function patchExplicitNavigation(app: PdfJsApp): void {
+    function patchExplicitNavigation(app: PdfJsApplication): void {
         const linkService = app.pdfLinkService;
         if (linkService && !isAcademicHistoryPatched(linkService)) {
             const goToDestination = linkService.goToDestination.bind(linkService);
@@ -457,11 +455,11 @@
         return viewer._setCurrentPageNumber.bind(viewer);
     }
 
-    function isAcademicHistoryPatched(target: any): boolean {
+    function isAcademicHistoryPatched(target: PdfJsPatchable): boolean {
         return Boolean(target.__academicHistoryPatched);
     }
 
-    function markAcademicHistoryPatched(target: any): void {
+    function markAcademicHistoryPatched(target: PdfJsPatchable): void {
         target.__academicHistoryPatched = true;
     }
 

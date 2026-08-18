@@ -4,19 +4,6 @@
 
 (function () {
     type Timer = ReturnType<typeof setTimeout> | null;
-    type PdfJsApp = any;
-    type PdfJsDocument = any;
-    type PdfJsPage = any;
-    type PdfJsPageView = any;
-    type PdfJsViewport = any;
-    type PdfJsAnnotation = any;
-    type PdfJsDestination = any;
-    type PdfJsTextContent = { items: any[] };
-    type PdfJsRenderTask = {
-        promise: Promise<void>;
-        cancel: () => void;
-    };
-
     interface ViewportRect {
         left: number;
         top: number;
@@ -30,6 +17,11 @@
         rect: ViewportRect;
         dest: PdfJsDestination;
     }
+
+    type InternalLinkAnnotation = PdfJsAnnotation & {
+        dest: PdfJsDestination;
+        rect: number[];
+    };
 
     interface HoveredPreview {
         anchor: HTMLElement;
@@ -128,8 +120,8 @@
     }
 
     class CitationPreviewController {
-        _app: PdfJsApp;
-        _eventBus: any;
+        _app: PdfJsApplication;
+        _eventBus: PdfJsEventBus;
         _pdfDocument: PdfJsDocument | null;
         _hoverDelayer: HoverDelayer;
         _previewCache: Map<string, ImagePreview>;
@@ -147,7 +139,7 @@
         _controlPressed: boolean;
         _hoveredPreview: HoveredPreview | null;
 
-        constructor(app: PdfJsApp) {
+        constructor(app: PdfJsApplication) {
             this._app = app;
             this._eventBus = app.eventBus;
             this._pdfDocument = null;
@@ -338,7 +330,7 @@
             return promise;
         }
 
-        _appendOverlay(pageView: PdfJsPageView, annotation: PdfJsAnnotation, pageNumber: number): void {
+        _appendOverlay(pageView: PdfJsPageView, annotation: InternalLinkAnnotation, pageNumber: number): void {
             const rect = viewportRect(pageView.viewport, annotation.rect);
             if (!rect || rect.width <= 0 || rect.height <= 0) {
                 return;
@@ -506,8 +498,8 @@
             }
 
             const destRef = explicitDest[0];
-            let pageNumber = null;
-            if (Number.isInteger(destRef)) {
+            let pageNumber: number | null = null;
+            if (typeof destRef === "number" && Number.isInteger(destRef)) {
                 pageNumber = destRef + 1;
             } else if (destRef && typeof destRef === "object") {
                 pageNumber = getCachedPageNumber(this._app.pdfDocument, destRef);
@@ -515,7 +507,7 @@
                     pageNumber = (await this._pdfDocument.getPageIndex(destRef)) + 1;
                 }
             }
-            if (!Number.isInteger(pageNumber)) {
+            if (typeof pageNumber !== "number" || !Number.isInteger(pageNumber)) {
                 return null;
             }
 
@@ -537,7 +529,7 @@
 
             const page = await this._getPage(destination.pageNumber);
             const viewport = page.getViewport({ scale: 1 });
-            const targetY = Number.isFinite(destination.pdfY)
+            const targetY = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)[1]
                 : null;
             const textContent = await this._getPageTextContent(destination.pageNumber);
@@ -557,7 +549,7 @@
             const page = await this._getPage(destination.pageNumber);
             let scale = getPreviewScale(this._app.pdfViewer);
             let viewport = page.getViewport({ scale });
-            let point = Number.isFinite(destination.pdfY)
+            let point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                 : [0, 0];
             let textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
@@ -566,7 +558,7 @@
             if (maxPixelScale < 1) {
                 scale *= maxPixelScale;
                 viewport = page.getViewport({ scale });
-                point = Number.isFinite(destination.pdfY)
+                point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                     ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                     : [0, 0];
                 textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
@@ -659,7 +651,7 @@
             if (cached) {
                 return cached;
             }
-            const promise = this._pdfDocument.getPage(pageNumber)
+            const promise = this._pdfDocument!.getPage(pageNumber)
                 .catch((error: unknown): never => {
                     this._pageCache.delete(pageNumber);
                     throw error;
@@ -699,7 +691,10 @@
             let minX = Infinity;
             let maxX = -Infinity;
             for (const item of textContent.items) {
-                if (!item.str || !item.str.trim()) {
+                if (typeof item.str !== "string"
+                    || !item.str.trim()
+                    || !Array.isArray(item.transform)
+                    || typeof item.width !== "number") {
                     continue;
                 }
                 const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
@@ -742,10 +737,12 @@
         }
     }
 
-    function isInternalLinkAnnotation(annotation: PdfJsAnnotation): boolean {
-        return annotation
-            && annotation.subtype === "Link"
-            && annotation.dest
+    function isInternalLinkAnnotation(
+        annotation: PdfJsAnnotation
+    ): annotation is InternalLinkAnnotation {
+        return annotation.subtype === "Link"
+            && (Array.isArray(annotation.dest)
+                || typeof annotation.dest === "string" && annotation.dest.length > 0)
             && Array.isArray(annotation.rect);
     }
 
@@ -817,20 +814,20 @@
         return `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
     }
 
-    function getPdfViewerPages(pdfViewer: any): PdfJsPageView[] {
+    function getPdfViewerPages(pdfViewer: PdfJsViewer): PdfJsPageView[] {
         return Array.isArray(pdfViewer?._pages) ? pdfViewer._pages : [];
     }
 
-    function getCachedPageNumber(pdfDocument: any, destRef: object): number | null {
+    function getCachedPageNumber(pdfDocument: PdfJsDocument | null, destRef: object): number | null {
         return typeof pdfDocument?.cachedPageNumber === "function"
             ? pdfDocument.cachedPageNumber(destRef)
             : null;
     }
 
-    function collectNearbyLines(items: any[], viewport: PdfJsViewport, targetY: number | null): string[] {
+    function collectNearbyLines(items: PdfJsTextItem[], viewport: PdfJsViewport, targetY: number | null): string[] {
         const rows: Array<{ text: string; x: number; y: number }> = [];
         for (const item of items) {
-            if (!item.str || !item.str.trim()) {
+            if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
                 continue;
             }
             const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
@@ -890,7 +887,7 @@
         };
     }
 
-    function getPreviewScale(pdfViewer: any): number {
+    function getPreviewScale(pdfViewer: PdfJsViewer): number {
         const currentScale = Number.isFinite(pdfViewer.currentScale) ? pdfViewer.currentScale : 1;
         const scale = currentScale > 1
             ? 1 + (currentScale - 1) * 1.5

@@ -1,6 +1,7 @@
 {
     "compilerOptions": {
-        "module": "None",
+        "module": "ES2022",
+        "moduleResolution": "Bundler",
         "target": "ES2022",
         "outDir": "assets/academic",
         "rootDir": "src/webview",
@@ -12,6 +13,10 @@
         "strict": true,
         "noImplicitAny": true,
         "noEmitOnError": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
         "ignoreDeprecations": "6.0"
     },
     "include": [

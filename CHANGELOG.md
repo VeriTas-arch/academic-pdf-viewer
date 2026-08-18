@@ -2,6 +2,24 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.0.6] - 2026-08-18
+
+### Added
+
+- Added independently invoked local tests for webview message validation and the raster PDF diff algorithm.
+
+### Changed
+
+- Migrated the extension-owned PDF.js viewer bootstrap from handwritten JavaScript to strict TypeScript.
+- Split PDF data access, viewer HTML rendering, and diagnostic logging out of the custom editor provider.
+- Extracted the raster comparison algorithm into a small testable module without changing the diff overlay behavior.
+- Replaced permissive PDF.js `any` boundaries with the minimal interfaces used by the extension.
+- Enabled stricter TypeScript and ESLint checks for unused code, control flow, and explicit `any` usage.
+
+### Removed
+
+- Removed unused extension context state, duplicated protocol literals, and obsolete configurable viewer defaults.
+
 ## [1.0.5] - 2026-08-18
 
 ### Security

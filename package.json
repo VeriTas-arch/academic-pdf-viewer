@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -115,11 +115,13 @@
     "scripts": {
         "vscode:prepublish": "npm run build",
         "build": "npm run clean && npm run compile",
+        "check": "npm run build && npm run lint",
         "clean": "node ./scripts/clean.mjs",
         "compile": "npm run compile:extension && npm run compile:webview",
         "compile:extension": "tsc -p ./",
         "compile:webview": "tsc -p ./tsconfig.webview.json",
-        "lint": "eslint \"src/**/*.ts\""
+        "lint": "eslint \"src/**/*.ts\"",
+        "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs"
     },
     "devDependencies": {
         "@types/node": "24.x",

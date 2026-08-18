@@ -14,20 +14,23 @@ export type ExtensionToWebviewMessage =
 
 export type NavigationDirection = 'back' | 'forward';
 
-export type PdfDebugEvent =
-    | 'viewerInitializing'
-    | 'viewerInitialized'
-    | 'workerSourcePrepared'
-    | 'workerSourceFallback'
-    | 'opened'
-    | 'firstPageRendered'
-    | 'failed'
-    | 'emptyRevision'
-    | 'unhandledRejection'
-    | 'windowError'
-    | 'diffComputed'
-    | 'diffTextFallback'
-    | 'diffFailed';
+const pdfDebugEventValues = [
+    'viewerInitializing',
+    'viewerInitialized',
+    'workerSourcePrepared',
+    'workerSourceFallback',
+    'opened',
+    'firstPageRendered',
+    'failed',
+    'emptyRevision',
+    'unhandledRejection',
+    'windowError',
+    'diffComputed',
+    'diffTextFallback',
+    'diffFailed',
+] as const;
+
+type PdfDebugEvent = typeof pdfDebugEventValues[number];
 
 export type WebviewToExtensionMessage =
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
@@ -47,23 +50,12 @@ export type WebviewToExtensionMessage =
         sizeBytes?: number;
         workerSource?: 'blob' | 'mainThreadFallback';
         error?: string;
+        source?: string;
+        line?: number;
+        column?: number;
     };
 
-const pdfDebugEvents: ReadonlySet<string> = new Set([
-    'viewerInitializing',
-    'viewerInitialized',
-    'workerSourcePrepared',
-    'workerSourceFallback',
-    'opened',
-    'firstPageRendered',
-    'failed',
-    'emptyRevision',
-    'unhandledRejection',
-    'windowError',
-    'diffComputed',
-    'diffTextFallback',
-    'diffFailed',
-]);
+const pdfDebugEvents: ReadonlySet<string> = new Set(pdfDebugEventValues);
 
 const maximumDebugStringLength = 8 * 1024;
 
@@ -84,12 +76,15 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
                 && isOptionalDebugString(value.fingerprint)
                 && isOptionalDebugString(value.originalFingerprint)
                 && isOptionalDebugString(value.error)
+                && isOptionalDebugString(value.source)
                 && isOptionalFiniteNumber(value.durationMs)
                 && isOptionalFiniteNumber(value.pages)
                 && isOptionalFiniteNumber(value.pageNumber)
                 && isOptionalFiniteNumber(value.regions)
                 && isOptionalFiniteNumber(value.changedPixels)
                 && isOptionalFiniteNumber(value.sizeBytes)
+                && isOptionalFiniteNumber(value.line)
+                && isOptionalFiniteNumber(value.column)
                 && (value.strategy === undefined
                     || value.strategy === 'page'
                     || value.strategy === 'raster'
@@ -114,10 +109,4 @@ function isOptionalDebugString(value: unknown): boolean {
 function isOptionalFiniteNumber(value: unknown): boolean {
     return value === undefined
         || (typeof value === 'number' && Number.isFinite(value));
-}
-
-export interface NavigationPoint {
-    pageNumber: number;
-    scrollTop: number;
-    scaleValue: string | number;
 }
