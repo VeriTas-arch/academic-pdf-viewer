@@ -30,8 +30,7 @@
     },
     "main": "./out/extension.js",
     "enabledApiProposals": [
-        "customEditorDiffs",
-        "customEditorPriority"
+        "customEditorDiffs"
     ],
     "contributes": {
         "customEditors": [
