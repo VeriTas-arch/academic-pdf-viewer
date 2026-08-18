@@ -95,6 +95,12 @@ function describePdfUri(uri: vscode.Uri): DevLogFields {
     }
 }
 
+function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
+    const copy = new ArrayBuffer(data.byteLength);
+    new Uint8Array(copy).set(data);
+    return copy;
+}
+
 function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Buffer> {
     const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
     return new Promise((resolve, reject) => {
@@ -132,6 +138,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     private readonly panels = new Set<vscode.WebviewPanel>();
     private readonly panelDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
+    private readonly diffTargetPanels = new Map<vscode.WebviewPanel, vscode.WebviewPanel>();
+    private readonly diffOriginalDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
+    private readonly diffHighlightsEnabled = new Set<vscode.WebviewPanel>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
@@ -179,6 +188,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             }
             this.panels.delete(panel);
             this.panelDocuments.delete(panel);
+            this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
                 this.activePanel = this.panels.values().next().value;
             }
@@ -203,10 +213,49 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             modifiedUri: documents.modified.uri.toString(),
             modifiedBytes: documents.modified.data.byteLength,
         });
+        this.diffTargetPanels.set(panels.original, panels.modified);
+        this.diffTargetPanels.set(panels.modified, panels.modified);
+        this.diffOriginalDocuments.set(panels.modified, documents.original);
         await Promise.all([
             this.resolveCustomEditor(documents.original, panels.original),
             this.resolveCustomEditor(documents.modified, panels.modified),
         ]);
+    }
+
+    async toggleDiffHighlights(): Promise<boolean | undefined> {
+        const modifiedPanel = this.activePanel && this.diffTargetPanels.get(this.activePanel);
+        const originalDocument = modifiedPanel && this.diffOriginalDocuments.get(modifiedPanel);
+        if (!modifiedPanel || !originalDocument) {
+            return undefined;
+        }
+
+        const enabled = !this.diffHighlightsEnabled.has(modifiedPanel);
+        const message: ExtensionToWebviewMessage = enabled
+            ? {
+                type: 'diff.setEnabled',
+                enabled: true,
+                originalData: copyToArrayBuffer(originalDocument.data),
+                originalFingerprint: originalDocument.uri.toString(),
+                originalIsEmptyRevision: originalDocument.data.byteLength === 0,
+            }
+            : { type: 'diff.setEnabled', enabled: false };
+        const delivered = await modifiedPanel.webview.postMessage(message);
+        if (!delivered) {
+            this.logger?.warn('visualDiff.toggle.notDelivered', { enabled });
+            return undefined;
+        }
+
+        if (enabled) {
+            this.diffHighlightsEnabled.add(modifiedPanel);
+        } else {
+            this.diffHighlightsEnabled.delete(modifiedPanel);
+        }
+        this.logger?.info('visualDiff.toggled', {
+            enabled,
+            originalUri: originalDocument.uri.toString(),
+            modifiedUri: this.panelDocuments.get(modifiedPanel)?.uri.toString(),
+        });
+        return enabled;
     }
 
     postToActive(message: ExtensionToWebviewMessage): void {
@@ -289,14 +338,24 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             const fields = {
                 ...describePdfUri(document.uri),
                 fingerprint: message.fingerprint,
+                originalFingerprint: message.originalFingerprint,
                 durationMs: message.durationMs,
                 pages: message.pages,
                 pageNumber: message.pageNumber,
+                regions: message.regions,
+                changedPixels: message.changedPixels,
+                strategy: message.strategy,
             };
-            if (message.event === 'failed') {
-                this.logger?.error('pdfjs.failed', message.error ?? 'Unknown PDF.js error', fields);
+            if (message.event === 'failed' || message.event === 'diffFailed') {
+                const event = message.event === 'diffFailed' ? 'visualDiff.failed' : 'pdfjs.failed';
+                this.logger?.error(event, message.error ?? 'Unknown PDF.js error', fields);
+            } else if (message.event === 'diffTextFallback') {
+                this.logger?.warn('visualDiff.textFallback', { ...fields, error: message.error });
             } else {
-                this.logger?.info(`pdfjs.${message.event}`, fields);
+                const event = message.event === 'diffComputed'
+                    ? 'visualDiff.computed'
+                    : `pdfjs.${message.event}`;
+                this.logger?.info(event, fields);
             }
         } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
@@ -311,8 +370,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         preserveView: boolean,
     ): Promise<void> {
         const startedAt = Date.now();
-        const data = new ArrayBuffer(document.data.byteLength);
-        new Uint8Array(data).set(document.data);
+        const data = copyToArrayBuffer(document.data);
 
         const fields = {
             ...describePdfUri(document.uri),
@@ -341,6 +399,22 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             });
             throw error;
         }
+    }
+
+    private forgetDiffPanel(panel: vscode.WebviewPanel): void {
+        const modifiedPanel = this.diffTargetPanels.get(panel);
+        this.diffTargetPanels.delete(panel);
+        if (modifiedPanel !== panel) {
+            return;
+        }
+
+        for (const [candidate, target] of this.diffTargetPanels) {
+            if (target === panel) {
+                this.diffTargetPanels.delete(candidate);
+            }
+        }
+        this.diffOriginalDocuments.delete(panel);
+        this.diffHighlightsEnabled.delete(panel);
     }
 
     private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {
@@ -411,6 +485,7 @@ window.addEventListener("keydown", function (event) {
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}"></script>
+<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfDiff.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>`;
 
         return this.viewerHtml

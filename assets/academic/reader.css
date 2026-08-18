@@ -27,3 +27,20 @@ body.academicPdfDocumentUnavailable #outerContainer {
 body.academicPdfDocumentUnavailable #academicPdfDocumentState {
     display: flex;
 }
+
+.academicPdfDiffLayer {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.academicPdfDiffRegion {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px solid var(--vscode-editorWarning-foreground, #cca700);
+    border-radius: 3px;
+    background: rgba(255, 166, 0, 0.16);
+    box-shadow: 0 0 0 1px rgba(255, 166, 0, 0.18);
+}

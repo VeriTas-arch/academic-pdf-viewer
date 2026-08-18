@@ -66,6 +66,11 @@
                 "command": "academicPdfViewer.toggleLinkPreview",
                 "title": "PDF: Toggle Link Preview",
                 "enablement": "activeCustomEditorId == academicPdfViewer.pdf"
+            },
+            {
+                "command": "academicPdfViewer.toggleDiffHighlights",
+                "title": "PDF: Toggle Diff Highlights",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf"
             }
         ],
         "configuration": {
@@ -98,6 +103,12 @@
                 "command": "academicPdfViewer.navigateForward",
                 "key": "alt+right",
                 "when": "activeCustomEditorId == academicPdfViewer.pdf"
+            },
+            {
+                "command": "academicPdfViewer.toggleDiffHighlights",
+                "key": "ctrl+alt+d",
+                "mac": "cmd+alt+d",
+                "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.developmentMode"
             }
         ]
     },

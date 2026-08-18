@@ -9,6 +9,11 @@ export function activate(context: vscode.ExtensionContext) {
         extensionMode: 'development',
         version: context.extension.packageJSON.version,
     });
+    void vscode.commands.executeCommand(
+        'setContext',
+        'academicPdfViewer.developmentMode',
+        context.extensionMode === vscode.ExtensionMode.Development,
+    );
     const provider = new PdfEditorProvider(context, logger);
 
     context.subscriptions.push(
@@ -28,6 +33,19 @@ export function activate(context: vscode.ExtensionContext) {
             const enabled = await provider.toggleLinkPreviewActive();
             if (enabled !== undefined) {
                 void vscode.window.showInformationMessage(`PDF link preview ${enabled ? 'enabled' : 'disabled'}.`);
+            }
+        }),
+        vscode.commands.registerCommand('academicPdfViewer.toggleDiffHighlights', async () => {
+            try {
+                const enabled = await provider.toggleDiffHighlights();
+                if (enabled === undefined) {
+                    void vscode.window.showInformationMessage('PDF diff highlights are only available in a PDF diff editor.');
+                } else {
+                    void vscode.window.showInformationMessage(`PDF diff highlights ${enabled ? 'enabled' : 'disabled'}.`);
+                }
+            } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
+                void vscode.window.showErrorMessage(`Unable to toggle PDF diff highlights: ${detail}`);
             }
         }),
         vscode.workspace.onDidChangeConfiguration(event => {
