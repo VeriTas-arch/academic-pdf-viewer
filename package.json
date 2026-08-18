@@ -29,6 +29,10 @@
         "theme": "dark"
     },
     "main": "./out/extension.js",
+    "enabledApiProposals": [
+        "customEditorDiffs",
+        "customEditorPriority"
+    ],
     "contributes": {
         "customEditors": [
             {
@@ -39,7 +43,10 @@
                         "filenamePattern": "*.pdf"
                     }
                 ],
-                "priority": "default"
+                "priority": {
+                    "textEditor": "default",
+                    "diffEditor": "default"
+                }
             }
         ],
         "commands": [

@@ -3,3 +3,27 @@
     font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     font-size: 12px;
 }
+
+#academicPdfDocumentState {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+    color: var(--vscode-descriptionForeground, #8c8c8c);
+    background: var(--vscode-editor-background, #1e1e1e);
+    font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: 13px;
+    text-align: center;
+}
+
+#academicPdfDocumentState[hidden],
+body.academicPdfDocumentUnavailable #outerContainer {
+    display: none;
+}
+
+body.academicPdfDocumentUnavailable #academicPdfDocumentState {
+    display: flex;
+}

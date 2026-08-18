@@ -43,7 +43,6 @@
     PDFViewerApplicationOptions.set('cMapUrl', config.cMapUrl)
     PDFViewerApplicationOptions.set('standardFontDataUrl', config.standardFontDataUrl)
     const loadOpts = {
-      url:config.path,
       useWorkerFetch: false,
       cMapUrl: config.cMapUrl,
       cMapPacked: true,
@@ -64,42 +63,81 @@
         PDFViewerApplication.eventBus.off('documentloaded', optsOnLoad)
       }
       PDFViewerApplication.eventBus.on('documentloaded', optsOnLoad)
-      
-      // load() cannot be called before pdf.js is initialized
-      // open() makes sure pdf.js is initialized before load()
-      PDFViewerApplication.open(config.path).then(async function () {
-        const doc = await pdfjsLib.getDocument(loadOpts).promise
-        doc._pdfInfo.fingerprints = [config.path]
-        PDFViewerApplication.load(doc)
-      })
     })
 
     window.addEventListener('message', async function (event) {
-      if (!event.data || event.data.type !== 'document.reload') {
+      if (!event.data || event.data.type !== 'document.load') {
         return
       }
 
-      // Prevents flickering of page when PDF is reloaded
-      const oldResetView = PDFViewerApplication.pdfViewer._resetView
-      PDFViewerApplication.pdfViewer._resetView = function () {
-        this._firstPageCapability = (0, pdfjsLib.createPromiseCapability)()
-        this._onePageRenderedCapability = (0, pdfjsLib.createPromiseCapability)()
-        this._pagesCapability = (0, pdfjsLib.createPromiseCapability)()
-
-        this.viewer.textContent = ""
+      await PDFViewerApplication.initializedPromise
+      if (event.data.isEmptyRevision) {
+        if (PDFViewerApplication.pdfLoadingTask) {
+          await PDFViewerApplication.close()
+        }
+        showDocumentState('This file does not exist in this revision.')
+        return
       }
 
-      // Changing the fingerprint fools pdf.js into keeping scroll position
+      if (!(event.data.data instanceof ArrayBuffer)) {
+        console.error('Failed to load PDF document: invalid binary payload.')
+        return
+      }
+      const data = new Uint8Array(event.data.data)
+
+      showDocumentState(null)
+      const viewer = PDFViewerApplication.pdfViewer
+      const oldResetView = viewer._resetView
+      const oldLoad = PDFViewerApplication.load
+      PDFViewerApplication.load = function (pdfDocument) {
+        if (pdfDocument && pdfDocument._pdfInfo) {
+          pdfDocument._pdfInfo.fingerprints = [event.data.fingerprint]
+        }
+        return oldLoad.call(this, pdfDocument)
+      }
+      if (event.data.preserveView) {
+        // Prevents flickering of the page when the current PDF is reloaded.
+        viewer._resetView = function () {
+          this._firstPageCapability = (0, pdfjsLib.createPromiseCapability)()
+          this._onePageRenderedCapability = (0, pdfjsLib.createPromiseCapability)()
+          this._pagesCapability = (0, pdfjsLib.createPromiseCapability)()
+          this.viewer.textContent = ""
+        }
+      }
+
       try {
-        const reloadOpts = Object.assign({}, loadOpts, { url: event.data.url || config.path })
-        const doc = await pdfjsLib.getDocument(reloadOpts).promise
-        doc._pdfInfo.fingerprints = [config.path]
-        PDFViewerApplication.load(doc)
+        await PDFViewerApplication.open(data, loadOpts)
+      } catch (error) {
+        console.error('Failed to load PDF document.', error)
       } finally {
-        PDFViewerApplication.pdfViewer._resetView = oldResetView
+        PDFViewerApplication.load = oldLoad
+        viewer._resetView = oldResetView
       }
-    });
+    })
+
+    window.dispatchEvent(new CustomEvent('academic-pdf-viewer-ready'))
   }, { once: true });
+
+  function showDocumentState(message) {
+    let state = document.getElementById('academicPdfDocumentState')
+    if (!state) {
+      state = document.createElement('div')
+      state.id = 'academicPdfDocumentState'
+      state.setAttribute('role', 'status')
+      state.hidden = true
+      document.body.appendChild(state)
+    }
+
+    if (message === null) {
+      state.hidden = true
+      document.body.classList.remove('academicPdfDocumentUnavailable')
+      return
+    }
+
+    state.textContent = message
+    state.hidden = false
+    document.body.classList.add('academicPdfDocumentUnavailable')
+  }
 
   window.onerror = function () {
     const msg = document.createElement('body')

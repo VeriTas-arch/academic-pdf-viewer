@@ -6,6 +6,9 @@
         window.PDFViewerApplicationOptions.set("useOnlyCssZoom", true);
     }
     const vscode = acquireVsCodeApi();
+    window.addEventListener("academic-pdf-viewer-ready", () => {
+        vscode.postMessage({ type: "webview.ready" });
+    }, { once: true });
     const pressedNavigationKeys = {
         back: false,
         forward: false

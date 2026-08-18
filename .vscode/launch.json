@@ -12,6 +12,7 @@
 			"preLaunchTask": "npm: compile",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
+				"--enable-proposed-api=ovolab-veritas.academic-pdf-viewer",
 				"${workspaceFolder}/tests"
 			],
 			"outFiles": [

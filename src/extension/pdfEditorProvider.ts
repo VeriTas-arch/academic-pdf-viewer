@@ -1,14 +1,71 @@
 import * as vscode from 'vscode';
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname, isAbsolute, relative, sep } from 'node:path';
 
 import type { ExtensionToWebviewMessage, NavigationDirection, WebviewToExtensionMessage } from '../shared/protocol';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
+const MAX_GIT_OUTPUT_BYTES = 512 * 1024 * 1024;
+
+async function readPdfData(uri: vscode.Uri): Promise<Uint8Array> {
+    if (uri.scheme === 'git') {
+        return readGitBlob(uri);
+    }
+    return vscode.workspace.fs.readFile(uri);
+}
+
+async function readGitBlob(uri: vscode.Uri): Promise<Uint8Array> {
+    const query = JSON.parse(uri.query) as Record<string, unknown>;
+    if (typeof query.path !== 'string' || typeof query.ref !== 'string') {
+        throw new Error(`Invalid Git URI: ${uri.toString()}`);
+    }
+
+    const repositoryRoot = (await runGit(['rev-parse', '--show-toplevel'], dirname(query.path)))
+        .toString('utf8')
+        .trim();
+    const repositoryPath = relative(repositoryRoot, query.path);
+    if (repositoryPath === '..' || repositoryPath.startsWith(`..${sep}`) || isAbsolute(repositoryPath)) {
+        throw new Error(`PDF is outside its Git repository: ${query.path}`);
+    }
+
+    const gitPath = repositoryPath.replace(/\\/g, '/');
+    const objectName = query.ref === '~' || query.ref === ''
+        ? `:${gitPath}`
+        : `${query.ref}:${gitPath}`;
+    return runGit(['cat-file', 'blob', objectName], repositoryRoot, true);
+}
+
+function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Buffer> {
+    const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
+    return new Promise((resolve, reject) => {
+        execFile(configuredGitPath || 'git', args, {
+            cwd,
+            encoding: null,
+            maxBuffer: MAX_GIT_OUTPUT_BYTES,
+        }, (error, stdout, stderr) => {
+            if (!error) {
+                resolve(stdout);
+                return;
+            }
+            if (missingIsEmpty && error.code === 128) {
+                resolve(Buffer.alloc(0));
+                return;
+            }
+
+            const detail = stderr.toString('utf8').trim() || error.message;
+            reject(new Error(`Git ${args[0]} failed: ${detail}`));
+        });
+    });
+}
 
 class PdfDocument implements vscode.CustomDocument {
-    constructor(public readonly uri: vscode.Uri) { }
+    constructor(
+        public readonly uri: vscode.Uri,
+        public data: Uint8Array,
+    ) { }
 
     dispose(): void { }
 }
@@ -17,7 +74,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private static readonly navigationKeyFallbackReleaseMs = 800;
 
     private readonly panels = new Set<vscode.WebviewPanel>();
-    private readonly panelDocuments = new Map<vscode.WebviewPanel, vscode.Uri>();
+    private readonly panelDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
@@ -26,13 +83,14 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.viewerHtml = readViewerHtml(context);
     }
 
-    openCustomDocument(uri: vscode.Uri): PdfDocument {
-        return new PdfDocument(uri);
+    async openCustomDocument(uri: vscode.Uri): Promise<PdfDocument> {
+        const data = await readPdfData(uri);
+        return new PdfDocument(uri, data);
     }
 
     async resolveCustomEditor(document: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
         this.panels.add(panel);
-        this.panelDocuments.set(panel, document.uri);
+        this.panelDocuments.set(panel, document);
         this.activePanel = panel;
         const panelDisposables: vscode.Disposable[] = [];
 
@@ -40,8 +98,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             enableScripts: true,
             localResourceRoots: [
                 vscode.Uri.joinPath(this.context.extensionUri, 'assets'),
-                vscode.Uri.joinPath(document.uri, '..'),
-                ...(vscode.workspace.workspaceFolders?.map(folder => folder.uri) ?? []),
             ],
         };
 
@@ -66,11 +122,21 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
         panelDisposables.push(
             panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
-                this.handleWebviewMessage(message);
+                this.handleWebviewMessage(message, panel, document);
             }),
         );
 
         panel.webview.html = this.createHtml(panel.webview, document.uri);
+    }
+
+    async resolveCustomEditorSideBySideDiff(
+        documents: vscode.CustomEditorDiffDocuments<PdfDocument>,
+        panels: vscode.CustomEditorSideBySideDiffWebviewPanels,
+    ): Promise<void> {
+        await Promise.all([
+            this.resolveCustomEditor(documents.original, panels.original),
+            this.resolveCustomEditor(documents.modified, panels.modified),
+        ]);
     }
 
     postToActive(message: ExtensionToWebviewMessage): void {
@@ -89,30 +155,28 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         });
     }
 
-    reloadActive(): void {
+    async reloadActive(): Promise<void> {
         const panel = this.activePanel;
-        const documentUri = panel && this.panelDocuments.get(panel);
-        if (!panel || !documentUri) {
+        const document = panel && this.panelDocuments.get(panel);
+        if (!panel || !document) {
             return;
         }
 
-        const pdfUri = panel.webview.asWebviewUri(documentUri);
-        const reloadQuery = `academicPdfReload=${Date.now()}`;
-        const url = pdfUri.with({
-            query: pdfUri.query ? `${pdfUri.query}&${reloadQuery}` : reloadQuery,
-        }).toString();
-
-        void panel.webview.postMessage({
-            type: 'document.reload',
-            url,
-        } satisfies ExtensionToWebviewMessage);
+        try {
+            document.data = await readPdfData(document.uri);
+            await this.postDocument(panel, document, true);
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            void vscode.window.showErrorMessage(`Unable to reload PDF: ${detail}`);
+        }
     }
 
     async toggleLinkPreviewActive(): Promise<boolean | undefined> {
-        const documentUri = this.activePanel && this.panelDocuments.get(this.activePanel);
-        if (!documentUri) {
+        const document = this.activePanel && this.panelDocuments.get(this.activePanel);
+        if (!document) {
             return undefined;
         }
+        const documentUri = document.uri;
 
         const configuration = vscode.workspace.getConfiguration('academicPdfViewer', documentUri);
         const setting = 'linkPreview.enabled';
@@ -129,23 +193,46 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     refreshLinkPreviewConfiguration(): void {
         for (const panel of this.panels) {
-            const documentUri = this.panelDocuments.get(panel);
-            if (!documentUri) {
+            const document = this.panelDocuments.get(panel);
+            if (!document) {
                 continue;
             }
             void panel.webview.postMessage({
                 type: 'linkPreview.setEnabled',
-                enabled: this.isLinkPreviewEnabled(documentUri),
+                enabled: this.isLinkPreviewEnabled(document.uri),
             } satisfies ExtensionToWebviewMessage);
         }
     }
 
-    private handleWebviewMessage(message: WebviewToExtensionMessage): void {
-        if (message.type === 'navigation.keyUp') {
+    private handleWebviewMessage(
+        message: WebviewToExtensionMessage,
+        panel: vscode.WebviewPanel,
+        document: PdfDocument,
+    ): void {
+        if (message.type === 'webview.ready') {
+            void this.postDocument(panel, document, false);
+        } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
         } else if (message.type === 'workbench.showCommands') {
             void vscode.commands.executeCommand('workbench.action.showCommands');
         }
+    }
+
+    private async postDocument(
+        panel: vscode.WebviewPanel,
+        document: PdfDocument,
+        preserveView: boolean,
+    ): Promise<void> {
+        const data = new ArrayBuffer(document.data.byteLength);
+        new Uint8Array(data).set(document.data);
+
+        await panel.webview.postMessage({
+            type: 'document.load',
+            data,
+            isEmptyRevision: document.data.byteLength === 0,
+            fingerprint: document.uri.toString(),
+            preserveView,
+        } satisfies ExtensionToWebviewMessage);
     }
 
     private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {
@@ -171,7 +258,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     private createHtml(webview: vscode.Webview, pdfUri: vscode.Uri): string {
-        const webviewPdfUri = webview.asWebviewUri(pdfUri);
         const assetUri = (...paths: string[]): string => webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'assets', ...paths),
         ).toString();
@@ -180,7 +266,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         ).toString();
         const settings = {
             cMapUrl: `${libUri('web', 'cmaps')}/`,
-            path: webviewPdfUri.toString(),
             standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
             linkPreviewEnabled: this.isLinkPreviewEnabled(pdfUri),
             defaults: {
