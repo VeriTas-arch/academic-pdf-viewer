@@ -7,6 +7,16 @@ The runtime files under `lib/build` and `lib/web` come from the official PDF.js
 - Archive: `pdfjs-6.2.108-dist.zip`
 - SHA-256: `7bf642d59582b475e8c48447da9b02b0108fad9742d7c2a35cb4ed6dd45e95ba`
 
-Source maps, the debugger bundle, and the bundled example PDF are omitted because
-they are not used at runtime. `lib/pdf.css` is an extension-owned integration
-file and is not part of the upstream archive.
+`lib/pdf.css` is an extension-owned integration file and is not part of the
+upstream archive. Source maps and these unused scripting/debug assets are omitted:
+
+- `build/pdf.sandbox.mjs`
+- `web/compressed.tracemonkey-pldi-09.pdf`
+- `web/debugger.css`
+- `web/debugger.js`
+- `web/debugger.mjs`
+- `web/wasm/quickjs-eval.js`
+- `web/wasm/quickjs-eval.wasm`
+
+Use the independent `npm run pdfjs:check`, `npm run pdfjs:update`, and
+`npm run pdfjs:verify` commands to maintain this bundle.

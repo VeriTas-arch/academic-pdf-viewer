@@ -44,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
         vscode.workspace.onDidChangeConfiguration(event => {
-            if (event.affectsConfiguration('academicPdfViewer.linkPreview.enabled')) {
+            if (event.affectsConfiguration('academicPdfViewer.linkPreview')) {
                 provider.refreshLinkPreviewConfiguration();
             }
         }),

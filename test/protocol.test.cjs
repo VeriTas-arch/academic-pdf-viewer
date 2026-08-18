@@ -1,7 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { isWebviewToExtensionMessage } = require('../src/shared/protocol.ts');
+const {
+    DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
+    isWebviewToExtensionMessage,
+    normalizeLinkPreviewResolutionScale,
+} = require('../src/shared/protocol.ts');
 
 test('accepts supported webview messages', () => {
     assert.equal(isWebviewToExtensionMessage({ type: 'webview.ready' }), true);
@@ -41,4 +45,12 @@ test('rejects malformed and unsupported webview messages', () => {
         event: 'failed',
         error: 'x'.repeat(8 * 1024 + 1),
     }), false);
+});
+
+test('normalizes link preview resolution scale', () => {
+    assert.equal(normalizeLinkPreviewResolutionScale(undefined), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
+    assert.equal(normalizeLinkPreviewResolutionScale(Number.NaN), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
+    assert.equal(normalizeLinkPreviewResolutionScale(0.5), 1);
+    assert.equal(normalizeLinkPreviewResolutionScale(2.5), 2.5);
+    assert.equal(normalizeLinkPreviewResolutionScale(8), 4);
 });

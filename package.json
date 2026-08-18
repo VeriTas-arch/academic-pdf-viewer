@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -81,6 +81,14 @@
                     "default": true,
                     "scope": "window",
                     "description": "Show a destination preview when holding Control and hovering over internal PDF links."
+                },
+                "academicPdfViewer.linkPreview.resolutionScale": {
+                    "type": "number",
+                    "default": 2,
+                    "minimum": 1,
+                    "maximum": 4,
+                    "scope": "window",
+                    "markdownDescription": "Controls link-preview image clarity without changing its displayed size. The value is the number of rendered image pixels per CSS pixel; higher values use more memory and rendering time."
                 }
             }
         },
@@ -115,12 +123,16 @@
     "scripts": {
         "vscode:prepublish": "npm run build",
         "build": "npm run clean && npm run compile",
-        "check": "npm run build && npm run lint",
+        "check": "npm run build && npm run typecheck:scripts && npm run lint",
         "clean": "node ./scripts/clean.mjs",
         "compile": "npm run compile:extension && npm run compile:webview",
         "compile:extension": "tsc -p ./",
         "compile:webview": "tsc -p ./tsconfig.webview.json",
-        "lint": "eslint \"src/**/*.ts\"",
+        "typecheck:scripts": "tsc -p ./tsconfig.scripts.json",
+        "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.mts\"",
+        "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
+        "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
+        "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
         "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs"
     },
     "devDependencies": {

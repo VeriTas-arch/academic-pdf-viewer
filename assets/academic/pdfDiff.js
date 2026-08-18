@@ -6,6 +6,9 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     const maxRenderScale = 1.25;
     const minimumTextMatchRatio = 0.5;
     const maximumTextTokensPerPage = 1500;
+    const maximumCachedPageResults = 64;
+    const maximumConcurrentPageComparisons = 2;
+    const maximumQueuedPages = 16;
     let config;
     let enabled = false;
     let modifiedDocumentReady = false;
@@ -16,8 +19,10 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     let originalDocument = null;
     let comparisonGeneration = 0;
     let pageGeneration = 0;
+    let activePageComparisons = 0;
     const pageResults = new Map();
     const pendingPages = new Map();
+    const queuedPages = new Map();
     window.addEventListener("load", () => {
         config = loadConfig();
         window.addEventListener("message", event => {
@@ -159,6 +164,7 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     function resetPageResults() {
         pageResults.clear();
         pendingPages.clear();
+        queuedPages.clear();
         clearOverlays();
     }
     function scheduleCurrentPage() {
@@ -173,6 +179,8 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         }
         const cached = pageResults.get(pageNumber);
         if (cached) {
+            pageResults.delete(pageNumber);
+            pageResults.set(pageNumber, cached);
             applyOverlay(pageNumber, cached);
             return;
         }
@@ -180,13 +188,42 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             return;
         }
         const currentGeneration = pageGeneration;
-        const task = computeAndApplyPage(pageNumber, currentGeneration);
-        pendingPages.set(pageNumber, task);
-        void task.finally(() => {
-            if (pendingPages.get(pageNumber) === task) {
-                pendingPages.delete(pageNumber);
+        queuedPages.delete(pageNumber);
+        queuedPages.set(pageNumber, currentGeneration);
+        while (queuedPages.size > maximumQueuedPages) {
+            const oldestPage = queuedPages.keys().next().value;
+            if (oldestPage === undefined) {
+                break;
             }
-        });
+            queuedPages.delete(oldestPage);
+        }
+        drainPageQueue();
+    }
+    function drainPageQueue() {
+        while (activePageComparisons < maximumConcurrentPageComparisons && queuedPages.size > 0) {
+            const next = queuedPages.entries().next().value;
+            if (!next) {
+                return;
+            }
+            const [pageNumber, currentGeneration] = next;
+            queuedPages.delete(pageNumber);
+            if (!enabled
+                || !modifiedDocumentReady
+                || pageGeneration !== currentGeneration
+                || (!originalDocument && !originalIsEmptyRevision)) {
+                continue;
+            }
+            activePageComparisons += 1;
+            const task = computeAndApplyPage(pageNumber, currentGeneration);
+            pendingPages.set(pageNumber, task);
+            void task.finally(() => {
+                activePageComparisons -= 1;
+                if (pendingPages.get(pageNumber) === task) {
+                    pendingPages.delete(pageNumber);
+                }
+                drainPageQueue();
+            });
+        }
     }
     async function computeAndApplyPage(pageNumber, currentGeneration) {
         const startedAt = performance.now();
@@ -195,7 +232,7 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             if (!enabled || pageGeneration !== currentGeneration) {
                 return;
             }
-            pageResults.set(pageNumber, result.regions);
+            rememberPageResult(pageNumber, result.regions);
             applyOverlay(pageNumber, result.regions);
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
@@ -249,6 +286,17 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             renderPage(modifiedPage, scale)
         ]);
         return compareRasters(originalRaster, modifiedRaster);
+    }
+    function rememberPageResult(pageNumber, regions) {
+        pageResults.delete(pageNumber);
+        pageResults.set(pageNumber, regions);
+        while (pageResults.size > maximumCachedPageResults) {
+            const oldestPage = pageResults.keys().next().value;
+            if (oldestPage === undefined) {
+                return;
+            }
+            pageResults.delete(oldestPage);
+        }
     }
     async function renderPage(page, scale) {
         const viewport = page.getViewport({ scale });

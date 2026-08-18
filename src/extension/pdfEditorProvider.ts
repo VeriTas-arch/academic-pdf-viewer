@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 
 import {
+    DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
     isWebviewToExtensionMessage,
+    normalizeLinkPreviewResolutionScale,
     type ExtensionToWebviewMessage,
     type NavigationDirection,
     type WebviewToExtensionMessage,
@@ -106,6 +108,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             {
                 debug: this.logger !== undefined,
                 linkPreviewEnabled: this.isLinkPreviewEnabled(document.uri),
+                linkPreviewResolutionScale: this.getLinkPreviewResolutionScale(document.uri),
             },
         );
     }
@@ -224,8 +227,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 continue;
             }
             void panel.webview.postMessage({
-                type: 'linkPreview.setEnabled',
+                type: 'linkPreview.configure',
                 enabled: this.isLinkPreviewEnabled(document.uri),
+                resolutionScale: this.getLinkPreviewResolutionScale(document.uri),
             } satisfies ExtensionToWebviewMessage);
         }
     }
@@ -329,5 +333,12 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         return vscode.workspace
             .getConfiguration('academicPdfViewer', documentUri)
             .get<boolean>('linkPreview.enabled', true);
+    }
+
+    private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {
+        const value = vscode.workspace
+            .getConfiguration('academicPdfViewer', documentUri)
+            .get<number>('linkPreview.resolutionScale', DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
+        return normalizeLinkPreviewResolutionScale(value);
     }
 }

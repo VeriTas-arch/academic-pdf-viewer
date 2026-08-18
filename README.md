@@ -63,6 +63,11 @@ Commands without a default shortcut can be assigned from VS Code's Keyboard Shor
 
 The current release uses citation and link annotations already embedded in the PDF. Many publisher and LaTeX-generated papers include these links for references, figures, equations, or sections. When such links are available, Academic PDF Viewer draws a lightweight overlay and shows a preview of the destination while you hold `Ctrl` and hover over the link. You can press `Ctrl` before moving onto the link or while the pointer is already over it; releasing `Ctrl` closes the preview.
 
+The popup's displayed size is independent from its rendered image resolution.
+Increase `academicPdfViewer.linkPreview.resolutionScale` for a sharper preview
+without making the popup larger. Higher values require more rendering time and
+temporary image memory.
+
 PDFs without embedded citation/link annotations are still readable as normal PDFs, but citation previews may not appear.
 
 Preview popups do not capture pointer input, so PDF links and the outline remain clickable while a preview is visible.
@@ -136,6 +141,7 @@ The revision pair follows the Source Control entry selected by VS Code. PDFs tha
 | Setting | Default | Description |
 | --- | --- | --- |
 | `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding `Ctrl` over an internal PDF link. |
+| `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4`, without changing the displayed preview size. |
 
 The `PDF: Toggle Link Preview` command updates this setting for the current VS Code window.
 
@@ -160,6 +166,8 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history and notable changes.
 
 ## Development
 
+Use Node.js 24.x for local development.
+
 ```bash
 npm install
 npm run check
@@ -173,6 +181,21 @@ npm test
 ```
 
 Launch the extension host from VS Code with `F5`, then open a PDF file.
+
+PDF.js maintenance is also explicit and independent from the normal build and
+packaging paths:
+
+```bash
+npm run pdfjs:check
+npm run pdfjs:verify
+npm run pdfjs:update -- --version x.y.z
+```
+
+`pdfjs:check` is a read-only online release check. `pdfjs:verify` validates the
+installed bundle offline. `pdfjs:update` requires an exact version, verifies the
+official release asset checksum, stages and validates the candidate, and only
+then replaces the vendored files. Review [VENDOR.md](./assets/pdfviewer/VENDOR.md)
+and run the manual PDF smoke checks after an update.
 
 Create a local VSIX package with:
 

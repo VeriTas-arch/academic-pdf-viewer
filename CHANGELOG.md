@@ -2,6 +2,24 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.0.7] - 2026-08-19
+
+### Added
+
+- Added a user-configurable link-preview resolution scale that increases image clarity without changing the popup's displayed size.
+- Added independent PDF.js release check, staged update, and offline verification commands backed by machine-readable vendor metadata.
+- Added project development guidance for local testing, packaging, Proposed API use, and PDF.js maintenance.
+
+### Changed
+
+- Rendered citation previews as revocable Blob URLs, bounded preview and PDF diff caches, and limited page comparisons to two concurrent tasks for long documents.
+- Added TypeScript checking and linting for the PDF.js maintenance tool.
+- Corrected the extension development launch target after the fixture directory was renamed to `manual-tests`.
+
+### Security
+
+- Removed the unused PDF.js scripting sandbox and QuickJS assets while keeping PDF JavaScript evaluation disabled.
+
 ## [1.0.6] - 2026-08-18
 
 ### Added

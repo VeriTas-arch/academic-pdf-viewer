@@ -10,7 +10,25 @@ export type ExtensionToWebviewMessage =
         originalFingerprint: string;
         originalIsEmptyRevision: boolean;
     }
-    | { type: 'linkPreview.setEnabled'; enabled: boolean };
+    | {
+        type: 'linkPreview.configure';
+        enabled: boolean;
+        resolutionScale: number;
+    };
+
+export const DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE = 2;
+export const MIN_LINK_PREVIEW_RESOLUTION_SCALE = 1;
+export const MAX_LINK_PREVIEW_RESOLUTION_SCALE = 4;
+
+export function normalizeLinkPreviewResolutionScale(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE;
+    }
+    return Math.min(
+        Math.max(value, MIN_LINK_PREVIEW_RESOLUTION_SCALE),
+        MAX_LINK_PREVIEW_RESOLUTION_SCALE,
+    );
+}
 
 export type NavigationDirection = 'back' | 'forward';
 

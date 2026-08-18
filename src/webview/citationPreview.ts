@@ -58,12 +58,20 @@
         top: number;
     }
 
+    interface LinkPreviewConfiguration {
+        enabled: boolean;
+        resolutionScale: number;
+    }
+
     const OPEN_DELAY_MS = 200;
     const CLOSE_DELAY_MS = 120;
     const TEXT_RADIUS_PX = 90;
-    const MIN_PREVIEW_SCALE = 1.25;
-    const MAX_PREVIEW_SCALE = 3.2;
+    const DEFAULT_RESOLUTION_SCALE = 2;
+    const MIN_RESOLUTION_SCALE = 1;
+    const MAX_RESOLUTION_SCALE = 4;
     const MAX_PREVIEW_PIXELS = 25600000;
+    const MAX_PREVIEW_DISPLAY_WIDTH = 760;
+    const PREVIEW_VIEWPORT_MARGIN = 16;
     const PREVIEW_MARGIN_FALLBACK_RATIO = 0.08;
     const TEXT_BOUND_PADDING_PX = 28;
     const PREVIEW_TARGET_RADIUS = 10;
@@ -71,6 +79,7 @@
     const MIN_HIT_HEIGHT_PX = 10;
     const SCALE_RENDER_DEBOUNCE_MS = 140;
     const MAX_PREVIEW_CACHE_ENTRIES = 16;
+    const MAX_DOCUMENT_CACHE_ENTRIES = 64;
     const WHEEL_ZOOM_SUPPRESS_HOVER_MS = 260;
 
     class HoverDelayer {
@@ -136,10 +145,12 @@
         _suppressHoverUntil: number;
         _activeRenderTask: PdfJsRenderTask | null;
         _enabled: boolean;
+        _resolutionScale: number;
         _controlPressed: boolean;
         _hoveredPreview: HoveredPreview | null;
 
         constructor(app: PdfJsApplication) {
+            const initialConfiguration = readInitialConfiguration();
             this._app = app;
             this._eventBus = app.eventBus;
             this._pdfDocument = null;
@@ -155,7 +166,8 @@
             this._scaleRenderTimer = null;
             this._suppressHoverUntil = 0;
             this._activeRenderTask = null;
-            this._enabled = readInitialEnabled();
+            this._enabled = initialConfiguration.enabled;
+            this._resolutionScale = initialConfiguration.resolutionScale;
             this._controlPressed = false;
             this._hoveredPreview = null;
         }
@@ -163,6 +175,7 @@
         initialize(): void {
             this._eventBus.on("documentloaded", () => {
                 this._pdfDocument = this._app.pdfDocument;
+                this._hidePopup();
                 this._clearPreviewCache();
                 this._textCache.clear();
                 this._pageCache.clear();
@@ -170,7 +183,6 @@
                 this._textContentCache.clear();
                 this._pageRenderIds.clear();
                 this._cancelScheduledScaleRender();
-                this._hidePopup();
                 this._hoveredPreview = null;
                 this._clearAllOverlays();
                 if (this._enabled) {
@@ -203,8 +215,8 @@
 
             window.addEventListener("message", event => {
                 const message = event.data;
-                if (isSetEnabledMessage(message)) {
-                    this._setEnabled(message.enabled);
+                if (isConfigureMessage(message)) {
+                    this._configure(message.enabled, message.resolutionScale);
                 }
             });
             window.addEventListener("keydown", event => {
@@ -245,14 +257,24 @@
             this._hidePopup();
         }
 
-        _setEnabled(enabled: boolean): void {
-            if (this._enabled === enabled) {
+        _configure(enabled: boolean, resolutionScale: number): void {
+            const normalizedScale = normalizeResolutionScale(resolutionScale);
+            const enabledChanged = this._enabled !== enabled;
+            const resolutionChanged = this._resolutionScale !== normalizedScale;
+            if (!enabledChanged && !resolutionChanged) {
                 return;
             }
             this._enabled = enabled;
+            this._resolutionScale = normalizedScale;
             this._hoveredPreview = null;
-            this._cancelScheduledScaleRender();
             this._hidePopup();
+            if (resolutionChanged) {
+                this._clearPreviewCache();
+            }
+            if (!enabledChanged) {
+                return;
+            }
+            this._cancelScheduledScaleRender();
             this._clearAllOverlays();
             if (enabled) {
                 this._renderVisiblePages();
@@ -294,7 +316,7 @@
                 return;
             }
             const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
-            this._pageRenderIds.set(pageNumber, renderId);
+            rememberBoundedEntry(this._pageRenderIds, pageNumber, renderId, MAX_DOCUMENT_CACHE_ENTRIES);
 
             const pageView = this._app.pdfViewer.getPageView(pageNumber - 1);
             if (!pageView || !pageView.div || !pageView.viewport) {
@@ -316,17 +338,18 @@
         }
 
         _getPageAnnotations(pageNumber: number): Promise<PdfJsAnnotation[]> {
-            const cached = this._annotationCache.get(pageNumber);
+            const cached = getCachedEntry(this._annotationCache, pageNumber);
             if (cached) {
                 return cached;
             }
             const promise = this._getPage(pageNumber)
-                .then((page: PdfJsPage): Promise<PdfJsAnnotation[]> => page.getAnnotations({ intent: "display" }))
-                .catch((error: unknown): never => {
+                .then((page: PdfJsPage): Promise<PdfJsAnnotation[]> => page.getAnnotations({ intent: "display" }));
+            rememberBoundedEntry(this._annotationCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
+            void promise.catch(() => {
+                if (this._annotationCache.get(pageNumber) === promise) {
                     this._annotationCache.delete(pageNumber);
-                    throw error;
-                });
-            this._annotationCache.set(pageNumber, promise);
+                }
+            });
             return promise;
         }
 
@@ -388,7 +411,7 @@
                 return;
             }
 
-            const cachedText = this._textCache.get(textPreviewKey(destination));
+            const cachedText = getCachedEntry(this._textCache, textPreviewKey(destination));
             const cachedImage = this._getCachedImagePreview(destination);
             if (cachedText !== undefined && cachedImage !== undefined) {
                 this._popup.classList.add("is-open");
@@ -522,7 +545,7 @@
 
         async _getTextPreview(destination: ResolvedDestination): Promise<string> {
             const key = textPreviewKey(destination);
-            const cachedText = this._textCache.get(key);
+            const cachedText = getCachedEntry(this._textCache, key);
             if (cachedText !== undefined) {
                 return cachedText;
             }
@@ -535,7 +558,7 @@
             const textContent = await this._getPageTextContent(destination.pageNumber);
             const lines = collectNearbyLines(textContent.items, viewport, targetY);
             const text = lines.slice(0, 4).join(" ");
-            this._textCache.set(key, text);
+            rememberBoundedEntry(this._textCache, key, text, MAX_DOCUMENT_CACHE_ENTRIES);
             return text;
         }
 
@@ -546,24 +569,21 @@
                 return cachedPreview;
             }
 
+            const pdfDocument = this._pdfDocument;
+            const resolutionScale = this._resolutionScale;
             const page = await this._getPage(destination.pageNumber);
-            let scale = getPreviewScale(this._app.pdfViewer);
-            let viewport = page.getViewport({ scale });
-            let point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
+            const baseViewport = page.getViewport({ scale: 1 });
+            const baseTextBounds = await this._getPageTextBounds(destination.pageNumber, baseViewport);
+            const baseCrop = getPreviewCrop(baseViewport, baseTextBounds);
+            const displayWidth = this._getPreviewDisplayWidth();
+            const desiredScale = displayWidth * resolutionScale / baseCrop.width;
+            const maxPixelScale = Math.sqrt(MAX_PREVIEW_PIXELS / (baseCrop.width * baseCrop.height));
+            const scale = Math.min(desiredScale, maxPixelScale);
+            const viewport = page.getViewport({ scale });
+            const point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
                 : [0, 0];
-            let textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
-            let crop = getPreviewCrop(viewport, textBounds);
-            const maxPixelScale = Math.sqrt(MAX_PREVIEW_PIXELS / (crop.width * crop.height));
-            if (maxPixelScale < 1) {
-                scale *= maxPixelScale;
-                viewport = page.getViewport({ scale });
-                point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
-                    ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
-                    : [0, 0];
-                textBounds = await this._getPageTextBounds(destination.pageNumber, viewport);
-                crop = getPreviewCrop(viewport, textBounds);
-            }
+            const crop = scalePreviewCrop(baseCrop, scale);
             const croppedViewport = page.getViewport({
                 scale,
                 offsetX: -crop.left,
@@ -573,8 +593,6 @@
             const canvas = document.createElement("canvas");
             canvas.width = Math.round(crop.width);
             canvas.height = Math.round(crop.height);
-            canvas.style.width = `${crop.width}px`;
-            canvas.style.height = `${crop.height}px`;
 
             const context = canvas.getContext("2d", { alpha: false });
             if (!context) {
@@ -607,13 +625,20 @@
                     this._activeRenderTask = null;
                 }
             }
-            drawPreviewTarget(context, point, crop);
+            drawPreviewTarget(context, point, crop, crop.width / displayWidth);
 
-            const dataUrl = canvas.toDataURL("image/png");
+            const blob = await canvasToPngBlob(canvas);
             canvas.width = 0;
             canvas.height = 0;
+            if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
+                return {
+                    src: "",
+                    targetXRatio: 0,
+                    targetYRatio: 0
+                };
+            }
             const image = {
-                src: dataUrl,
+                src: URL.createObjectURL(blob),
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
@@ -623,45 +648,52 @@
 
         _getCachedImagePreview(destination: ResolvedDestination): ImagePreview | undefined {
             const key = imagePreviewKey(destination);
-            const cachedPreview = this._previewCache.get(key);
-            if (cachedPreview !== undefined) {
-                this._previewCache.delete(key);
-                this._previewCache.set(key, cachedPreview);
-            }
-            return cachedPreview;
+            return getCachedEntry(this._previewCache, key);
         }
 
         _getPageTextContent(pageNumber: number): Promise<PdfJsTextContent> {
-            const cached = this._textContentCache.get(pageNumber);
+            const cached = getCachedEntry(this._textContentCache, pageNumber);
             if (cached) {
                 return cached;
             }
             const promise = this._getPage(pageNumber)
-                .then((page: PdfJsPage): Promise<PdfJsTextContent> => page.getTextContent())
-                .catch((error: unknown): never => {
+                .then((page: PdfJsPage): Promise<PdfJsTextContent> => page.getTextContent());
+            rememberBoundedEntry(this._textContentCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
+            void promise.catch(() => {
+                if (this._textContentCache.get(pageNumber) === promise) {
                     this._textContentCache.delete(pageNumber);
-                    throw error;
-                });
-            this._textContentCache.set(pageNumber, promise);
+                }
+            });
             return promise;
         }
 
         _getPage(pageNumber: number): Promise<PdfJsPage> {
-            const cached = this._pageCache.get(pageNumber);
+            const cached = getCachedEntry(this._pageCache, pageNumber);
             if (cached) {
                 return cached;
             }
-            const promise = this._pdfDocument!.getPage(pageNumber)
-                .catch((error: unknown): never => {
+            const promise = this._pdfDocument!.getPage(pageNumber);
+            rememberBoundedEntry(this._pageCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
+            void promise.catch(() => {
+                if (this._pageCache.get(pageNumber) === promise) {
                     this._pageCache.delete(pageNumber);
-                    throw error;
-                });
-            this._pageCache.set(pageNumber, promise);
+                }
+            });
             return promise;
         }
 
+        _getPreviewDisplayWidth(): number {
+            const popupWidth = this._popup.clientWidth;
+            if (popupWidth > 0) {
+                return popupWidth;
+            }
+            return Math.max(1, Math.min(MAX_PREVIEW_DISPLAY_WIDTH, window.innerWidth - PREVIEW_VIEWPORT_MARGIN));
+        }
+
         _rememberImagePreview(key: string, image: ImagePreview): void {
-            if (this._previewCache.has(key)) {
+            const existing = this._previewCache.get(key);
+            if (existing) {
+                URL.revokeObjectURL(existing.src);
                 this._previewCache.delete(key);
             }
             this._previewCache.set(key, image);
@@ -670,11 +702,18 @@
                 if (oldestKey === undefined) {
                     return;
                 }
+                const oldest = this._previewCache.get(oldestKey);
+                if (oldest) {
+                    URL.revokeObjectURL(oldest.src);
+                }
                 this._previewCache.delete(oldestKey);
             }
         }
 
         _clearPreviewCache(): void {
+            for (const image of this._previewCache.values()) {
+                URL.revokeObjectURL(image.src);
+            }
             this._previewCache.clear();
         }
 
@@ -746,26 +785,37 @@
             && Array.isArray(annotation.rect);
     }
 
-    function isSetEnabledMessage(message: unknown): message is { type: "linkPreview.setEnabled"; enabled: boolean } {
+    function isConfigureMessage(
+        message: unknown
+    ): message is { type: "linkPreview.configure"; enabled: boolean; resolutionScale: number } {
         return typeof message === "object"
             && message !== null
             && "type" in message
-            && (message as { type: unknown }).type === "linkPreview.setEnabled"
+            && (message as { type: unknown }).type === "linkPreview.configure"
             && "enabled" in message
-            && typeof (message as { enabled: unknown }).enabled === "boolean";
+            && typeof (message as { enabled: unknown }).enabled === "boolean"
+            && "resolutionScale" in message
+            && typeof (message as { resolutionScale: unknown }).resolutionScale === "number"
+            && Number.isFinite((message as { resolutionScale: number }).resolutionScale);
     }
 
-    function readInitialEnabled(): boolean {
+    function readInitialConfiguration(): LinkPreviewConfiguration {
         const configElement = document.getElementById("pdf-preview-config");
         const config = configElement?.getAttribute("data-config");
         if (!config) {
-            return true;
+            return { enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
         }
         try {
-            const settings = JSON.parse(config) as { linkPreviewEnabled?: unknown };
-            return settings.linkPreviewEnabled !== false;
+            const settings = JSON.parse(config) as {
+                linkPreviewEnabled?: unknown;
+                linkPreviewResolutionScale?: unknown;
+            };
+            return {
+                enabled: settings.linkPreviewEnabled !== false,
+                resolutionScale: normalizeResolutionScale(settings.linkPreviewResolutionScale)
+            };
         } catch {
-            return true;
+            return { enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
         }
     }
 
@@ -887,23 +937,33 @@
         };
     }
 
-    function getPreviewScale(pdfViewer: PdfJsViewer): number {
-        const currentScale = Number.isFinite(pdfViewer.currentScale) ? pdfViewer.currentScale : 1;
-        const scale = currentScale > 1
-            ? 1 + (currentScale - 1) * 1.5
-            : MIN_PREVIEW_SCALE;
-        const preferredScale = clamp(scale * Math.min(window.devicePixelRatio || 1, 2), MIN_PREVIEW_SCALE, MAX_PREVIEW_SCALE);
-        return preferredScale;
+    function scalePreviewCrop(crop: PreviewCrop, scale: number): PreviewCrop {
+        return {
+            left: crop.left * scale,
+            top: crop.top * scale,
+            width: crop.width * scale,
+            height: crop.height * scale
+        };
     }
 
-    function drawPreviewTarget(context: CanvasRenderingContext2D, point: number[], crop: PreviewCrop): void {
-        const x = clamp(point[0] - crop.left, PREVIEW_TARGET_RADIUS + 2, crop.width - PREVIEW_TARGET_RADIUS - 2);
-        const y = clamp(point[1] - crop.top, PREVIEW_TARGET_RADIUS + 2, crop.height - PREVIEW_TARGET_RADIUS - 2);
+    function drawPreviewTarget(
+        context: CanvasRenderingContext2D,
+        point: number[],
+        crop: PreviewCrop,
+        pixelDensity: number
+    ): void {
+        const maximumRadius = Math.max(0, Math.min(crop.width, crop.height) / 2 - 2);
+        const radius = Math.min(PREVIEW_TARGET_RADIUS * pixelDensity, maximumRadius);
+        if (radius <= 0) {
+            return;
+        }
+        const x = clamp(point[0] - crop.left, radius + 2, crop.width - radius - 2);
+        const y = clamp(point[1] - crop.top, radius + 2, crop.height - radius - 2);
         context.save();
         context.globalCompositeOperation = "multiply";
         context.fillStyle = "#f57b7b";
         context.beginPath();
-        context.arc(x, y, PREVIEW_TARGET_RADIUS, 0, Math.PI * 2);
+        context.arc(x, y, radius, 0, Math.PI * 2);
         context.fill();
         context.restore();
     }
@@ -918,6 +978,46 @@
 
     function clamp(value: number, min: number, max: number): number {
         return Math.min(Math.max(value, min), max);
+    }
+
+    function normalizeResolutionScale(value: unknown): number {
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+            return DEFAULT_RESOLUTION_SCALE;
+        }
+        return clamp(value, MIN_RESOLUTION_SCALE, MAX_RESOLUTION_SCALE);
+    }
+
+    function getCachedEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
+        const value = cache.get(key);
+        if (value !== undefined) {
+            cache.delete(key);
+            cache.set(key, value);
+        }
+        return value;
+    }
+
+    function rememberBoundedEntry<K, V>(cache: Map<K, V>, key: K, value: V, maximumEntries: number): void {
+        cache.delete(key);
+        cache.set(key, value);
+        while (cache.size > maximumEntries) {
+            const oldestKey = cache.keys().next().value;
+            if (oldestKey === undefined) {
+                return;
+            }
+            cache.delete(oldestKey);
+        }
+    }
+
+    function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+        return new Promise((resolve, reject) => {
+            canvas.toBlob(blob => {
+                if (blob) {
+                    resolve(blob);
+                } else {
+                    reject(new Error("Could not encode the PDF link preview image."));
+                }
+            }, "image/png");
+        });
     }
 
     function isRenderingCancelled(error: unknown): boolean {

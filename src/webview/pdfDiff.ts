@@ -56,6 +56,9 @@ import {
     const maxRenderScale = 1.25;
     const minimumTextMatchRatio = 0.5;
     const maximumTextTokensPerPage = 1500;
+    const maximumCachedPageResults = 64;
+    const maximumConcurrentPageComparisons = 2;
+    const maximumQueuedPages = 16;
 
     let config: ViewerConfig;
     let enabled = false;
@@ -67,8 +70,10 @@ import {
     let originalDocument: PdfJsDocument | null = null;
     let comparisonGeneration = 0;
     let pageGeneration = 0;
+    let activePageComparisons = 0;
     const pageResults = new Map<number, DiffRegion[]>();
     const pendingPages = new Map<number, Promise<void>>();
+    const queuedPages = new Map<number, number>();
 
     window.addEventListener("load", () => {
         config = loadConfig();
@@ -220,6 +225,7 @@ import {
     function resetPageResults(): void {
         pageResults.clear();
         pendingPages.clear();
+        queuedPages.clear();
         clearOverlays();
     }
 
@@ -237,6 +243,8 @@ import {
 
         const cached = pageResults.get(pageNumber);
         if (cached) {
+            pageResults.delete(pageNumber);
+            pageResults.set(pageNumber, cached);
             applyOverlay(pageNumber, cached);
             return;
         }
@@ -245,13 +253,44 @@ import {
         }
 
         const currentGeneration = pageGeneration;
-        const task = computeAndApplyPage(pageNumber, currentGeneration);
-        pendingPages.set(pageNumber, task);
-        void task.finally(() => {
-            if (pendingPages.get(pageNumber) === task) {
-                pendingPages.delete(pageNumber);
+        queuedPages.delete(pageNumber);
+        queuedPages.set(pageNumber, currentGeneration);
+        while (queuedPages.size > maximumQueuedPages) {
+            const oldestPage = queuedPages.keys().next().value;
+            if (oldestPage === undefined) {
+                break;
             }
-        });
+            queuedPages.delete(oldestPage);
+        }
+        drainPageQueue();
+    }
+
+    function drainPageQueue(): void {
+        while (activePageComparisons < maximumConcurrentPageComparisons && queuedPages.size > 0) {
+            const next = queuedPages.entries().next().value as [number, number] | undefined;
+            if (!next) {
+                return;
+            }
+            const [pageNumber, currentGeneration] = next;
+            queuedPages.delete(pageNumber);
+            if (!enabled
+                || !modifiedDocumentReady
+                || pageGeneration !== currentGeneration
+                || (!originalDocument && !originalIsEmptyRevision)) {
+                continue;
+            }
+
+            activePageComparisons += 1;
+            const task = computeAndApplyPage(pageNumber, currentGeneration);
+            pendingPages.set(pageNumber, task);
+            void task.finally(() => {
+                activePageComparisons -= 1;
+                if (pendingPages.get(pageNumber) === task) {
+                    pendingPages.delete(pageNumber);
+                }
+                drainPageQueue();
+            });
+        }
     }
 
     async function computeAndApplyPage(pageNumber: number, currentGeneration: number): Promise<void> {
@@ -261,7 +300,7 @@ import {
             if (!enabled || pageGeneration !== currentGeneration) {
                 return;
             }
-            pageResults.set(pageNumber, result.regions);
+            rememberPageResult(pageNumber, result.regions);
             applyOverlay(pageNumber, result.regions);
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
@@ -317,6 +356,18 @@ import {
             renderPage(modifiedPage, scale)
         ]);
         return compareRasters(originalRaster, modifiedRaster);
+    }
+
+    function rememberPageResult(pageNumber: number, regions: DiffRegion[]): void {
+        pageResults.delete(pageNumber);
+        pageResults.set(pageNumber, regions);
+        while (pageResults.size > maximumCachedPageResults) {
+            const oldestPage = pageResults.keys().next().value;
+            if (oldestPage === undefined) {
+                return;
+            }
+            pageResults.delete(oldestPage);
+        }
     }
 
     async function renderPage(page: PdfJsPage, scale: number): Promise<RasterPage> {

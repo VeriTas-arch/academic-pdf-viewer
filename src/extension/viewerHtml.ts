@@ -6,6 +6,7 @@ const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.
 interface ViewerHtmlOptions {
     debug: boolean;
     linkPreviewEnabled: boolean;
+    linkPreviewResolutionScale: number;
 }
 
 export function readViewerHtml(context: vscode.ExtensionContext): string {
@@ -52,11 +53,11 @@ export function renderViewerHtml(
         debug: options.debug,
         iccUrl: `${libUri('web', 'iccs')}/`,
         imageResourcesPath: `${libUri('web', 'images')}/`,
-        sandboxBundleSrc: libUri('build', 'pdf.sandbox.mjs'),
         standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
         wasmUrl: `${libUri('web', 'wasm')}/`,
         workerSrc: libUri('build', 'pdf.worker.mjs'),
         linkPreviewEnabled: options.linkPreviewEnabled,
+        linkPreviewResolutionScale: options.linkPreviewResolutionScale,
     };
     const config = escapeHtmlAttribute(JSON.stringify(settings));
 

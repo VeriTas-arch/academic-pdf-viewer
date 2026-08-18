@@ -1,0 +1,18 @@
+{
+    "schemaVersion": 1,
+    "version": "6.2.108",
+    "tag": "v6.2.108",
+    "asset": "pdfjs-6.2.108-dist.zip",
+    "releaseUrl": "https://github.com/mozilla/pdf.js/releases/tag/v6.2.108",
+    "sha256": "7bf642d59582b475e8c48447da9b02b0108fad9742d7c2a35cb4ed6dd45e95ba",
+    "excludeSourceMaps": true,
+    "excludedPaths": [
+        "build/pdf.sandbox.mjs",
+        "web/compressed.tracemonkey-pldi-09.pdf",
+        "web/debugger.css",
+        "web/debugger.js",
+        "web/debugger.mjs",
+        "web/wasm/quickjs-eval.js",
+        "web/wasm/quickjs-eval.wasm"
+    ]
+}

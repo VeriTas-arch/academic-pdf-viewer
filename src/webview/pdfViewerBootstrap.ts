@@ -6,7 +6,6 @@
         debug: boolean;
         iccUrl: string;
         imageResourcesPath: string;
-        sandboxBundleSrc: string;
         standardFontDataUrl: string;
         wasmUrl: string;
         workerSrc: string;
@@ -63,7 +62,6 @@
         options.set("cMapUrl", config.cMapUrl);
         options.set("iccUrl", config.iccUrl);
         options.set("imageResourcesPath", config.imageResourcesPath);
-        options.set("sandboxBundleSrc", config.sandboxBundleSrc);
         options.set("standardFontDataUrl", config.standardFontDataUrl);
         options.set("wasmUrl", config.wasmUrl);
         options.set("workerSrc", config.workerSrc);
