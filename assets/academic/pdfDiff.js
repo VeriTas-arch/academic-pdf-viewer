@@ -109,7 +109,9 @@
                 useWorkerFetch: false,
                 cMapUrl: config.cMapUrl,
                 cMapPacked: true,
-                standardFontDataUrl: config.standardFontDataUrl
+                iccUrl: config.iccUrl,
+                standardFontDataUrl: config.standardFontDataUrl,
+                wasmUrl: config.wasmUrl
             });
             originalLoadingTask = loadingTask;
             const documentProxy = await loadingTask.promise;

@@ -1,10 +1,6 @@
 /// <reference path="./globals.d.ts" />
 "use strict";
 (function () {
-    if (window.PDFViewerApplicationOptions) {
-        window.PDFViewerApplicationOptions.set("disableHistory", true);
-        window.PDFViewerApplicationOptions.set("useOnlyCssZoom", true);
-    }
     const vscode = acquireVsCodeApi();
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
@@ -242,6 +238,14 @@
                 || data.type === "navigation.forward");
     }
     function handleKeyDown(event) {
+        if (event.key.toLowerCase() === "p" && (event.ctrlKey || event.metaKey) && !event.altKey) {
+            if (event.shiftKey && !event.repeat) {
+                window.dispatchEvent(new CustomEvent("academic-pdf-show-commands"));
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
         if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
             return;
         }
@@ -290,9 +294,8 @@
         if (!viewer || viewer.isInPresentationMode) {
             return;
         }
-        const supportedKeys = app.supportedMouseWheelZoomModifierKeys || {};
-        const isZoomWheel = event.ctrlKey && supportedKeys.ctrlKey
-            || event.metaKey && supportedKeys.metaKey;
+        const isZoomWheel = event.ctrlKey && app.supportsMouseWheelZoomCtrlKey
+            || event.metaKey && app.supportsMouseWheelZoomMetaKey;
         if (!isZoomWheel) {
             return;
         }
@@ -413,7 +416,17 @@
             });
         });
     }
-    initialize().catch(error => {
-        console.error("Failed to initialize Academic PDF navigation layer.", error);
-    });
+    let initializationStarted = false;
+    function startInitialization() {
+        if (initializationStarted || !window.PDFViewerApplication) {
+            return;
+        }
+        initializationStarted = true;
+        initialize().catch(error => {
+            console.error("Failed to initialize Academic PDF navigation layer.", error);
+        });
+    }
+    startInitialization();
+    document.addEventListener("webviewerloaded", startInitialization, { once: true });
+    window.addEventListener("load", startInitialization, { once: true });
 }());

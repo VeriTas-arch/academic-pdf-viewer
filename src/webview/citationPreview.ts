@@ -510,10 +510,9 @@
             if (Number.isInteger(destRef)) {
                 pageNumber = destRef + 1;
             } else if (destRef && typeof destRef === "object") {
-                pageNumber = getCachedPageNumber(this._app.pdfLinkService, destRef);
+                pageNumber = getCachedPageNumber(this._app.pdfDocument, destRef);
                 if (!pageNumber) {
                     pageNumber = (await this._pdfDocument.getPageIndex(destRef)) + 1;
-                    this._app.pdfLinkService.cachePageRef(pageNumber, destRef);
                 }
             }
             if (!Number.isInteger(pageNumber)) {
@@ -821,9 +820,9 @@
         return Array.isArray(pdfViewer?._pages) ? pdfViewer._pages : [];
     }
 
-    function getCachedPageNumber(pdfLinkService: any, destRef: object): number | null {
-        return typeof pdfLinkService?._cachedPageNumber === "function"
-            ? pdfLinkService._cachedPageNumber(destRef)
+    function getCachedPageNumber(pdfDocument: any, destRef: object): number | null {
+        return typeof pdfDocument?.cachedPageNumber === "function"
+            ? pdfDocument.cachedPageNumber(destRef)
             : null;
     }
 
@@ -994,7 +993,18 @@
         controller.initialize();
     }
 
-    initialize().catch(error => {
-        console.error("Failed to initialize Academic PDF citation preview layer.", error);
-    });
+    let initializationStarted = false;
+    function startInitialization(): void {
+        if (initializationStarted || !window.PDFViewerApplication) {
+            return;
+        }
+        initializationStarted = true;
+        initialize().catch(error => {
+            console.error("Failed to initialize Academic PDF citation preview layer.", error);
+        });
+    }
+
+    startInitialization();
+    document.addEventListener("webviewerloaded", startInitialization, { once: true });
+    window.addEventListener("load", startInitialization, { once: true });
 }());

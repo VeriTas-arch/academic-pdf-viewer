@@ -38,55 +38,124 @@
         return -1
     }
   }
+  function configureViewerOptions(targetWindow, config) {
+    const options = targetWindow.PDFViewerApplicationOptions
+    if (!options) {
+      return false
+    }
+
+    options.set('disablePreferences', true)
+    options.set('defaultUrl', '')
+    options.set('disableHistory', true)
+    options.set('enableScripting', false)
+    options.set('cMapUrl', config.cMapUrl)
+    options.set('iccUrl', config.iccUrl)
+    options.set('imageResourcesPath', config.imageResourcesPath)
+    options.set('sandboxBundleSrc', config.sandboxBundleSrc)
+    options.set('standardFontDataUrl', config.standardFontDataUrl)
+    options.set('wasmUrl', config.wasmUrl)
+    options.set('workerSrc', config.workerSrc)
+    options.set('cursorToolOnLoad', cursorTools(config.defaults.cursor))
+    options.set('defaultZoomValue', config.defaults.scale)
+    options.set('scrollModeOnLoad', scrollMode(config.defaults.scrollMode))
+    options.set('spreadModeOnLoad', spreadMode(config.defaults.spreadMode))
+    options.set('sidebarViewOnLoad', config.defaults.sidebar ? 1 : 0)
+    return true
+  }
+  function captureViewerState() {
+    const viewer = PDFViewerApplication.pdfViewer
+    const container = viewer && viewer.container
+    if (!viewer || !container || !PDFViewerApplication.pdfDocument) {
+      return null
+    }
+    return {
+      pageNumber: viewer.currentPageNumber,
+      scale: viewer.currentScale,
+      scrollLeft: container.scrollLeft,
+      scrollTop: container.scrollTop
+    }
+  }
+  function restoreViewerState(state) {
+    const viewer = PDFViewerApplication.pdfViewer
+    const container = viewer && viewer.container
+    if (!viewer || !container || !state) {
+      return
+    }
+
+    if (Number.isFinite(state.scale) && state.scale > 0) {
+      viewer.currentScaleValue = String(state.scale)
+    }
+    if (Number.isInteger(state.pageNumber)) {
+      viewer.currentPageNumber = Math.min(state.pageNumber, viewer.pagesCount)
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        container.scrollLeft = state.scrollLeft
+        container.scrollTop = state.scrollTop
+      })
+    })
+  }
+
+  const config = loadConfig()
+  const reportDebug = (event, fields = {}) => {
+    if (!config.debug) {
+      return
+    }
+    window.dispatchEvent(new CustomEvent('academic-pdf-debug', {
+      detail: { type: 'pdf.debug', event, ...fields }
+    }))
+  }
+  const elapsedSince = startedAt => Math.round(performance.now() - startedAt)
+  const errorMessage = error => error instanceof Error ? error.message : String(error)
+  const configureOnViewerLoaded = event => {
+    configureViewerOptions(event.detail && event.detail.source || window, config)
+  }
+  document.addEventListener('webviewerloaded', configureOnViewerLoaded, { once: true })
+  try {
+    if (parent.document !== document) {
+      parent.document.addEventListener('webviewerloaded', configureOnViewerLoaded, { once: true })
+    }
+  } catch {
+    // Cross-origin embedding dispatches the event on this document instead.
+  }
+
   window.addEventListener('load', async function () {
-    const config = loadConfig()
-    PDFViewerApplicationOptions.set('cMapUrl', config.cMapUrl)
-    PDFViewerApplicationOptions.set('standardFontDataUrl', config.standardFontDataUrl)
+    const initializedAt = performance.now()
+    if (!configureViewerOptions(window, config)) {
+      throw new Error('PDF.js viewer options are unavailable.')
+    }
+
     const loadOpts = {
       useWorkerFetch: false,
       cMapUrl: config.cMapUrl,
       cMapPacked: true,
-      standardFontDataUrl: config.standardFontDataUrl
+      iccUrl: config.iccUrl,
+      standardFontDataUrl: config.standardFontDataUrl,
+      wasmUrl: config.wasmUrl
     }
-    const reportDebug = (event, fields) => {
-      if (!config.debug) {
-        return
-      }
-      window.dispatchEvent(new CustomEvent('academic-pdf-debug', {
-        detail: { type: 'pdf.debug', event, ...fields }
-      }))
-    }
-    const elapsedSince = startedAt => Math.round(performance.now() - startedAt)
     let pendingFirstPageRender = null
 
-    PDFViewerApplication.initializedPromise.then(() => {
-      const defaults = config.defaults
-      const optsOnLoad = () => {
-        PDFViewerApplication.pdfCursorTools.switchTool(cursorTools(defaults.cursor))
-        PDFViewerApplication.pdfViewer.currentScaleValue = defaults.scale
-        PDFViewerApplication.pdfViewer.scrollMode = scrollMode(defaults.scrollMode)
-        PDFViewerApplication.pdfViewer.spreadMode = spreadMode(defaults.spreadMode)
-        if (defaults.sidebar) {
-          PDFViewerApplication.pdfSidebar.open()
-        } else {
-          PDFViewerApplication.pdfSidebar.close()
-        }
-        PDFViewerApplication.eventBus.off('documentloaded', optsOnLoad)
-      }
-      PDFViewerApplication.eventBus.on('documentloaded', optsOnLoad)
-      PDFViewerApplication.eventBus.on('pagerendered', event => {
-        if (!pendingFirstPageRender || !pendingFirstPageRender.opened) {
-          return
-        }
+    reportDebug('viewerInitializing', {
+      workerHandlerPreloaded: Boolean(globalThis.pdfjsWorker?.WorkerMessageHandler)
+    })
+    await PDFViewerApplication.initializedPromise
+    reportDebug('viewerInitialized', {
+      durationMs: elapsedSince(initializedAt),
+      workerHandlerPreloaded: Boolean(globalThis.pdfjsWorker?.WorkerMessageHandler)
+    })
 
-        const pending = pendingFirstPageRender
-        pendingFirstPageRender = null
-        reportDebug('firstPageRendered', {
-          fingerprint: pending.fingerprint,
-          durationMs: elapsedSince(pending.startedAt),
-          pages: PDFViewerApplication.pdfDocument && PDFViewerApplication.pdfDocument.numPages,
-          pageNumber: event.pageNumber
-        })
+    PDFViewerApplication.eventBus.on('pagerendered', event => {
+      if (!pendingFirstPageRender || !pendingFirstPageRender.opened) {
+        return
+      }
+
+      const pending = pendingFirstPageRender
+      pendingFirstPageRender = null
+      reportDebug('firstPageRendered', {
+        fingerprint: pending.fingerprint,
+        durationMs: elapsedSince(pending.startedAt),
+        pages: PDFViewerApplication.pdfDocument && PDFViewerApplication.pdfDocument.numPages,
+        pageNumber: event.pageNumber
       })
     })
 
@@ -124,29 +193,30 @@
       const data = new Uint8Array(event.data.data)
 
       showDocumentState(null)
-      const viewer = PDFViewerApplication.pdfViewer
-      const oldResetView = viewer._resetView
       const oldLoad = PDFViewerApplication.load
       PDFViewerApplication.load = function (pdfDocument) {
         if (pdfDocument && pdfDocument._pdfInfo) {
-          pdfDocument._pdfInfo.fingerprints = [event.data.fingerprint]
+          pdfDocument._pdfInfo.fingerprints = [fingerprint]
         }
         return oldLoad.call(this, pdfDocument)
       }
-      if (event.data.preserveView) {
-        // Prevents flickering of the page when the current PDF is reloaded.
-        viewer._resetView = function () {
-          this._firstPageCapability = (0, pdfjsLib.createPromiseCapability)()
-          this._onePageRenderedCapability = (0, pdfjsLib.createPromiseCapability)()
-          this._pagesCapability = (0, pdfjsLib.createPromiseCapability)()
-          this.viewer.textContent = ""
-        }
+
+      const preservedState = event.data.preserveView ? captureViewerState() : null
+      let restorePending = false
+      const restoreOnDocumentInit = () => {
+        PDFViewerApplication.eventBus.off('documentinit', restoreOnDocumentInit)
+        restorePending = false
+        restoreViewerState(preservedState)
+      }
+      if (preservedState) {
+        restorePending = true
+        PDFViewerApplication.eventBus.on('documentinit', restoreOnDocumentInit)
       }
 
       const pendingRender = { fingerprint, startedAt, opened: false }
       pendingFirstPageRender = pendingRender
       try {
-        await PDFViewerApplication.open(data, loadOpts)
+        await PDFViewerApplication.open({ data, ...loadOpts })
         pendingRender.opened = true
         reportDebug('opened', {
           fingerprint,
@@ -154,6 +224,9 @@
           pages: PDFViewerApplication.pdfDocument && PDFViewerApplication.pdfDocument.numPages
         })
       } catch (error) {
+        if (restorePending) {
+          PDFViewerApplication.eventBus.off('documentinit', restoreOnDocumentInit)
+        }
         if (pendingFirstPageRender === pendingRender) {
           pendingFirstPageRender = null
         }
@@ -165,12 +238,11 @@
         })
       } finally {
         PDFViewerApplication.load = oldLoad
-        viewer._resetView = oldResetView
       }
     })
 
     window.dispatchEvent(new CustomEvent('academic-pdf-viewer-ready'))
-  }, { once: true });
+  }, { once: true })
 
   function showDocumentState(message) {
     let state = document.getElementById('academicPdfDocumentState')
@@ -193,9 +265,21 @@
     document.body.classList.add('academicPdfDocumentUnavailable')
   }
 
-  window.onerror = function () {
+  window.addEventListener('unhandledrejection', event => {
+    reportDebug('unhandledRejection', {
+      error: errorMessage(event.reason)
+    })
+  })
+
+  window.onerror = function (message, source, line, column, error) {
+    reportDebug('windowError', {
+      error: error ? errorMessage(error) : String(message),
+      source: source || '',
+      line: line || 0,
+      column: column || 0
+    })
     const msg = document.createElement('body')
     msg.innerText = 'An error occurred while loading the file. Please open it again.'
     document.body = msg
   }
-}());
+}())

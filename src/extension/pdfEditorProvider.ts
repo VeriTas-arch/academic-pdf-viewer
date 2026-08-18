@@ -449,7 +449,12 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         const settings = {
             cMapUrl: `${libUri('web', 'cmaps')}/`,
             debug: this.logger !== undefined,
+            iccUrl: `${libUri('web', 'iccs')}/`,
+            imageResourcesPath: `${libUri('web', 'images')}/`,
+            sandboxBundleSrc: libUri('build', 'pdf.sandbox.mjs'),
             standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
+            wasmUrl: `${libUri('web', 'wasm')}/`,
+            workerSrc: libUri('build', 'pdf.worker.mjs'),
             linkPreviewEnabled: this.isLinkPreviewEnabled(pdfUri),
             defaults: {
                 cursor: 'text',
@@ -461,32 +466,23 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         };
         const config = escapeHtmlAttribute(JSON.stringify(settings));
 
+        // Preload the worker bundle in the page so PDF.js uses its main-thread
+        // fallback instead of a worker that cannot import webview resources.
         const injectedHead = `
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src blob: data: ${webview.cspSource}; font-src ${webview.cspSource}; worker-src blob: ${webview.cspSource};">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src ${webview.cspSource}; script-src 'wasm-unsafe-eval' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src blob: data: ${webview.cspSource}; media-src blob:; font-src data: ${webview.cspSource}; worker-src blob: ${webview.cspSource}; form-action 'none';">
 <meta id="pdf-preview-config" data-config="${config}">
-<link rel="resource" type="application/l10n" href="${escapeHtmlAttribute(libUri('web', 'locale', 'locale.properties'))}">
+<link rel="resource" type="application/l10n" href="${escapeHtmlAttribute(libUri('web', 'locale', 'locale.json'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('web', 'viewer.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('pdf.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'reader.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
-<script src="${escapeHtmlAttribute(libUri('build', 'pdf.js'))}"></script>
-<script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.js'))}"></script>
-<script>
-window.addEventListener("keydown", function (event) {
-  if (event.keyCode === 80 && (event.ctrlKey || event.metaKey) && !event.altKey) {
-    if (event.shiftKey && !event.repeat) {
-      window.dispatchEvent(new CustomEvent("academic-pdf-show-commands"));
-    }
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }
-}, true);
-</script>
-<script src="${escapeHtmlAttribute(libUri('web', 'viewer.js'))}"></script>
+<script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>
+<script src="${escapeHtmlAttribute(libUri('build', 'pdf.mjs'))}" type="module"></script>
+<script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.mjs'))}" type="module"></script>
+<script src="${escapeHtmlAttribute(libUri('web', 'viewer.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}"></script>
-<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfDiff.js'))}"></script>
-<script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>`;
+<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfDiff.js'))}"></script>`;
 
         return this.viewerHtml
             .replace('<title>PDF.js viewer</title>', `${injectedHead}\n<title>Academic PDF Viewer</title>`)
@@ -502,14 +498,29 @@ window.addEventListener("keydown", function (event) {
 
 function readViewerHtml(context: vscode.ExtensionContext): string {
     const viewerPath = context.asAbsolutePath(VIEWER_HTML_RELATIVE_PATH.join('/'));
-    return readFileSync(viewerPath, 'utf8')
-        .replace('<link rel="resource" type="application/l10n" href="locale/locale.json">', '')
-        .replace('<link rel="resource" type="application/l10n" href="locale/locale.properties">', '')
-        .replace('<script src="../build/pdf.js"></script>', '')
-        .replace('<script src="../build/pdf.mjs" type="module"></script>', '')
-        .replace('<link rel="stylesheet" href="viewer.css">', '')
-        .replace('<script src="viewer.js"></script>', '')
-        .replace('<script src="viewer.mjs" type="module"></script>', '');
+    let html = readFileSync(viewerPath, 'utf8');
+    if (!html.includes('<title>PDF.js viewer</title>')) {
+        throw new Error('Unsupported PDF.js viewer.html: missing title marker.');
+    }
+    const cspPattern = /\s*<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?\/>\s*/i;
+    if (!cspPattern.test(html)) {
+        throw new Error('Unsupported PDF.js viewer.html: missing Content-Security-Policy marker.');
+    }
+    html = html.replace(cspPattern, '\n');
+
+    const markers = [
+        '<link rel="resource" type="application/l10n" href="locale/locale.json" />',
+        '<script src="../build/pdf.mjs" type="module"></script>',
+        '<link rel="stylesheet" href="viewer.css" />',
+        '<script src="viewer.mjs" type="module"></script>',
+    ];
+    for (const marker of markers) {
+        if (!html.includes(marker)) {
+            throw new Error(`Unsupported PDF.js viewer.html: missing marker ${marker}`);
+        }
+        html = html.replace(marker, '');
+    }
+    return html;
 }
 
 function escapeHtmlAttribute(value: string): string {
