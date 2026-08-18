@@ -2,6 +2,26 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.0.4] - 2026-08-18
+
+### Added
+
+- Added side-by-side custom editor diffs for modified and staged PDFs through VS Code's proposed `customEditorDiffs` API.
+- Added optional changed-region highlights on the modified PDF, using text-aware comparison with a raster fallback.
+- Added development-only diagnostic logging for document loading, PDF.js initialization, Worker startup, citation previews, and PDF diff computation.
+
+### Changed
+
+- Upgraded the bundled PDF.js viewer to 6.2.108.
+- Loaded the bundled PDF.js Worker through a local Blob URL, keeping PDF viewing offline while retaining a main-thread fallback.
+- Expanded the README with core workflows, Preview VSIX installation, Proposed API setup, settings, requirements, and release documentation.
+
+### Fixed
+
+- Restored citation preview images after the PDF.js upgrade by using the current viewport coordinate API.
+- Kept `Ctrl/Cmd+Shift+P` routed to the VS Code command palette during PDF.js startup.
+- Corrected loading for normal, modified, and staged PDF resources in both standalone and Git diff editors.
+
 ## [1.0.3] - 2026-08-06
 
 ### Added

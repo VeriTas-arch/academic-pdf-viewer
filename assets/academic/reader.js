@@ -8,6 +8,7 @@
     window.addEventListener("academic-pdf-debug", event => {
         vscode.postMessage(event.detail);
     });
+    window.addEventListener("keydown", handleWorkbenchShortcut, true);
     const pressedNavigationKeys = {
         back: false,
         forward: false
@@ -237,15 +238,16 @@
             && (data.type === "navigation.back"
                 || data.type === "navigation.forward");
     }
-    function handleKeyDown(event) {
+    function handleWorkbenchShortcut(event) {
         if (event.key.toLowerCase() === "p" && (event.ctrlKey || event.metaKey) && !event.altKey) {
             if (event.shiftKey && !event.repeat) {
-                window.dispatchEvent(new CustomEvent("academic-pdf-show-commands"));
+                vscode.postMessage({ type: "workbench.showCommands" });
             }
             event.preventDefault();
             event.stopImmediatePropagation();
-            return;
         }
+    }
+    function handleKeyDown(event) {
         if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
             return;
         }
@@ -410,11 +412,6 @@
         window.addEventListener("keydown", handleKeyDown, true);
         window.addEventListener("keyup", handleKeyUp, true);
         window.addEventListener("wheel", handleWheel, { capture: true, passive: false });
-        window.addEventListener("academic-pdf-show-commands", () => {
-            vscode.postMessage({
-                type: "workbench.showCommands"
-            });
-        });
     }
     let initializationStarted = false;
     function startInitialization() {

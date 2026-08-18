@@ -345,12 +345,22 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 regions: message.regions,
                 changedPixels: message.changedPixels,
                 strategy: message.strategy,
+                sizeBytes: message.sizeBytes,
+                workerSource: message.workerSource,
             };
-            if (message.event === 'failed' || message.event === 'diffFailed') {
-                const event = message.event === 'diffFailed' ? 'visualDiff.failed' : 'pdfjs.failed';
+            if (message.event === 'failed'
+                || message.event === 'diffFailed'
+                || message.event === 'unhandledRejection'
+                || message.event === 'windowError') {
+                let event = `pdfjs.${message.event}`;
+                if (message.event === 'diffFailed') {
+                    event = 'visualDiff.failed';
+                }
                 this.logger?.error(event, message.error ?? 'Unknown PDF.js error', fields);
             } else if (message.event === 'diffTextFallback') {
                 this.logger?.warn('visualDiff.textFallback', { ...fields, error: message.error });
+            } else if (message.event === 'workerSourceFallback') {
+                this.logger?.warn('pdfjs.workerSourceFallback', { ...fields, error: message.error });
             } else {
                 const event = message.event === 'diffComputed'
                     ? 'visualDiff.computed'
@@ -466,10 +476,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         };
         const config = escapeHtmlAttribute(JSON.stringify(settings));
 
-        // Preload the worker bundle in the page so PDF.js uses its main-thread
-        // fallback instead of a worker that cannot import webview resources.
+        // The webview reads the bundled worker into a blob URL before PDF.js
+        // starts it, because workers cannot directly load webview resources.
         const injectedHead = `
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src ${webview.cspSource}; script-src 'wasm-unsafe-eval' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src blob: data: ${webview.cspSource}; media-src blob:; font-src data: ${webview.cspSource}; worker-src blob: ${webview.cspSource}; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src ${webview.cspSource}; script-src 'wasm-unsafe-eval' blob: ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src blob: data: ${webview.cspSource}; media-src blob:; font-src data: ${webview.cspSource}; worker-src blob: ${webview.cspSource}; form-action 'none';">
 <meta id="pdf-preview-config" data-config="${config}">
 <link rel="resource" type="application/l10n" href="${escapeHtmlAttribute(libUri('web', 'locale', 'locale.json'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('web', 'viewer.css'))}">
@@ -478,7 +488,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
 <script src="${escapeHtmlAttribute(libUri('main.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.mjs'))}" type="module"></script>
-<script src="${escapeHtmlAttribute(libUri('build', 'pdf.worker.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}"></script>

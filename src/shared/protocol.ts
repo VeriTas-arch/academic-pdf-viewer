@@ -15,10 +15,16 @@ export type ExtensionToWebviewMessage =
 export type NavigationDirection = 'back' | 'forward';
 
 export type PdfDebugEvent =
+    | 'viewerInitializing'
+    | 'viewerInitialized'
+    | 'workerSourcePrepared'
+    | 'workerSourceFallback'
     | 'opened'
     | 'firstPageRendered'
     | 'failed'
     | 'emptyRevision'
+    | 'unhandledRejection'
+    | 'windowError'
     | 'diffComputed'
     | 'diffTextFallback'
     | 'diffFailed';
@@ -30,14 +36,16 @@ export type WebviewToExtensionMessage =
     | {
         type: 'pdf.debug';
         event: PdfDebugEvent;
-        fingerprint: string;
-        durationMs: number;
+        fingerprint?: string;
+        durationMs?: number;
         originalFingerprint?: string;
         pages?: number;
         pageNumber?: number;
         regions?: number;
         changedPixels?: number;
         strategy?: 'page' | 'raster' | 'text';
+        sizeBytes?: number;
+        workerSource?: 'blob' | 'mainThreadFallback';
         error?: string;
     };
 

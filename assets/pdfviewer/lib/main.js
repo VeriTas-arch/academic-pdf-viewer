@@ -107,6 +107,40 @@
   }
   const elapsedSince = startedAt => Math.round(performance.now() - startedAt)
   const errorMessage = error => error instanceof Error ? error.message : String(error)
+  let workerBlobUrl = null
+  const prepareWorkerSource = async () => {
+    const startedAt = performance.now()
+    const localWorkerSrc = config.workerSrc
+    try {
+      const response = await fetch(localWorkerSrc)
+      if (!response.ok) {
+        throw new Error(`Could not read the bundled PDF worker (${response.status}).`)
+      }
+
+      const source = await response.arrayBuffer()
+      workerBlobUrl = URL.createObjectURL(new Blob([source], {
+        type: 'text/javascript'
+      }))
+      config.workerSrc = workerBlobUrl
+      reportDebug('workerSourcePrepared', {
+        durationMs: elapsedSince(startedAt),
+        sizeBytes: source.byteLength
+      })
+    } catch (error) {
+      reportDebug('workerSourceFallback', {
+        durationMs: elapsedSince(startedAt),
+        error: errorMessage(error)
+      })
+      await import(localWorkerSrc)
+    }
+  }
+  const workerSourceReady = prepareWorkerSource()
+  window.addEventListener('pagehide', () => {
+    if (workerBlobUrl) {
+      URL.revokeObjectURL(workerBlobUrl)
+      workerBlobUrl = null
+    }
+  }, { once: true })
   const configureOnViewerLoaded = event => {
     configureViewerOptions(event.detail && event.detail.source || window, config)
   }
@@ -121,6 +155,7 @@
 
   window.addEventListener('load', async function () {
     const initializedAt = performance.now()
+    await workerSourceReady
     if (!configureViewerOptions(window, config)) {
       throw new Error('PDF.js viewer options are unavailable.')
     }
@@ -136,12 +171,12 @@
     let pendingFirstPageRender = null
 
     reportDebug('viewerInitializing', {
-      workerHandlerPreloaded: Boolean(globalThis.pdfjsWorker?.WorkerMessageHandler)
+      workerSource: workerBlobUrl ? 'blob' : 'mainThreadFallback'
     })
     await PDFViewerApplication.initializedPromise
     reportDebug('viewerInitialized', {
       durationMs: elapsedSince(initializedAt),
-      workerHandlerPreloaded: Boolean(globalThis.pdfjsWorker?.WorkerMessageHandler)
+      workerSource: workerBlobUrl ? 'blob' : 'mainThreadFallback'
     })
 
     PDFViewerApplication.eventBus.on('pagerendered', event => {

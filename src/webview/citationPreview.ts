@@ -773,7 +773,8 @@
     }
 
     function viewportRect(viewport: PdfJsViewport, pdfRect: number[]): ViewportRect {
-        const [x1, y1, x2, y2] = viewport.convertToViewportRectangle(pdfRect);
+        const [x1, y1] = viewport.convertToViewportPoint(pdfRect[0], pdfRect[1]);
+        const [x2, y2] = viewport.convertToViewportPoint(pdfRect[2], pdfRect[3]);
         const left = Math.min(x1, x2);
         const top = Math.min(y1, y2);
         const width = Math.abs(x2 - x1);
