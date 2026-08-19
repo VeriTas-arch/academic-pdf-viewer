@@ -31,12 +31,19 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const activePageTasks = new Set();
     let removedPageRange = null;
     let selectedChange = null;
+    let selectedMarker = null;
     let statusElement = null;
     let scrollSyncFrame = null;
+    let comparisonScheduleFrame = null;
+    let comparisonReapplyCacheRequest = false;
+    let pageComparisonApplyFrame = null;
+    let applyOnlyMissingRequest = null;
+    let comparisonDrainFrame = null;
     let remoteScrollReleaseFrame = null;
     let applyingRemoteScroll = false;
     let lastSentScrollAnchor = null;
     let textMetricsContext;
+    const pageDiffLayers = new Map();
     window.addEventListener("load", () => {
         config = loadConfig();
         initializeStatus();
@@ -76,10 +83,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 modifiedDocumentReady = config.diffRole === "modified";
                 if (config.diffRole === "modified") {
                     resetPageResults();
-                    scheduleComparisonPages();
+                    requestScheduledComparisonPages();
                 }
                 else {
-                    applyComparisonPages();
+                    requestApplyComparisonPages(false);
                 }
             });
             eventBus.on("pagerendered", (event) => {
@@ -227,7 +234,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (message.role === "original") {
             if (message.allPagesChanged) {
                 removedPageRange = { fromPage: 1, toPage: Number.MAX_SAFE_INTEGER };
-                applyComparisonPages();
+                requestApplyComparisonPages(false);
             }
             updateStatus();
             return;
@@ -244,7 +251,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return;
         }
         if (originalIsEmptyRevision) {
-            scheduleComparisonPages();
+            requestScheduledComparisonPages();
             return;
         }
         const startedAt = performance.now();
@@ -277,7 +284,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                     toPage: documentProxy.numPages
                 });
             }
-            scheduleComparisonPages();
+            requestScheduledComparisonPages();
         }
         catch (error) {
             if (comparisonGeneration !== currentComparisonGeneration) {
@@ -333,7 +340,47 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         removedPageRange = null;
         clearSelectedChange();
         clearOverlays();
+        if (comparisonScheduleFrame !== null) {
+            window.cancelAnimationFrame(comparisonScheduleFrame);
+            comparisonScheduleFrame = null;
+        }
+        comparisonReapplyCacheRequest = false;
+        if (pageComparisonApplyFrame !== null) {
+            window.cancelAnimationFrame(pageComparisonApplyFrame);
+            pageComparisonApplyFrame = null;
+        }
+        applyOnlyMissingRequest = null;
+        if (comparisonDrainFrame !== null) {
+            window.cancelAnimationFrame(comparisonDrainFrame);
+            comparisonDrainFrame = null;
+        }
         updateStatus();
+    }
+    function requestScheduledComparisonPages(reapplyCached = true) {
+        comparisonReapplyCacheRequest = comparisonReapplyCacheRequest || reapplyCached;
+        if (comparisonScheduleFrame !== null) {
+            return;
+        }
+        comparisonScheduleFrame = window.requestAnimationFrame(() => {
+            comparisonScheduleFrame = null;
+            const requestReapplyCached = comparisonReapplyCacheRequest;
+            comparisonReapplyCacheRequest = false;
+            scheduleComparisonPages(requestReapplyCached);
+        });
+    }
+    function requestApplyComparisonPages(onlyMissing) {
+        applyOnlyMissingRequest = applyOnlyMissingRequest === null
+            ? onlyMissing
+            : applyOnlyMissingRequest && onlyMissing;
+        if (pageComparisonApplyFrame !== null) {
+            return;
+        }
+        pageComparisonApplyFrame = window.requestAnimationFrame(() => {
+            pageComparisonApplyFrame = null;
+            const requestOnlyMissing = applyOnlyMissingRequest ?? false;
+            applyOnlyMissingRequest = null;
+            applyComparisonPages(requestOnlyMissing);
+        });
     }
     function scheduleComparisonPages(reapplyCached = true) {
         const viewer = pdfjsAdapter.getViewer();
@@ -395,7 +442,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         for (let index = range.firstIndex; index <= range.lastIndex; index += 1) {
             const pageView = viewer.getPageView(index);
             if (!pageView
-                || onlyMissing && pageView.div.querySelector(".academicPdfDiffLayer")) {
+                || (onlyMissing && (pageDiffLayers.get(pageView.id)?.isConnected ?? false))) {
                 continue;
             }
             applyPageResult(pageView.id);
@@ -431,7 +478,16 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         }
         pageScheduler.enqueue(pageNumber);
         updateStatus();
-        drainPageQueue();
+        requestDrainPageQueue();
+    }
+    function requestDrainPageQueue() {
+        if (comparisonDrainFrame !== null) {
+            return;
+        }
+        comparisonDrainFrame = window.requestAnimationFrame(() => {
+            comparisonDrainFrame = null;
+            drainPageQueue();
+        });
     }
     function drainPageQueue() {
         while (!pageScheduler.atCapacity && pageScheduler.queuedCount > 0) {
@@ -460,7 +516,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             if (pendingPages.get(pageNumber) === task) {
                 pendingPages.delete(pageNumber);
             }
-            drainPageQueue();
+            requestDrainPageQueue();
         });
         return task;
     }
@@ -556,28 +612,34 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         };
     }
     function rememberPageResult(pageNumber, changes) {
-        pageResults.delete(pageNumber);
-        pageResults.set(pageNumber, changes);
-        while (pageResults.size > maximumCachedPageResults) {
-            const oldestPage = pageResults.keys().next().value;
-            if (oldestPage === undefined) {
-                return;
-            }
-            pageResults.delete(oldestPage);
-        }
+        rememberBoundedMapEntry(pageResults, pageNumber, changes);
     }
     function rememberComputedPageResult(pageNumber, result) {
-        pageResults.delete(pageNumber);
-        counterpartPageResults.delete(pageNumber);
-        pageResults.set(pageNumber, sideChanges(pageNumber, result, "modified"));
-        counterpartPageResults.set(pageNumber, sideChanges(pageNumber, result, "original"));
-        while (pageResults.size > maximumCachedPageResults) {
-            const oldestPage = pageResults.keys().next().value;
+        rememberPairedBoundedMapEntries(pageResults, counterpartPageResults, pageNumber, sideChanges(pageNumber, result, "modified"), sideChanges(pageNumber, result, "original"));
+    }
+    function rememberBoundedMapEntry(cache, pageNumber, changes) {
+        cache.delete(pageNumber);
+        cache.set(pageNumber, changes);
+        while (cache.size > maximumCachedPageResults) {
+            const oldestPage = cache.keys().next().value;
             if (oldestPage === undefined) {
                 return;
             }
-            pageResults.delete(oldestPage);
-            counterpartPageResults.delete(oldestPage);
+            cache.delete(oldestPage);
+        }
+    }
+    function rememberPairedBoundedMapEntries(primaryCache, secondaryCache, pageNumber, primaryChanges, secondaryChanges) {
+        primaryCache.delete(pageNumber);
+        secondaryCache.delete(pageNumber);
+        primaryCache.set(pageNumber, primaryChanges);
+        secondaryCache.set(pageNumber, secondaryChanges);
+        while (primaryCache.size > maximumCachedPageResults) {
+            const oldestPage = primaryCache.keys().next().value;
+            if (oldestPage === undefined) {
+                return;
+            }
+            primaryCache.delete(oldestPage);
+            secondaryCache.delete(oldestPage);
         }
     }
     function sideChanges(pageNumber, result, side) {
@@ -722,7 +784,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             fromPage: message.fromPage,
             toPage: message.toPage
         };
-        applyComparisonPages();
+        requestApplyComparisonPages(false);
     }
     function applyPageResult(pageNumber) {
         const changes = changesForPage(pageNumber);
@@ -736,8 +798,14 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                     || selectedChange.index !== selectedIndex) {
                     return;
                 }
+                const selectedIndexKey = String(selectedIndex);
+                if (selectedMarker?.dataset.pageNumber === String(pageNumber)
+                    && selectedMarker.dataset.changeIndex === selectedIndexKey) {
+                    selectedMarker?.scrollIntoView({ block: "center", inline: "center" });
+                    return;
+                }
                 const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
-                const marker = pageView?.div.querySelector(`.academicPdfDiffRegion[data-change-index="${selectedIndex}"]`);
+                const marker = pageView?.div.querySelector(`.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`);
                 marker?.scrollIntoView({ block: "center", inline: "center" });
             });
         }
@@ -930,8 +998,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     }
     function clearSelectedChange() {
         selectedChange = null;
-        document.querySelectorAll(".academicPdfDiffRegion--selected")
-            .forEach(marker => marker.classList.remove("academicPdfDiffRegion--selected"));
+        clearSelectedMarker();
     }
     function initializeStatus() {
         if (!config.diffRole) {
@@ -974,10 +1041,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         scrollSyncFrame = window.requestAnimationFrame(() => {
             scrollSyncFrame = null;
             if (config.diffRole === "modified") {
-                scheduleComparisonPages(false);
+                requestScheduledComparisonPages(false);
             }
             else if (config.diffRole === "original") {
-                applyComparisonPages(true);
+                requestApplyComparisonPages(true);
             }
             if (applyingRemoteScroll) {
                 return;
@@ -1079,8 +1146,15 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (!pageElement) {
             return;
         }
-        pageElement.querySelector(".academicPdfDiffLayer")?.remove();
+        const existingLayer = pageDiffLayers.get(pageNumber);
+        if (existingLayer) {
+            existingLayer.remove();
+        }
+        pageDiffLayers.delete(pageNumber);
         if (!enabled || changes.length === 0) {
+            if (selectedChange?.pageNumber === pageNumber) {
+                clearSelectedMarker();
+            }
             return;
         }
         const layer = document.createElement("div");
@@ -1091,9 +1165,11 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 const marker = document.createElement("div");
                 marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
                 marker.dataset.changeId = change.id;
+                marker.dataset.pageNumber = String(pageNumber);
                 marker.dataset.changeIndex = String(index);
                 if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
                     marker.classList.add("academicPdfDiffRegion--selected");
+                    selectedMarker = marker;
                 }
                 marker.style.left = `${region.left * 100}%`;
                 marker.style.top = `${region.top * 100}%`;
@@ -1103,9 +1179,21 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             }
         }
         pageElement.appendChild(layer);
+        pageDiffLayers.set(pageNumber, layer);
     }
     function clearOverlays() {
-        document.querySelectorAll(".academicPdfDiffLayer").forEach(layer => layer.remove());
+        for (const layer of pageDiffLayers.values()) {
+            layer.remove();
+        }
+        pageDiffLayers.clear();
+        clearSelectedMarker();
+    }
+    function clearSelectedMarker() {
+        if (selectedMarker === null) {
+            return;
+        }
+        selectedMarker.classList.remove("academicPdfDiffRegion--selected");
+        selectedMarker = null;
     }
     function reportDebug(event, fields) {
         if (!config.debug) {

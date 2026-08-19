@@ -216,10 +216,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                     && originalDocument.data.byteLength > 0,
             }
             : { type: 'diff.setEnabled', enabled: false, sessionId };
-        const originalDelivered = await originalPanel.webview.postMessage(originalMessage);
-        const modifiedDelivered = originalDelivered
-            ? await modifiedPanel.webview.postMessage(modifiedMessage)
-            : false;
+        const [originalDelivered, modifiedDelivered] = await Promise.all([
+            originalPanel.webview.postMessage(originalMessage),
+            modifiedPanel.webview.postMessage(modifiedMessage),
+        ]);
         if (session.sessionId !== sessionId) {
             return session.highlightsEnabled;
         }
@@ -566,16 +566,18 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     private refreshDiffContext(): void {
         const session = this.activePanel && this.diffSessionsByPanel.get(this.activePanel);
-        void vscode.commands.executeCommand(
-            'setContext',
-            'academicPdfViewer.diffActive',
-            session !== undefined,
-        );
-        void vscode.commands.executeCommand(
-            'setContext',
-            'academicPdfViewer.diffHighlightsEnabled',
-            session?.highlightsEnabled ?? false,
-        );
+        void Promise.all([
+            vscode.commands.executeCommand(
+                'setContext',
+                'academicPdfViewer.diffActive',
+                session !== undefined,
+            ),
+            vscode.commands.executeCommand(
+                'setContext',
+                'academicPdfViewer.diffHighlightsEnabled',
+                session?.highlightsEnabled ?? false,
+            ),
+        ]);
     }
 
     private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {

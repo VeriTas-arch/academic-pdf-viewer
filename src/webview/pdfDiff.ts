@@ -154,12 +154,19 @@ import {
     const activePageTasks = new Set<Promise<PageDiffResult | undefined>>();
     let removedPageRange: { fromPage: number; toPage: number } | null = null;
     let selectedChange: { pageNumber: number; index: number } | null = null;
+    let selectedMarker: HTMLElement | null = null;
     let statusElement: HTMLElement | null = null;
     let scrollSyncFrame: number | null = null;
+    let comparisonScheduleFrame: number | null = null;
+    let comparisonReapplyCacheRequest: boolean = false;
+    let pageComparisonApplyFrame: number | null = null;
+    let applyOnlyMissingRequest: boolean | null = null;
+    let comparisonDrainFrame: number | null = null;
     let remoteScrollReleaseFrame: number | null = null;
     let applyingRemoteScroll = false;
     let lastSentScrollAnchor: DiffScrollAnchor | null = null;
     let textMetricsContext: CanvasRenderingContext2D | null | undefined;
+    const pageDiffLayers = new Map<number, HTMLElement>();
 
     window.addEventListener("load", () => {
         config = loadConfig();
@@ -193,9 +200,9 @@ import {
                 modifiedDocumentReady = config.diffRole === "modified";
                 if (config.diffRole === "modified") {
                     resetPageResults();
-                    scheduleComparisonPages();
+                    requestScheduledComparisonPages();
                 } else {
-                    applyComparisonPages();
+                    requestApplyComparisonPages(false);
                 }
             });
             eventBus.on("pagerendered", (event: { pageNumber: number }) => {
@@ -364,7 +371,7 @@ import {
         if (message.role === "original") {
             if (message.allPagesChanged) {
                 removedPageRange = { fromPage: 1, toPage: Number.MAX_SAFE_INTEGER };
-                applyComparisonPages();
+                requestApplyComparisonPages(false);
             }
             updateStatus();
             return;
@@ -383,7 +390,7 @@ import {
             return;
         }
         if (originalIsEmptyRevision) {
-            scheduleComparisonPages();
+            requestScheduledComparisonPages();
             return;
         }
 
@@ -417,7 +424,7 @@ import {
                     toPage: documentProxy.numPages
                 });
             }
-            scheduleComparisonPages();
+            requestScheduledComparisonPages();
         } catch (error) {
             if (comparisonGeneration !== currentComparisonGeneration) {
                 return;
@@ -474,7 +481,49 @@ import {
         removedPageRange = null;
         clearSelectedChange();
         clearOverlays();
+        if (comparisonScheduleFrame !== null) {
+            window.cancelAnimationFrame(comparisonScheduleFrame);
+            comparisonScheduleFrame = null;
+        }
+        comparisonReapplyCacheRequest = false;
+        if (pageComparisonApplyFrame !== null) {
+            window.cancelAnimationFrame(pageComparisonApplyFrame);
+            pageComparisonApplyFrame = null;
+        }
+        applyOnlyMissingRequest = null;
+        if (comparisonDrainFrame !== null) {
+            window.cancelAnimationFrame(comparisonDrainFrame);
+            comparisonDrainFrame = null;
+        }
         updateStatus();
+    }
+
+    function requestScheduledComparisonPages(reapplyCached = true): void {
+        comparisonReapplyCacheRequest = comparisonReapplyCacheRequest || reapplyCached;
+        if (comparisonScheduleFrame !== null) {
+            return;
+        }
+        comparisonScheduleFrame = window.requestAnimationFrame(() => {
+            comparisonScheduleFrame = null;
+            const requestReapplyCached = comparisonReapplyCacheRequest;
+            comparisonReapplyCacheRequest = false;
+            scheduleComparisonPages(requestReapplyCached);
+        });
+    }
+
+    function requestApplyComparisonPages(onlyMissing: boolean): void {
+        applyOnlyMissingRequest = applyOnlyMissingRequest === null
+            ? onlyMissing
+            : applyOnlyMissingRequest && onlyMissing;
+        if (pageComparisonApplyFrame !== null) {
+            return;
+        }
+        pageComparisonApplyFrame = window.requestAnimationFrame(() => {
+            pageComparisonApplyFrame = null;
+            const requestOnlyMissing = applyOnlyMissingRequest ?? false;
+            applyOnlyMissingRequest = null;
+            applyComparisonPages(requestOnlyMissing);
+        });
     }
 
     function scheduleComparisonPages(reapplyCached = true): void {
@@ -548,7 +597,7 @@ import {
         for (let index = range.firstIndex; index <= range.lastIndex; index += 1) {
             const pageView = viewer.getPageView(index);
             if (!pageView
-                || onlyMissing && pageView.div.querySelector(".academicPdfDiffLayer")) {
+                || (onlyMissing && (pageDiffLayers.get(pageView.id)?.isConnected ?? false))) {
                 continue;
             }
             applyPageResult(pageView.id);
@@ -587,7 +636,17 @@ import {
 
         pageScheduler.enqueue(pageNumber);
         updateStatus();
-        drainPageQueue();
+        requestDrainPageQueue();
+    }
+
+    function requestDrainPageQueue(): void {
+        if (comparisonDrainFrame !== null) {
+            return;
+        }
+        comparisonDrainFrame = window.requestAnimationFrame(() => {
+            comparisonDrainFrame = null;
+            drainPageQueue();
+        });
     }
 
     function drainPageQueue(): void {
@@ -619,7 +678,7 @@ import {
             if (pendingPages.get(pageNumber) === task) {
                 pendingPages.delete(pageNumber);
             }
-            drainPageQueue();
+            requestDrainPageQueue();
         });
         return task;
     }
@@ -723,29 +782,49 @@ import {
     }
 
     function rememberPageResult(pageNumber: number, changes: DiffSideChange[]): void {
-        pageResults.delete(pageNumber);
-        pageResults.set(pageNumber, changes);
-        while (pageResults.size > maximumCachedPageResults) {
-            const oldestPage = pageResults.keys().next().value;
-            if (oldestPage === undefined) {
-                return;
-            }
-            pageResults.delete(oldestPage);
-        }
+        rememberBoundedMapEntry(pageResults, pageNumber, changes);
     }
 
     function rememberComputedPageResult(pageNumber: number, result: PageDiffResult): void {
-        pageResults.delete(pageNumber);
-        counterpartPageResults.delete(pageNumber);
-        pageResults.set(pageNumber, sideChanges(pageNumber, result, "modified"));
-        counterpartPageResults.set(pageNumber, sideChanges(pageNumber, result, "original"));
-        while (pageResults.size > maximumCachedPageResults) {
-            const oldestPage = pageResults.keys().next().value;
+        rememberPairedBoundedMapEntries(
+            pageResults,
+            counterpartPageResults,
+            pageNumber,
+            sideChanges(pageNumber, result, "modified"),
+            sideChanges(pageNumber, result, "original")
+        );
+    }
+
+    function rememberBoundedMapEntry<T>(cache: Map<number, T>, pageNumber: number, changes: T): void {
+        cache.delete(pageNumber);
+        cache.set(pageNumber, changes);
+        while (cache.size > maximumCachedPageResults) {
+            const oldestPage = cache.keys().next().value;
             if (oldestPage === undefined) {
                 return;
             }
-            pageResults.delete(oldestPage);
-            counterpartPageResults.delete(oldestPage);
+            cache.delete(oldestPage);
+        }
+    }
+
+    function rememberPairedBoundedMapEntries<T, U>(
+        primaryCache: Map<number, T>,
+        secondaryCache: Map<number, U>,
+        pageNumber: number,
+        primaryChanges: T,
+        secondaryChanges: U
+    ): void {
+        primaryCache.delete(pageNumber);
+        secondaryCache.delete(pageNumber);
+        primaryCache.set(pageNumber, primaryChanges);
+        secondaryCache.set(pageNumber, secondaryChanges);
+        while (primaryCache.size > maximumCachedPageResults) {
+            const oldestPage = primaryCache.keys().next().value;
+            if (oldestPage === undefined) {
+                return;
+            }
+            primaryCache.delete(oldestPage);
+            secondaryCache.delete(oldestPage);
         }
     }
 
@@ -913,7 +992,7 @@ import {
             fromPage: message.fromPage,
             toPage: message.toPage
         };
-        applyComparisonPages();
+        requestApplyComparisonPages(false);
     }
 
     function applyPageResult(pageNumber: number): void {
@@ -928,9 +1007,15 @@ import {
                     || selectedChange.index !== selectedIndex) {
                     return;
                 }
+                const selectedIndexKey = String(selectedIndex);
+                if (selectedMarker?.dataset.pageNumber === String(pageNumber)
+                    && selectedMarker.dataset.changeIndex === selectedIndexKey) {
+                    selectedMarker?.scrollIntoView({ block: "center", inline: "center" });
+                    return;
+                }
                 const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
                 const marker = pageView?.div.querySelector<HTMLElement>(
-                    `.academicPdfDiffRegion[data-change-index="${selectedIndex}"]`
+                    `.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`
                 );
                 marker?.scrollIntoView({ block: "center", inline: "center" });
             });
@@ -1170,8 +1255,7 @@ import {
 
     function clearSelectedChange(): void {
         selectedChange = null;
-        document.querySelectorAll(".academicPdfDiffRegion--selected")
-            .forEach(marker => marker.classList.remove("academicPdfDiffRegion--selected"));
+        clearSelectedMarker();
     }
 
     function initializeStatus(): void {
@@ -1224,9 +1308,9 @@ import {
         scrollSyncFrame = window.requestAnimationFrame(() => {
             scrollSyncFrame = null;
             if (config.diffRole === "modified") {
-                scheduleComparisonPages(false);
+                requestScheduledComparisonPages(false);
             } else if (config.diffRole === "original") {
-                applyComparisonPages(true);
+                requestApplyComparisonPages(true);
             }
             if (applyingRemoteScroll) {
                 return;
@@ -1349,8 +1433,16 @@ import {
             return;
         }
 
-        pageElement.querySelector(".academicPdfDiffLayer")?.remove();
+        const existingLayer = pageDiffLayers.get(pageNumber);
+        if (existingLayer) {
+            existingLayer.remove();
+        }
+        pageDiffLayers.delete(pageNumber);
+
         if (!enabled || changes.length === 0) {
+            if (selectedChange?.pageNumber === pageNumber) {
+                clearSelectedMarker();
+            }
             return;
         }
 
@@ -1362,9 +1454,11 @@ import {
                 const marker = document.createElement("div");
                 marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
                 marker.dataset.changeId = change.id;
+                marker.dataset.pageNumber = String(pageNumber);
                 marker.dataset.changeIndex = String(index);
                 if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
                     marker.classList.add("academicPdfDiffRegion--selected");
+                    selectedMarker = marker;
                 }
                 marker.style.left = `${region.left * 100}%`;
                 marker.style.top = `${region.top * 100}%`;
@@ -1374,10 +1468,23 @@ import {
             }
         }
         pageElement.appendChild(layer);
+        pageDiffLayers.set(pageNumber, layer);
     }
 
     function clearOverlays(): void {
-        document.querySelectorAll(".academicPdfDiffLayer").forEach(layer => layer.remove());
+        for (const layer of pageDiffLayers.values()) {
+            layer.remove();
+        }
+        pageDiffLayers.clear();
+        clearSelectedMarker();
+    }
+
+    function clearSelectedMarker(): void {
+        if (selectedMarker === null) {
+            return;
+        }
+        selectedMarker.classList.remove("academicPdfDiffRegion--selected");
+        selectedMarker = null;
     }
 
     function reportDebug(event: string, fields: Record<string, unknown>): void {

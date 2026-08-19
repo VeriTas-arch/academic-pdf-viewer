@@ -113,6 +113,7 @@
         _app: PdfJsApplication;
         _eventBus: PdfJsEventBus;
         _pdfDocument: PdfJsDocument | null;
+        _pendingPointerMoveFrame: number | null;
         _hoverDelayer: HoverDelayer;
         _previewCache: Map<string, ImagePreview>;
         _textCache: Map<string, string>;
@@ -121,6 +122,8 @@
         _textContentCache: Map<number, Promise<PdfJsTextContent>>;
         _pageRenderIds: Map<number, number>;
         _overlayLinks: WeakMap<HTMLElement, PreviewLink>;
+        _pageOverlays: Map<HTMLElement, Set<HTMLElement>>;
+        _pageLayers: Set<HTMLElement>;
         _previewRequestId: number;
         _popup: HTMLDivElement;
         _scaleRenderTimer: Timer;
@@ -139,6 +142,7 @@
             this._app = app;
             this._eventBus = app.eventBus;
             this._pdfDocument = null;
+            this._pendingPointerMoveFrame = null;
             this._hoverDelayer = new HoverDelayer();
             this._previewCache = new Map();
             this._textCache = new Map();
@@ -147,6 +151,8 @@
             this._textContentCache = new Map();
             this._pageRenderIds = new Map();
             this._overlayLinks = new WeakMap();
+            this._pageOverlays = new Map();
+            this._pageLayers = new Set();
             this._previewRequestId = 0;
             this._popup = this._createPopup();
             this._scaleRenderTimer = null;
@@ -226,14 +232,21 @@
             window.addEventListener("pointermove", event => {
                 this._pointerPosition = { x: event.clientX, y: event.clientY };
                 this._controlPressed ||= event.ctrlKey;
-                if (this._syncHoveredPreviewAtPointer() && this._controlPressed) {
-                    this._openHoveredPreview();
+                if (this._pendingPointerMoveFrame !== null) {
+                    return;
                 }
+                this._pendingPointerMoveFrame = requestAnimationFrame(() => {
+                    this._pendingPointerMoveFrame = null;
+                    if (this._syncHoveredPreviewAtPointer() && this._controlPressed) {
+                        this._openHoveredPreview();
+                    }
+                });
             }, { capture: true, passive: true });
             window.addEventListener("pointerout", event => {
                 if (event.relatedTarget === null) {
                     this._pointerPosition = null;
                     this._setHoveredPreview(null);
+                    this._cancelPendingPointerMoveFrame();
                 }
             }, true);
         }
@@ -406,6 +419,7 @@
                 dest: annotation.dest
             };
             this._overlayLinks.set(overlay, link);
+            this._trackPageOverlay(pageView.div, overlay);
             overlay.addEventListener("click", (event: MouseEvent) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -416,23 +430,38 @@
             layer.append(overlay);
         }
 
-        _syncHoveredPreviewAtPointer(): boolean {
-            if (!this._pointerPosition) {
-                return this._setHoveredPreview(null);
-            }
-            const { x, y } = this._pointerPosition;
-            const elements = document.elementsFromPoint(x, y);
-            const directAnchor = elements
-                .map(element => element.closest<HTMLElement>(".academic-citation-link"))
-                .find((anchor): anchor is HTMLElement => Boolean(anchor));
-            const page = elements
-                .map(element => element.closest<HTMLElement>(".page"))
-                .find((element): element is HTMLElement => Boolean(element));
-            const anchor = directAnchor || [...(page?.querySelectorAll<HTMLElement>(".academic-citation-link") || [])]
-                .find(candidate => containsClientPoint(candidate.getBoundingClientRect(), x, y));
-            const link = anchor && this._overlayLinks.get(anchor);
-            return this._setHoveredPreview(anchor && link ? { anchor, link } : null);
+    _syncHoveredPreviewAtPointer(): boolean {
+        if (!this._pointerPosition) {
+            return this._setHoveredPreview(null);
         }
+        const { x, y } = this._pointerPosition;
+        const elements = document.elementsFromPoint(x, y);
+        let directAnchor: HTMLElement | null = null;
+        let page: HTMLElement | null = null;
+        for (const element of elements) {
+            if (!directAnchor) {
+                directAnchor = element.closest<HTMLElement>(".academic-citation-link");
+            }
+            if (!page) {
+                page = element.closest<HTMLElement>(".page");
+            }
+            if (directAnchor && page) {
+                break;
+            }
+        }
+        const overlays = page ? this._pageOverlays.get(page) : null;
+        let anchor = directAnchor;
+        if (!anchor && overlays) {
+            for (const candidate of overlays) {
+                if (containsClientPoint(candidate.getBoundingClientRect(), x, y)) {
+                    anchor = candidate;
+                    break;
+                }
+            }
+        }
+        const link = anchor && this._overlayLinks.get(anchor);
+        return this._setHoveredPreview(anchor && link ? { anchor, link } : null);
+    }
 
         _setHoveredPreview(hovered: HoveredPreview | null): boolean {
             if (this._hoveredPreview?.anchor === hovered?.anchor) {
@@ -526,8 +555,17 @@
             this._cancelActiveRenderTask();
             this._hoverDelayer.cancelOpen();
             this._cancelSuppressedOpen();
+            this._cancelPendingPointerMoveFrame();
             this._popup.classList.remove("is-open");
             this._popup.innerHTML = "";
+        }
+
+        _cancelPendingPointerMoveFrame(): void {
+            if (this._pendingPointerMoveFrame === null) {
+                return;
+            }
+            cancelAnimationFrame(this._pendingPointerMoveFrame);
+            this._pendingPointerMoveFrame = null;
         }
 
         _createPopup(): HTMLDivElement {
@@ -847,9 +885,11 @@
         }
 
         _clearAllOverlays(): void {
-            for (const layer of document.querySelectorAll(".academic-citation-layer")) {
+            for (const layer of this._pageLayers) {
                 layer.remove();
             }
+            this._pageLayers.clear();
+            this._pageOverlays.clear();
         }
 
         _clearPageOverlays(pageDiv: HTMLElement): void {
@@ -858,6 +898,16 @@
                 layer.textContent = "";
                 pageDiv.append(layer);
             }
+            this._pageOverlays.delete(pageDiv);
+        }
+
+        _trackPageOverlay(pageDiv: HTMLElement, overlay: HTMLElement): void {
+            let overlays = this._pageOverlays.get(pageDiv);
+            if (!overlays) {
+                overlays = new Set();
+                this._pageOverlays.set(pageDiv, overlays);
+            }
+            overlays.add(overlay);
         }
 
         _ensurePageLayer(pageDiv: HTMLElement): HTMLElement {
@@ -865,8 +915,9 @@
             if (!layer) {
                 layer = document.createElement("div");
                 layer.className = "academic-citation-layer";
+                pageDiv.append(layer);
             }
-            pageDiv.append(layer);
+            this._pageLayers.add(layer);
             return layer;
         }
     }
@@ -968,28 +1019,32 @@
     }
 
     function collectNearbyLines(items: PdfJsTextItem[], viewport: PdfJsViewport, targetY: number | null): string[] {
-        const rows: Array<{ text: string; x: number; y: number }> = [];
+        const nearbyRows: Array<{ text: string; x: number; y: number }> = [];
+        const allRows: Array<{ text: string; x: number; y: number }> = [];
         for (const item of items) {
             if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
                 continue;
             }
             const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
             const y = transform[5];
-            if (targetY !== null && Math.abs(y - targetY) > TEXT_RADIUS_PX) {
-                continue;
-            }
-            rows.push({
+            const row = {
                 text: item.str.trim(),
                 x: transform[4],
                 y
-            });
+            };
+            allRows.push(row);
+            if (targetY === null || Math.abs(y - targetY) <= TEXT_RADIUS_PX) {
+                nearbyRows.push(row);
+            }
         }
-        if (rows.length === 0 && targetY !== null) {
-            return collectNearbyLines(items, viewport, null).slice(0, 4);
+        const isFallback = targetY !== null && nearbyRows.length === 0;
+        const rows = isFallback || targetY === null ? allRows : nearbyRows;
+        if (rows.length === 0) {
+            return [];
         }
 
         rows.sort((a, b) => Math.abs(a.y - (targetY ?? a.y)) - Math.abs(b.y - (targetY ?? b.y)) || a.y - b.y || a.x - b.x);
-        const selected = rows.slice(0, 40);
+        const selected = rows.slice(0, isFallback ? 4 : 40);
         selected.sort((a, b) => a.y - b.y || a.x - b.x);
 
         const lines = [];
@@ -1002,13 +1057,14 @@
             }
         }
 
-        return lines.map(line => line.parts
+        const renderedLines = lines.map(line => line.parts
             .sort((a, b) => a.x - b.x)
             .map(part => part.text)
             .join(" ")
             .replace(/\s+/g, " ")
             .trim())
             .filter(Boolean);
+        return isFallback ? renderedLines.slice(0, 4) : renderedLines;
     }
 
     function getPreviewCrop(viewport: PdfJsViewport, textBounds: TextBounds | null): PreviewCrop {

@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import type { DevLogFields, DevLogger } from './devLogger';
 
 const MAX_PDF_BYTES = 512 * 1024 * 1024;
+const gitRootCache = new Map<string, Promise<string>>();
 
 export async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
     const startedAt = Date.now();
@@ -59,9 +60,7 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
         throw new Error(`Invalid Git URI: ${uri.toString()}`);
     }
 
-    const repositoryRoot = (await runGit(['rev-parse', '--show-toplevel'], dirname(query.path)))
-        .toString('utf8')
-        .trim();
+    const repositoryRoot = await getGitRepositoryRoot(query.path);
     const repositoryPath = relative(repositoryRoot, query.path);
     if (repositoryPath === '..' || repositoryPath.startsWith(`..${sep}`) || isAbsolute(repositoryPath)) {
         throw new Error(`PDF is outside its Git repository: ${query.path}`);
@@ -75,8 +74,8 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('git.blob.start', fields);
 
     try {
-        const sizeOutput = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, true);
-        if (sizeOutput.byteLength === 0) {
+        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, true);
+        if (data.byteLength === 0) {
             logger?.warn('git.blob.missing', {
                 ...fields,
                 bytes: 0,
@@ -84,24 +83,13 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
             });
             return new Uint8Array();
         }
-
-        const size = Number(sizeOutput.toString('utf8').trim());
-        if (!Number.isSafeInteger(size) || size < 0) {
-            throw new Error(`Git returned an invalid PDF size for ${objectName}.`);
-        }
-        assertPdfSize(size);
-
-        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, true);
+        assertPdfSize(data.byteLength);
         const resultFields = {
             ...fields,
             bytes: data.byteLength,
             durationMs: Date.now() - startedAt,
         };
-        if (data.byteLength === 0) {
-            logger?.warn('git.blob.missing', resultFields);
-        } else {
-            logger?.info('git.blob.done', resultFields);
-        }
+        logger?.info('git.blob.done', resultFields);
         return data;
     } catch (error) {
         logger?.error('git.blob.failed', error, {
@@ -110,6 +98,22 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
         });
         throw error;
     }
+}
+
+async function getGitRepositoryRoot(path: string): Promise<string> {
+    const workspacePath = dirname(path);
+    const cachedRoot = gitRootCache.get(workspacePath);
+    if (cachedRoot !== undefined) {
+        return cachedRoot;
+    }
+    const inFlight = runGit(['rev-parse', '--show-toplevel'], workspacePath)
+        .then(output => output.toString('utf8').trim())
+        .catch(error => {
+            gitRootCache.delete(workspacePath);
+            throw error;
+        });
+    gitRootCache.set(workspacePath, inFlight);
+    return inFlight;
 }
 
 function assertPdfSize(size: number): void {

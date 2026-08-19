@@ -243,10 +243,21 @@ function isPdfDiffRegion(value: unknown): value is PdfDiffRegion {
 }
 
 function isPdfDiffChanges(value: unknown): value is PdfDiffChange[] {
-    return Array.isArray(value)
-        && value.length <= 200
-        && value.every(isPdfDiffChange)
-        && value.reduce((count, change) => count + change.regions.length, 0) <= 200;
+    if (!Array.isArray(value) || value.length > 200) {
+        return false;
+    }
+
+    let regionCount = 0;
+    for (const change of value) {
+        if (!isPdfDiffChange(change)) {
+            return false;
+        }
+        regionCount += change.regions.length;
+        if (regionCount > 200) {
+            return false;
+        }
+    }
+    return true;
 }
 
 function isPdfDiffChange(value: unknown): value is PdfDiffChange {
