@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.0.7",
+    "version": "1.1.0",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -11,7 +11,7 @@
     },
     "license": "MIT",
     "engines": {
-        "vscode": "^1.125.0"
+        "vscode": "^1.133.0"
     },
     "categories": [
         "Visualization",
@@ -70,7 +70,31 @@
             {
                 "command": "academicPdfViewer.toggleDiffHighlights",
                 "title": "PDF: Toggle Diff Highlights",
-                "enablement": "activeCustomEditorId == academicPdfViewer.pdf"
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive"
+            },
+            {
+                "command": "academicPdfViewer.enableDiffHighlights",
+                "title": "PDF Diff: Show Highlights",
+                "icon": "$(diff)",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive"
+            },
+            {
+                "command": "academicPdfViewer.disableDiffHighlights",
+                "title": "PDF Diff: Hide Highlights",
+                "icon": "$(check)",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive"
+            },
+            {
+                "command": "academicPdfViewer.previousDiffChange",
+                "title": "PDF Diff: Previous Change on Page",
+                "icon": "$(arrow-up)",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled"
+            },
+            {
+                "command": "academicPdfViewer.nextDiffChange",
+                "title": "PDF Diff: Next Change on Page",
+                "icon": "$(arrow-down)",
+                "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled"
             }
         ],
         "configuration": {
@@ -97,7 +121,27 @@
                 {
                     "command": "academicPdfViewer.reload",
                     "when": "activeCustomEditorId == academicPdfViewer.pdf",
-                    "group": "navigation"
+                    "group": "navigation@4"
+                },
+                {
+                    "command": "academicPdfViewer.enableDiffHighlights",
+                    "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && !academicPdfViewer.diffHighlightsEnabled",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "academicPdfViewer.disableDiffHighlights",
+                    "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "academicPdfViewer.previousDiffChange",
+                    "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "academicPdfViewer.nextDiffChange",
+                    "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled",
+                    "group": "navigation@3"
                 }
             ]
         },
@@ -116,7 +160,7 @@
                 "command": "academicPdfViewer.toggleDiffHighlights",
                 "key": "ctrl+alt+d",
                 "mac": "cmd+alt+d",
-                "when": "activeCustomEditorId == academicPdfViewer.pdf"
+                "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive"
             }
         ]
     },

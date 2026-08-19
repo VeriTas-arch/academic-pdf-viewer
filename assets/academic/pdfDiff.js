@@ -1,11 +1,9 @@
 /// <reference path="./globals.d.ts" />
-import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerPage, mergeNearbyRegions, toNormalizedRegion, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlgorithm.mjs";
 "use strict";
 (function () {
     const maxRenderDimension = 1200;
     const maxRenderScale = 1.25;
-    const minimumTextMatchRatio = 0.5;
-    const maximumTextTokensPerPage = 1500;
     const maximumCachedPageResults = 64;
     const maximumConcurrentPageComparisons = 2;
     const maximumQueuedPages = 16;
@@ -15,6 +13,7 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     let modifiedFingerprint = "";
     let originalFingerprint = "";
     let originalIsEmptyRevision = false;
+    let modifiedIsEmptyRevision = false;
     let originalLoadingTask = null;
     let originalDocument = null;
     let comparisonGeneration = 0;
@@ -23,8 +22,16 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     const pageResults = new Map();
     const pendingPages = new Map();
     const queuedPages = new Map();
+    let removedPageRange = null;
+    let selectedChange = null;
+    let statusElement = null;
+    let scrollSyncFrame = null;
+    let remoteScrollReleaseFrame = null;
+    let applyingRemoteScroll = false;
+    let lastSentScrollAnchor = null;
     window.addEventListener("load", () => {
         config = loadConfig();
+        initializeStatus();
         window.addEventListener("message", event => {
             if (isDocumentLoadMessage(event.data)) {
                 handleDocumentLoad(event.data);
@@ -35,19 +42,49 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             else if (isDiffDisableMessage(event.data)) {
                 disableDiff();
             }
+            else if (isDiffApplyPageMessage(event.data)) {
+                applyForwardedPage(event.data);
+            }
+            else if (isDiffRemovedPageRangeMessage(event.data)) {
+                applyRemovedPageRange(event.data);
+            }
+            else if (isDiffNavigateMessage(event.data)) {
+                navigateChange(event.data.direction);
+            }
+            else if (isDiffApplyScrollMessage(event.data)) {
+                applySynchronizedScroll(event.data);
+            }
         });
         window.PDFViewerApplication.initializedPromise.then(() => {
+            initializeScrollSync();
             const eventBus = window.PDFViewerApplication.eventBus;
             eventBus.on("documentloaded", () => {
-                modifiedDocumentReady = true;
-                resetPageResults();
-                scheduleCurrentPage();
+                modifiedDocumentReady = config.diffRole === "modified";
+                if (config.diffRole === "modified") {
+                    resetPageResults();
+                    scheduleCurrentPage();
+                }
+                else {
+                    applyCurrentPage();
+                }
             });
             eventBus.on("pagerendered", (event) => {
-                schedulePage(event.pageNumber);
+                if (config.diffRole === "modified") {
+                    schedulePage(event.pageNumber);
+                }
+                else {
+                    applyPageResult(event.pageNumber);
+                }
             });
             eventBus.on("pagechanging", (event) => {
-                schedulePage(event.pageNumber);
+                clearSelectedChange();
+                if (config.diffRole === "modified") {
+                    schedulePage(event.pageNumber);
+                }
+                else {
+                    applyPageResult(event.pageNumber);
+                }
+                updateStatus();
             });
         });
     }, { once: true });
@@ -64,11 +101,45 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
     }
     function isDiffEnableMessage(value) {
         return isMessage(value, "diff.setEnabled")
-            && value.enabled === true;
+            && value.enabled === true
+            && (value.role === "original"
+                || value.role === "modified");
     }
     function isDiffDisableMessage(value) {
         return isMessage(value, "diff.setEnabled")
             && value.enabled === false;
+    }
+    function isDiffApplyPageMessage(value) {
+        return isMessage(value, "diff.applyPage")
+            && typeof value.pageNumber === "number"
+            && Array.isArray(value.regions);
+    }
+    function isDiffRemovedPageRangeMessage(value) {
+        return isMessage(value, "diff.setRemovedPageRange")
+            && typeof value.fromPage === "number"
+            && typeof value.toPage === "number";
+    }
+    function isDiffNavigateMessage(value) {
+        return isMessage(value, "diff.navigate")
+            && (value.direction === "next"
+                || value.direction === "previous");
+    }
+    function isDiffApplyScrollMessage(value) {
+        if (!isMessage(value, "diff.applyScroll")) {
+            return false;
+        }
+        const message = value;
+        return typeof message.pageNumber === "number"
+            && Number.isSafeInteger(message.pageNumber)
+            && message.pageNumber >= 1
+            && typeof message.pageRatio === "number"
+            && Number.isFinite(message.pageRatio)
+            && message.pageRatio >= 0
+            && message.pageRatio <= 1
+            && typeof message.documentRatio === "number"
+            && Number.isFinite(message.documentRatio)
+            && message.documentRatio >= 0
+            && message.documentRatio <= 1;
     }
     function isMessage(value, type) {
         return typeof value === "object"
@@ -80,20 +151,40 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         pageGeneration += 1;
         modifiedFingerprint = message.fingerprint;
         modifiedDocumentReady = false;
-        resetPageResults();
+        lastSentScrollAnchor = null;
+        if (config.diffRole === "modified" || !enabled) {
+            resetPageResults();
+        }
+        else {
+            clearOverlays();
+        }
         if (message.isEmptyRevision) {
             clearOverlays();
         }
+        updateStatus();
     }
     async function enableDiff(message) {
         const currentComparisonGeneration = ++comparisonGeneration;
         pageGeneration += 1;
         enabled = true;
+        resetPageResults();
+        if (message.role === "original") {
+            if (message.allPagesChanged) {
+                removedPageRange = { fromPage: 1, toPage: Number.MAX_SAFE_INTEGER };
+                applyCurrentPage();
+            }
+            updateStatus();
+            return;
+        }
         originalFingerprint = message.originalFingerprint;
         originalIsEmptyRevision = message.originalIsEmptyRevision;
-        resetPageResults();
+        modifiedIsEmptyRevision = message.modifiedIsEmptyRevision;
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
+            return;
+        }
+        if (modifiedIsEmptyRevision) {
+            updateStatus();
             return;
         }
         if (originalIsEmptyRevision) {
@@ -121,6 +212,14 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
                 return;
             }
             originalDocument = documentProxy;
+            const modifiedPages = window.PDFViewerApplication.pdfDocument?.numPages ?? 0;
+            if (documentProxy.numPages > modifiedPages) {
+                postExtensionMessage({
+                    type: "diff.removedPageRange",
+                    fromPage: modifiedPages + 1,
+                    toPage: documentProxy.numPages
+                });
+            }
             scheduleCurrentPage();
         }
         catch (error) {
@@ -139,8 +238,10 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         comparisonGeneration += 1;
         pageGeneration += 1;
         enabled = false;
+        modifiedIsEmptyRevision = false;
         resetPageResults();
         void disposeOriginalDocument();
+        updateStatus();
     }
     async function disposeOriginalDocument() {
         const loadingTask = originalLoadingTask;
@@ -165,7 +266,10 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         pageResults.clear();
         pendingPages.clear();
         queuedPages.clear();
+        removedPageRange = null;
+        clearSelectedChange();
         clearOverlays();
+        updateStatus();
     }
     function scheduleCurrentPage() {
         const pageNumber = window.PDFViewerApplication.pdfViewer?.currentPageNumber;
@@ -173,15 +277,21 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             schedulePage(pageNumber);
         }
     }
+    function applyCurrentPage() {
+        const pageNumber = window.PDFViewerApplication.pdfViewer?.currentPageNumber;
+        if (typeof pageNumber === "number") {
+            applyPageResult(pageNumber);
+        }
+    }
     function schedulePage(pageNumber) {
         if (!enabled || !modifiedDocumentReady || (!originalDocument && !originalIsEmptyRevision)) {
             return;
         }
         const cached = pageResults.get(pageNumber);
-        if (cached) {
+        if (cached !== undefined) {
             pageResults.delete(pageNumber);
             pageResults.set(pageNumber, cached);
-            applyOverlay(pageNumber, cached);
+            applyPageResult(pageNumber);
             return;
         }
         if (pendingPages.has(pageNumber)) {
@@ -190,6 +300,7 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         const currentGeneration = pageGeneration;
         queuedPages.delete(pageNumber);
         queuedPages.set(pageNumber, currentGeneration);
+        updateStatus();
         while (queuedPages.size > maximumQueuedPages) {
             const oldestPage = queuedPages.keys().next().value;
             if (oldestPage === undefined) {
@@ -232,15 +343,20 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             if (!enabled || pageGeneration !== currentGeneration) {
                 return;
             }
-            rememberPageResult(pageNumber, result.regions);
-            applyOverlay(pageNumber, result.regions);
+            rememberPageResult(pageNumber, result.modifiedRegions);
+            applyPageResult(pageNumber);
+            postExtensionMessage({
+                type: "diff.pageResult",
+                pageNumber,
+                originalRegions: result.originalRegions
+            });
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
                 originalFingerprint,
                 pageNumber,
                 durationMs: elapsedSince(startedAt),
                 strategy: result.strategy,
-                regions: result.regions.length,
+                regions: result.originalRegions.length + result.modifiedRegions.length,
                 changedPixels: result.changedPixels
             });
         }
@@ -263,7 +379,12 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             throw new Error("The modified PDF is not loaded.");
         }
         if (originalIsEmptyRevision || !originalDocument || pageNumber > originalDocument.numPages) {
-            return { regions: [fullPageRegion()], changedPixels: -1, strategy: "page" };
+            return {
+                originalRegions: [],
+                modifiedRegions: [fullPageRegion()],
+                changedPixels: -1,
+                strategy: "page"
+            };
         }
         const [originalPage, modifiedPage] = await Promise.all([
             originalDocument.getPage(pageNumber),
@@ -273,13 +394,18 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         const modifiedViewport = modifiedPage.getViewport({ scale: 1 });
         if (Math.abs(originalViewport.width - modifiedViewport.width) > 0.5
             || Math.abs(originalViewport.height - modifiedViewport.height) > 0.5) {
-            return { regions: [fullPageRegion()], changedPixels: -1, strategy: "page" };
+            return {
+                originalRegions: [fullPageRegion()],
+                modifiedRegions: [fullPageRegion()],
+                changedPixels: -1,
+                strategy: "page"
+            };
         }
         const largestDimension = Math.max(modifiedViewport.width, modifiedViewport.height);
         const scale = Math.min(maxRenderScale, maxRenderDimension / largestDimension);
-        const textRegions = await comparePageText(originalPage, modifiedPage, scale, pageNumber);
-        if (textRegions) {
-            return { regions: textRegions, changedPixels: -1, strategy: "text" };
+        const textResult = await comparePageText(originalPage, modifiedPage, scale, pageNumber);
+        if (textResult) {
+            return textResult;
         }
         const [originalRaster, modifiedRaster] = await Promise.all([
             renderPage(originalPage, scale),
@@ -330,24 +456,7 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
             const modifiedViewport = modifiedPage.getViewport({ scale });
             const originalTokens = collectTextTokens(originalContent.items, originalViewport);
             const modifiedTokens = collectTextTokens(modifiedContent.items, modifiedViewport);
-            if (originalTokens.length === 0
-                || modifiedTokens.length === 0
-                || originalTokens.length > maximumTextTokensPerPage
-                || modifiedTokens.length > maximumTextTokensPerPage
-                || textTokensEqual(originalTokens, modifiedTokens)) {
-                return null;
-            }
-            const matches = findTextTokenMatches(originalTokens, modifiedTokens);
-            if (matches.length / Math.min(originalTokens.length, modifiedTokens.length)
-                < minimumTextMatchRatio) {
-                return null;
-            }
-            let regions = collectChangedTextRegions(originalTokens, modifiedTokens, matches);
-            regions = mergeNearbyRegions(regions);
-            if (regions.length > maximumRegionsPerPage) {
-                regions = [boundingPixelRegion(regions)];
-            }
-            return regions.map(region => toNormalizedRegion(region, modifiedViewport.width, modifiedViewport.height));
+            return compareTextTokens(originalTokens, modifiedTokens, originalViewport.width, originalViewport.height, modifiedViewport.width, modifiedViewport.height);
         }
         catch (error) {
             reportDebug("diffTextFallback", {
@@ -389,63 +498,205 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         }
         return tokens;
     }
-    function textTokensEqual(original, modified) {
-        return original.length === modified.length
-            && original.every((token, index) => token.text === modified[index].text);
+    function applyForwardedPage(message) {
+        if (config.diffRole !== "original") {
+            return;
+        }
+        rememberPageResult(message.pageNumber, message.regions);
+        applyPageResult(message.pageNumber);
     }
-    function findTextTokenMatches(original, modified) {
-        const lengths = Array.from({ length: original.length + 1 }, () => new Uint16Array(modified.length + 1));
-        for (let originalIndex = 1; originalIndex <= original.length; originalIndex += 1) {
-            for (let modifiedIndex = 1; modifiedIndex <= modified.length; modifiedIndex += 1) {
-                lengths[originalIndex][modifiedIndex] = original[originalIndex - 1].text
-                    === modified[modifiedIndex - 1].text
-                    ? lengths[originalIndex - 1][modifiedIndex - 1] + 1
-                    : Math.max(lengths[originalIndex - 1][modifiedIndex], lengths[originalIndex][modifiedIndex - 1]);
-            }
+    function applyRemovedPageRange(message) {
+        if (config.diffRole !== "original") {
+            return;
         }
-        const matches = [];
-        let originalIndex = original.length;
-        let modifiedIndex = modified.length;
-        while (originalIndex > 0 && modifiedIndex > 0) {
-            if (original[originalIndex - 1].text === modified[modifiedIndex - 1].text) {
-                matches.push({ original: originalIndex - 1, modified: modifiedIndex - 1 });
-                originalIndex -= 1;
-                modifiedIndex -= 1;
-            }
-            else if (lengths[originalIndex - 1][modifiedIndex]
-                >= lengths[originalIndex][modifiedIndex - 1]) {
-                originalIndex -= 1;
-            }
-            else {
-                modifiedIndex -= 1;
-            }
-        }
-        return matches.reverse();
+        removedPageRange = {
+            fromPage: message.fromPage,
+            toPage: message.toPage
+        };
+        applyCurrentPage();
     }
-    function collectChangedTextRegions(original, modified, matches) {
-        const regions = [];
-        let originalStart = 0;
-        let modifiedStart = 0;
-        for (let index = 0; index <= matches.length; index += 1) {
-            const match = matches[index];
-            const originalEnd = match?.original ?? original.length;
-            const modifiedEnd = match?.modified ?? modified.length;
-            const changedTokens = modifiedStart < modifiedEnd
-                ? modified.slice(modifiedStart, modifiedEnd)
-                : original.slice(originalStart, originalEnd);
-            regions.push(...changedTokens.map(token => ({
-                left: token.left,
-                top: token.top,
-                right: token.right,
-                bottom: token.bottom,
-                changedPixels: 1
-            })));
-            if (match) {
-                originalStart = match.original + 1;
-                modifiedStart = match.modified + 1;
-            }
+    function applyPageResult(pageNumber) {
+        const regions = regionsForPage(pageNumber);
+        if (regions !== undefined) {
+            applyOverlay(pageNumber, regions);
         }
-        return regions;
+        updateStatus();
+    }
+    function regionsForPage(pageNumber) {
+        if (removedPageRange
+            && pageNumber >= removedPageRange.fromPage
+            && pageNumber <= removedPageRange.toPage) {
+            return [fullPageRegion()];
+        }
+        return pageResults.get(pageNumber);
+    }
+    function navigateChange(direction) {
+        if (!enabled) {
+            return;
+        }
+        const viewer = window.PDFViewerApplication.pdfViewer;
+        const pageNumber = viewer?.currentPageNumber;
+        if (!viewer || typeof pageNumber !== "number") {
+            return;
+        }
+        const regions = regionsForPage(pageNumber);
+        if (!regions || regions.length === 0) {
+            updateStatus();
+            return;
+        }
+        const previousIndex = selectedChange?.pageNumber === pageNumber
+            ? selectedChange.index
+            : direction === "next" ? -1 : 0;
+        const index = direction === "next"
+            ? (previousIndex + 1) % regions.length
+            : (previousIndex - 1 + regions.length) % regions.length;
+        selectedChange = { pageNumber, index };
+        applyOverlay(pageNumber, regions);
+        const pageView = viewer.getPageView(pageNumber - 1);
+        const markers = pageView?.div.querySelectorAll(".academicPdfDiffRegion");
+        const marker = markers?.[index];
+        marker?.classList.add("academicPdfDiffRegion--selected");
+        marker?.scrollIntoView({ block: "center", inline: "center" });
+        updateStatus();
+    }
+    function clearSelectedChange() {
+        selectedChange = null;
+        document.querySelectorAll(".academicPdfDiffRegion--selected")
+            .forEach(marker => marker.classList.remove("academicPdfDiffRegion--selected"));
+    }
+    function initializeStatus() {
+        if (!config.diffRole) {
+            return;
+        }
+        const toolbar = document.getElementById("toolbarViewerLeft");
+        if (!toolbar) {
+            return;
+        }
+        statusElement = document.createElement("span");
+        statusElement.className = `academicPdfDiffStatus academicPdfDiffStatus--${config.diffRole}`;
+        statusElement.setAttribute("role", "status");
+        statusElement.setAttribute("aria-live", "polite");
+        toolbar.appendChild(statusElement);
+        updateStatus();
+    }
+    function updateStatus() {
+        if (!statusElement || !config.diffRole) {
+            return;
+        }
+        statusElement.classList.toggle("academicPdfDiffStatus--enabled", enabled);
+        const label = config.diffLabel
+            ?? (config.diffRole === "original" ? "Original" : "Modified");
+        statusElement.textContent = `${label} · Highlights ${enabled ? "on" : "off"}`;
+        statusElement.title = statusElement.textContent;
+    }
+    function postExtensionMessage(message) {
+        window.dispatchEvent(new CustomEvent("academic-pdf-message", { detail: message }));
+    }
+    function initializeScrollSync() {
+        if (!config.diffRole) {
+            return;
+        }
+        window.PDFViewerApplication.pdfViewer.container.addEventListener("scroll", scheduleScrollSync, { passive: true });
+    }
+    function scheduleScrollSync() {
+        if (applyingRemoteScroll || scrollSyncFrame !== null) {
+            return;
+        }
+        scrollSyncFrame = window.requestAnimationFrame(() => {
+            scrollSyncFrame = null;
+            if (applyingRemoteScroll) {
+                return;
+            }
+            const anchor = readScrollAnchor();
+            if (!anchor || isSameScrollAnchor(anchor, lastSentScrollAnchor)) {
+                return;
+            }
+            lastSentScrollAnchor = anchor;
+            postExtensionMessage({ type: "diff.scroll", ...anchor });
+        });
+    }
+    function readScrollAnchor() {
+        const viewer = window.PDFViewerApplication.pdfViewer;
+        const pageCount = viewer.pagesCount;
+        if (pageCount < 1) {
+            return null;
+        }
+        const scrollTop = viewer.container.scrollTop;
+        let pageNumber = Math.min(Math.max(viewer.currentPageNumber, 1), pageCount);
+        let pageView = viewer.getPageView(pageNumber - 1);
+        if (!pageView) {
+            return null;
+        }
+        while (pageNumber > 1 && pageView.div.offsetTop > scrollTop + 1) {
+            const previousPage = viewer.getPageView(pageNumber - 2);
+            if (!previousPage) {
+                break;
+            }
+            pageNumber -= 1;
+            pageView = previousPage;
+        }
+        while (pageNumber < pageCount) {
+            const nextPage = viewer.getPageView(pageNumber);
+            if (!nextPage || nextPage.div.offsetTop > scrollTop + 1) {
+                break;
+            }
+            pageNumber += 1;
+            pageView = nextPage;
+        }
+        const pageHeight = pageView.div.offsetHeight;
+        if (pageHeight < 1) {
+            return null;
+        }
+        return {
+            pageNumber,
+            pageRatio: clampUnit((scrollTop - pageView.div.offsetTop) / pageHeight),
+            documentRatio: clampUnit(scrollTop / Math.max(1, viewer.container.scrollHeight - viewer.container.clientHeight))
+        };
+    }
+    function isSameScrollAnchor(first, second) {
+        return second !== null
+            && first.pageNumber === second.pageNumber
+            && Math.abs(first.pageRatio - second.pageRatio) < 0.0005
+            && Math.abs(first.documentRatio - second.documentRatio) < 0.0005;
+    }
+    function applySynchronizedScroll(message) {
+        if (!config.diffRole) {
+            return;
+        }
+        const viewer = window.PDFViewerApplication.pdfViewer;
+        if (viewer.pagesCount < 1) {
+            return;
+        }
+        const container = viewer.container;
+        const maximumScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        let targetScrollTop;
+        if (message.pageNumber > viewer.pagesCount) {
+            targetScrollTop = message.documentRatio * maximumScrollTop;
+        }
+        else {
+            const pageView = viewer.getPageView(message.pageNumber - 1);
+            if (!pageView || pageView.div.offsetHeight < 1) {
+                return;
+            }
+            targetScrollTop = Math.min(maximumScrollTop, Math.max(0, pageView.div.offsetTop + message.pageRatio * pageView.div.offsetHeight));
+        }
+        if (Math.abs(container.scrollTop - targetScrollTop) < 0.5) {
+            return;
+        }
+        applyingRemoteScroll = true;
+        if (remoteScrollReleaseFrame !== null) {
+            window.cancelAnimationFrame(remoteScrollReleaseFrame);
+        }
+        container.scrollTop = targetScrollTop;
+        remoteScrollReleaseFrame = window.requestAnimationFrame(() => {
+            remoteScrollReleaseFrame = window.requestAnimationFrame(() => {
+                applyingRemoteScroll = false;
+                remoteScrollReleaseFrame = null;
+            });
+        });
+    }
+    function clampUnit(value) {
+        return Math.min(1, Math.max(0, value));
     }
     function applyOverlay(pageNumber, regions) {
         const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
@@ -460,9 +711,12 @@ import { boundingPixelRegion, compareRasters, fullPageRegion, maximumRegionsPerP
         const layer = document.createElement("div");
         layer.className = "academicPdfDiffLayer";
         layer.setAttribute("aria-hidden", "true");
-        for (const region of regions) {
+        for (const [index, region] of regions.entries()) {
             const marker = document.createElement("div");
-            marker.className = "academicPdfDiffRegion";
+            marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
+            if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
+                marker.classList.add("academicPdfDiffRegion--selected");
+            }
             marker.style.left = `${region.left * 100}%`;
             marker.style.top = `${region.top * 100}%`;
             marker.style.width = `${region.width * 100}%`;

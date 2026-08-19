@@ -3,18 +3,34 @@ export type ExtensionToWebviewMessage =
     | { type: 'navigation.forward' }
     | { type: 'document.load'; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
     | { type: 'diff.setEnabled'; enabled: false }
+    | { type: 'diff.setEnabled'; enabled: true; role: 'original'; allPagesChanged: boolean }
     | {
         type: 'diff.setEnabled';
         enabled: true;
+        role: 'modified';
         originalData: ArrayBuffer;
         originalFingerprint: string;
         originalIsEmptyRevision: boolean;
+        modifiedIsEmptyRevision: boolean;
     }
+    | { type: 'diff.applyPage'; pageNumber: number; regions: PdfDiffRegion[] }
+    | { type: 'diff.setRemovedPageRange'; fromPage: number; toPage: number }
+    | { type: 'diff.applyScroll'; pageNumber: number; pageRatio: number; documentRatio: number }
+    | { type: 'diff.navigate'; direction: DiffNavigationDirection }
     | {
         type: 'linkPreview.configure';
         enabled: boolean;
         resolutionScale: number;
     };
+
+export interface PdfDiffRegion {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
+export type DiffNavigationDirection = 'next' | 'previous';
 
 export const DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE = 2;
 export const MIN_LINK_PREVIEW_RESOLUTION_SCALE = 1;
@@ -54,6 +70,9 @@ export type WebviewToExtensionMessage =
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
     | { type: 'workbench.showCommands' }
     | { type: 'webview.ready' }
+    | { type: 'diff.pageResult'; pageNumber: number; originalRegions: PdfDiffRegion[] }
+    | { type: 'diff.removedPageRange'; fromPage: number; toPage: number }
+    | { type: 'diff.scroll'; pageNumber: number; pageRatio: number; documentRatio: number }
     | {
         type: 'pdf.debug';
         event: PdfDebugEvent;
@@ -88,6 +107,19 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'workbench.showCommands':
         case 'webview.ready':
             return true;
+        case 'diff.pageResult':
+            return isPageNumber(value.pageNumber)
+                && Array.isArray(value.originalRegions)
+                && value.originalRegions.length <= 200
+                && value.originalRegions.every(isPdfDiffRegion);
+        case 'diff.removedPageRange':
+            return isPageNumber(value.fromPage)
+                && isPageNumber(value.toPage)
+                && value.fromPage <= value.toPage;
+        case 'diff.scroll':
+            return isPageNumber(value.pageNumber)
+                && isNormalizedNumber(value.pageRatio)
+                && isNormalizedNumber(value.documentRatio);
         case 'pdf.debug':
             return typeof value.event === 'string'
                 && pdfDebugEvents.has(value.event)
@@ -113,6 +145,31 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         default:
             return false;
     }
+}
+
+function isPageNumber(value: unknown): value is number {
+    return typeof value === 'number'
+        && Number.isSafeInteger(value)
+        && value >= 1;
+}
+
+function isPdfDiffRegion(value: unknown): value is PdfDiffRegion {
+    if (!isRecord(value)) {
+        return false;
+    }
+    return isNormalizedNumber(value.left)
+        && isNormalizedNumber(value.top)
+        && isNormalizedNumber(value.width)
+        && isNormalizedNumber(value.height)
+        && value.left + value.width <= 1.000001
+        && value.top + value.height <= 1.000001;
+}
+
+function isNormalizedNumber(value: unknown): value is number {
+    return typeof value === 'number'
+        && Number.isFinite(value)
+        && value >= 0
+        && value <= 1;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

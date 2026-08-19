@@ -6,7 +6,7 @@ Academic PDF Viewer brings paper reading and PDF revision review into VS Code. I
 >
 > - **Read:** Search, zoom, navigate, and select text with the familiar PDF.js viewer.
 > - **Preview:** Hold `Ctrl` over a linked citation, figure, equation, or section to preview its destination.
-> - **Compare (Preview):** Open a changed or staged PDF from Source Control to view both Git revisions side by side, with optional changed-region highlights.
+> - **Compare (Preview):** Open a changed or staged PDF from Source Control to view both Git revisions side by side, with semantic highlights on both revisions.
 
 <p align="center">
   <img
@@ -33,7 +33,7 @@ Academic PDF Viewer brings paper reading and PDF revision review into VS Code. I
 
 - Opens PDFs as the default custom editor in VS Code.
 - Uses the full PDF.js viewer interface for search, zoom, outline, page navigation, text selection, and annotation layers.
-- Opens changed and staged PDFs as side-by-side Git diffs and can highlight changed regions in the modified revision (Preview).
+- Opens changed and staged PDFs as side-by-side Git diffs, marking removed regions on the original and added or replaced regions on the modified revision while synchronizing vertical reading position (Preview).
 - Previews linked citations, figures, equations, and sections with a cropped destination image and nearby text.
 - Keeps native PDF links clickable for direct navigation.
 - Maintains an internal PDF navigation history for `Alt+Left` and `Alt+Right`.
@@ -53,9 +53,10 @@ If another editor is selected, right-click the PDF tab, choose `Reopen Editor Wi
 | Navigate forward | `Alt+Right` | Moves forward after navigating back. |
 | Zoom around the pointer | `Ctrl/Cmd+Wheel` | Preserves the reading position around the pointer. |
 | Open the VS Code command palette | `Ctrl/Cmd+Shift+P` | Overrides PDF.js printing only while the PDF editor is active. |
-| `PDF: Reload` | None | Also available from the editor title bar. |
+| `PDF: Reload` | None | Also available from the editor title bar. In a PDF diff, it refreshes both revisions. |
 | `PDF: Toggle Link Preview` | None | Enables or disables `Ctrl`-hover previews. |
 | `PDF: Toggle Diff Highlights` | `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS) | Available while a PDF diff editor is active. |
+| `PDF Diff: Previous/Next Change on Page` | None | Moves between highlighted regions on the active revision's current page. |
 
 Commands without a default shortcut can be assigned from VS Code's Keyboard Shortcuts editor.
 
@@ -86,7 +87,7 @@ VS Code Insiders is the officially supported environment for Proposed API extens
   >
 </p>
 
-*Git-aware PDF comparison showing the tracked revision on the left, the working-tree revision on the right, and optional changed-region highlights.*
+*Git-aware PDF comparison showing the tracked revision on the left, the working-tree revision on the right, and optional semantic highlights on both revisions.*
 
 ### Install the Preview VSIX
 
@@ -132,7 +133,12 @@ When testing with a compatible VS Code Stable build, replace `code-insiders` wit
 1. Open a folder containing a Git repository.
 2. Modify or stage a tracked PDF.
 3. Select the PDF entry in the Source Control view. VS Code opens the relevant Git revisions side by side with the original revision on the left and the modified revision on the right.
-4. Press `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS), or run `PDF: Toggle Diff Highlights`, to show or hide changed-region markers on the modified PDF.
+4. Press `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS), run `PDF: Toggle Diff Highlights`, or use the diff action in the editor title bar to show or hide changed-region markers.
+5. Removed content is marked on the original revision; added or replaced content is marked on the modified revision. Use the title-bar arrows to move between changes on the current page.
+
+Each side shows its revision role and whether highlights are on or off. When VS Code's Git resource identifies the revision, the labels distinguish `HEAD`, `Index`, and `Working Tree`. Vertical scrolling is synchronized by page and relative position; when one revision lacks the source page, synchronization falls back to whole-document progress. Zoom remains independent on each side.
+
+PDFs are not reloaded automatically. Use `PDF: Reload` when the underlying file or Git revision changes; in a PDF diff, the command refreshes both revisions and recomputes highlights when they were already enabled.
 
 The revision pair follows the Source Control entry selected by VS Code. PDFs that are not being compared continue to open as normal PDF editors.
 
@@ -147,8 +153,8 @@ The `PDF: Toggle Link Preview` command updates this setting for the current VS C
 
 ## Requirements
 
-- Stable builds without Git Diff require VS Code 1.125 or later.
-- GitHub Preview VSIX builds require VS Code Insiders (recommended) or a compatible Stable build launched with Proposed API access enabled for this extension.
+- The current Preview VSIX requires VS Code 1.133 or later.
+- Git PDF diffs require VS Code Insiders (recommended) or a compatible Stable build launched with Proposed API access enabled for this extension.
 - A PDF with embedded internal link annotations for citation and destination previews.
 - A Git repository and a compatible Proposed API-enabled VS Code build for Git PDF comparison.
 - No external service or network connection is required to open local PDFs after installation.
@@ -156,6 +162,7 @@ The `PDF: Toggle Link Preview` command updates this setting for the current VS C
 ## Known Limitations
 
 - Git PDF comparison depends on the unstable `customEditorDiffs` Proposed API and can require changes after a VS Code update.
+- Previous/next diff navigation currently operates on highlighted regions on the active page and does not scan the full PDF.
 - Citation detection currently depends on native PDF link annotations.
 - Preview quality depends on the PDF's embedded link destinations and text layer.
 - GROBID-based citation extraction is not included in this release.

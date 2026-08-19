@@ -44,3 +44,68 @@ body.academicPdfDocumentUnavailable #academicPdfDocumentState {
     background: rgba(255, 166, 0, 0.16);
     box-shadow: 0 0 0 1px rgba(255, 166, 0, 0.18);
 }
+
+.academicPdfDiffRegion--original {
+    border-color: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c);
+    background: var(--vscode-diffEditor-removedTextBackground, rgba(255, 0, 0, 0.16));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c) 24%, transparent);
+}
+
+.academicPdfDiffRegion--modified {
+    border-color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
+    background: var(--vscode-diffEditor-insertedTextBackground, rgba(0, 180, 0, 0.16));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #73c991) 24%, transparent);
+}
+
+.academicPdfDiffRegion--selected {
+    outline: 2px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 2px;
+}
+
+.academicPdfDiffStatus {
+    --academic-pdf-diff-accent: var(--vscode-descriptionForeground, #8c8c8c);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 190px;
+    margin-inline-start: 4px;
+    padding: 2px 7px;
+    overflow: hidden;
+    color: var(--vscode-foreground, #1f1f1f);
+    background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.12));
+    border: 1px solid var(--vscode-contrastBorder, var(--vscode-widget-border, rgba(127, 127, 127, 0.35)));
+    border-radius: 5px;
+    font-family: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: 11px;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.academicPdfDiffStatus::before {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    box-sizing: border-box;
+    border: 1.5px solid var(--academic-pdf-diff-accent);
+    border-radius: 50%;
+    content: "";
+}
+
+.academicPdfDiffStatus--enabled::before {
+    background: var(--academic-pdf-diff-accent);
+}
+
+body.vscode-dark .academicPdfDiffStatus,
+body.vscode-high-contrast .academicPdfDiffStatus {
+    color: #ffffff;
+}
+
+.academicPdfDiffStatus--original {
+    --academic-pdf-diff-accent: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c);
+}
+
+.academicPdfDiffStatus--modified {
+    --academic-pdf-diff-accent: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
+}

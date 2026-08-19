@@ -8,6 +8,9 @@
     window.addEventListener("academic-pdf-debug", event => {
         vscode.postMessage(event.detail);
     });
+    window.addEventListener("academic-pdf-message", event => {
+        vscode.postMessage(event.detail);
+    });
     window.addEventListener("keydown", handleWorkbenchShortcut, true);
     const pressedNavigationKeys = {
         back: false,

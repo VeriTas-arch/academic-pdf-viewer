@@ -15,6 +15,22 @@ test('accepts supported webview messages', () => {
         direction: 'back',
     }), true);
     assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.pageResult',
+        pageNumber: 2,
+        originalRegions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
+    }), true);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.removedPageRange',
+        fromPage: 3,
+        toPage: 5,
+    }), true);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.scroll',
+        pageNumber: 2,
+        pageRatio: 0.45,
+        documentRatio: 0.4,
+    }), true);
+    assert.equal(isWebviewToExtensionMessage({
         type: 'pdf.debug',
         event: 'windowError',
         error: 'Example error',
@@ -44,6 +60,39 @@ test('rejects malformed and unsupported webview messages', () => {
         type: 'pdf.debug',
         event: 'failed',
         error: 'x'.repeat(8 * 1024 + 1),
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.pageResult',
+        pageNumber: 0,
+        originalRegions: [],
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.pageResult',
+        pageNumber: 1,
+        originalRegions: [{ left: 0.8, top: 0, width: 0.3, height: 0.1 }],
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.removedPageRange',
+        fromPage: 5,
+        toPage: 3,
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.scroll',
+        pageNumber: 2,
+        pageRatio: 1.1,
+        documentRatio: 0.4,
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.scroll',
+        pageNumber: 0,
+        pageRatio: 0.5,
+        documentRatio: 0.4,
+    }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'diff.scroll',
+        pageNumber: 2,
+        pageRatio: 0.5,
+        documentRatio: Number.NaN,
     }), false);
 });
 

@@ -2,6 +2,27 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.1.0] - 2026-08-19
+
+### Added
+
+- Added semantic PDF diff highlights on both revisions: removed content is marked on the original, while added or replaced content is marked on the modified revision.
+- Added stable revision and highlight-state badges inside PDF diff viewers.
+- Added diff-editor title actions for showing or hiding highlights and navigating changed regions on the current page.
+- Added bidirectional vertical scroll synchronization using page-relative anchors, with whole-document progress fallback when one revision lacks the corresponding page.
+
+### Changed
+
+- Computed text differences as separate original and modified regions, fixing deletion-only markers that previously used original coordinates on the modified page.
+- Reused each page comparison result across both webviews and preserved bounded page caches and comparison concurrency.
+- Raised the minimum VS Code version to 1.133 for the current `customEditorDiffs` Preview API contract.
+
+### Fixed
+
+- Marked new, deleted, dimension-changed, and trailing removed PDF pages on the revision where the change actually occurs.
+- Reloaded both revisions together in a PDF diff so manually refreshed highlights cannot compare a new side against a stale baseline.
+- Refined PDF diff status labels with neutral toolbar styling, white dark-theme text, hollow or solid role indicators, and fixed on/off wording that does not flicker while pages are compared.
+
 ## [1.0.7] - 2026-08-19
 
 ### Added

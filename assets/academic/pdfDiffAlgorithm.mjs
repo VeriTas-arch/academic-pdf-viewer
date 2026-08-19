@@ -6,9 +6,11 @@ export const maximumRegionsPerPage = 200;
 const horizontalMergeDistance = 6;
 const verticalMergeDistance = 3;
 const regionPadding = 2;
+const minimumTextMatchRatio = 0.5;
+const maximumTextTokensPerPage = 1500;
 export function compareRasters(original, modified) {
     if (original.width !== modified.width || original.height !== modified.height) {
-        return { regions: [fullPageRegion()], changedPixels: -1, strategy: "page" };
+        return symmetricResult([fullPageRegion()], -1, "page");
     }
     const components = [];
     let previousRuns = [];
@@ -19,13 +21,13 @@ export function compareRasters(original, modified) {
         changedPixels += currentRuns.reduce((sum, run) => sum + run.changedPixels, 0);
         totalRuns += currentRuns.length;
         if (totalRuns > maximumRunsPerPage) {
-            return { regions: [fullPageRegion()], changedPixels: -1, strategy: "page" };
+            return symmetricResult([fullPageRegion()], -1, "page");
         }
         connectRuns(currentRuns, previousRuns, y, components);
         previousRuns = currentRuns;
     }
     if (changedPixels === 0) {
-        return { regions: [], changedPixels, strategy: "raster" };
+        return symmetricResult([], changedPixels, "raster");
     }
     let pixelRegions = components
         .filter((component, index) => findComponent(components, index) === index
@@ -38,7 +40,7 @@ export function compareRasters(original, modified) {
         changedPixels: component.changedPixels
     }));
     if (pixelRegions.length === 0) {
-        return { regions: [], changedPixels, strategy: "raster" };
+        return symmetricResult([], changedPixels, "raster");
     }
     pixelRegions = pixelRegions.length <= maximumComponentsToMerge
         ? mergeNearbyRegions(pixelRegions)
@@ -46,11 +48,105 @@ export function compareRasters(original, modified) {
     if (pixelRegions.length > maximumRegionsPerPage) {
         pixelRegions = [boundingPixelRegion(pixelRegions)];
     }
+    const regions = pixelRegions.map(region => toNormalizedRegion(region, modified.width, modified.height));
+    return symmetricResult(regions, changedPixels, "raster");
+}
+export function compareTextTokens(original, modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight) {
+    if (original.length > maximumTextTokensPerPage
+        || modified.length > maximumTextTokensPerPage
+        || original.length === 0 && modified.length === 0
+        || textTokensEqual(original, modified)) {
+        return null;
+    }
+    if (original.length === 0) {
+        return textResult([], modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
+    }
+    if (modified.length === 0) {
+        return textResult(original, [], originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
+    }
+    const matches = findTextTokenMatches(original, modified);
+    if (matches.length / Math.min(original.length, modified.length) < minimumTextMatchRatio) {
+        return null;
+    }
+    const changed = collectChangedTextRegions(original, modified, matches);
+    return textResult(changed.original, changed.modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
+}
+function textResult(original, modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight) {
     return {
-        regions: pixelRegions.map(region => toNormalizedRegion(region, modified.width, modified.height)),
-        changedPixels,
-        strategy: "raster"
+        originalRegions: normalizeTextRegions(original, originalPageWidth, originalPageHeight),
+        modifiedRegions: normalizeTextRegions(modified, modifiedPageWidth, modifiedPageHeight),
+        changedPixels: -1,
+        strategy: "text"
     };
+}
+function symmetricResult(regions, changedPixels, strategy) {
+    return {
+        originalRegions: regions,
+        modifiedRegions: regions,
+        changedPixels,
+        strategy
+    };
+}
+function textTokensEqual(original, modified) {
+    return original.length === modified.length
+        && original.every((token, index) => token.text === modified[index].text);
+}
+function findTextTokenMatches(original, modified) {
+    const lengths = Array.from({ length: original.length + 1 }, () => new Uint16Array(modified.length + 1));
+    for (let originalIndex = 1; originalIndex <= original.length; originalIndex += 1) {
+        for (let modifiedIndex = 1; modifiedIndex <= modified.length; modifiedIndex += 1) {
+            lengths[originalIndex][modifiedIndex] = original[originalIndex - 1].text
+                === modified[modifiedIndex - 1].text
+                ? lengths[originalIndex - 1][modifiedIndex - 1] + 1
+                : Math.max(lengths[originalIndex - 1][modifiedIndex], lengths[originalIndex][modifiedIndex - 1]);
+        }
+    }
+    const matches = [];
+    let originalIndex = original.length;
+    let modifiedIndex = modified.length;
+    while (originalIndex > 0 && modifiedIndex > 0) {
+        if (original[originalIndex - 1].text === modified[modifiedIndex - 1].text) {
+            matches.push({ original: originalIndex - 1, modified: modifiedIndex - 1 });
+            originalIndex -= 1;
+            modifiedIndex -= 1;
+        }
+        else if (lengths[originalIndex - 1][modifiedIndex]
+            >= lengths[originalIndex][modifiedIndex - 1]) {
+            originalIndex -= 1;
+        }
+        else {
+            modifiedIndex -= 1;
+        }
+    }
+    return matches.reverse();
+}
+function collectChangedTextRegions(original, modified, matches) {
+    const originalRegions = [];
+    const modifiedRegions = [];
+    let originalStart = 0;
+    let modifiedStart = 0;
+    for (let index = 0; index <= matches.length; index += 1) {
+        const match = matches[index];
+        const originalEnd = match?.original ?? original.length;
+        const modifiedEnd = match?.modified ?? modified.length;
+        originalRegions.push(...original.slice(originalStart, originalEnd));
+        modifiedRegions.push(...modified.slice(modifiedStart, modifiedEnd));
+        if (match) {
+            originalStart = match.original + 1;
+            modifiedStart = match.modified + 1;
+        }
+    }
+    return { original: originalRegions, modified: modifiedRegions };
+}
+function normalizeTextRegions(regions, pageWidth, pageHeight) {
+    if (regions.length === 0) {
+        return [];
+    }
+    let merged = mergeNearbyRegions(regions);
+    if (merged.length > maximumRegionsPerPage) {
+        merged = [boundingPixelRegion(merged)];
+    }
+    return merged.map(region => toNormalizedRegion(region, pageWidth, pageHeight));
 }
 export function mergeNearbyRegions(regions) {
     const merged = [];

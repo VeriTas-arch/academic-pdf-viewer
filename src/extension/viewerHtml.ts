@@ -5,6 +5,8 @@ const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.
 
 interface ViewerHtmlOptions {
     debug: boolean;
+    diffRole?: 'original' | 'modified';
+    diffLabel?: string;
     linkPreviewEnabled: boolean;
     linkPreviewResolutionScale: number;
 }
@@ -56,6 +58,8 @@ export function renderViewerHtml(
         standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
         wasmUrl: `${libUri('web', 'wasm')}/`,
         workerSrc: libUri('build', 'pdf.worker.mjs'),
+        diffRole: options.diffRole,
+        diffLabel: options.diffLabel,
         linkPreviewEnabled: options.linkPreviewEnabled,
         linkPreviewResolutionScale: options.linkPreviewResolutionScale,
     };

@@ -5,6 +5,7 @@ AGENTS.md
 .vscode-test/**
 node_modules/**
 dist/**
+tmp/**
 ref/**
 test/**
 manual-tests/**
