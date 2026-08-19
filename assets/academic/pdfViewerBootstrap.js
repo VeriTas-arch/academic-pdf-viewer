@@ -74,6 +74,7 @@
             && typeof message.preserveView === "boolean";
     }
     const config = loadConfig();
+    const pdfjsAdapter = window.academicPdfJsAdapter;
     const reportDebug = (event, fields = {}) => {
         if (!config.debug) {
             return;
@@ -132,7 +133,10 @@
         // Cross-origin embedding dispatches the event on this document instead.
     }
     window.addEventListener("load", async () => {
-        const application = window.PDFViewerApplication;
+        const application = pdfjsAdapter.getApplication();
+        if (!application) {
+            throw new Error("PDF.js viewer application is unavailable.");
+        }
         const initializedAt = performance.now();
         await workerSourceReady;
         if (!configureViewerOptions(window, config)) {
@@ -193,9 +197,7 @@
             showDocumentState(null);
             const oldLoad = application.load;
             application.load = function (pdfDocument) {
-                if (pdfDocument?._pdfInfo) {
-                    pdfDocument._pdfInfo.fingerprints = [fingerprint];
-                }
+                pdfjsAdapter.setDocumentFingerprint(pdfDocument, fingerprint);
                 return oldLoad.call(this, pdfDocument);
             };
             const preservedState = message.preserveView ? captureViewerState(application) : null;

@@ -18,6 +18,7 @@
     const MAX_PREVIEW_CACHE_ENTRIES = 16;
     const MAX_DOCUMENT_CACHE_ENTRIES = 64;
     const WHEEL_ZOOM_SUPPRESS_HOVER_MS = 260;
+    const pdfjsAdapter = window.academicPdfJsAdapter;
     class HoverDelayer {
         _openTimer;
         constructor() {
@@ -248,7 +249,7 @@
             if (!this._enabled) {
                 return;
             }
-            for (const pageView of getPdfViewerPages(this._app.pdfViewer)) {
+            for (const pageView of pdfjsAdapter.getPageViews(this._app.pdfViewer)) {
                 if (pageView && pageView.renderingState === 3) {
                     this._renderPage(pageView.id);
                 }
@@ -812,9 +813,6 @@
     function imagePreviewKey(destination) {
         return `${destination.pageNumber}:${Math.round(destination.pdfX || 0)}:${Math.round(destination.pdfY || 0)}`;
     }
-    function getPdfViewerPages(pdfViewer) {
-        return Array.isArray(pdfViewer?._pages) ? pdfViewer._pages : [];
-    }
     function getCachedPageNumber(pdfDocument, destRef) {
         return typeof pdfDocument?.cachedPageNumber === "function"
             ? pdfDocument.cachedPageNumber(destRef)
@@ -1008,7 +1006,7 @@
         return visibleWidth * visibleHeight - overflow * 10000;
     }
     async function initialize() {
-        const app = window.PDFViewerApplication;
+        const app = pdfjsAdapter.getApplication();
         if (!app) {
             return;
         }
@@ -1018,7 +1016,7 @@
     }
     let initializationStarted = false;
     function startInitialization() {
-        if (initializationStarted || !window.PDFViewerApplication) {
+        if (initializationStarted || !pdfjsAdapter.getApplication()) {
             return;
         }
         initializationStarted = true;

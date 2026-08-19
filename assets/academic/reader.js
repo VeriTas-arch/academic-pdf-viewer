@@ -2,6 +2,7 @@
 "use strict";
 (function () {
     const vscode = acquireVsCodeApi();
+    const pdfjsAdapter = window.academicPdfJsAdapter;
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
@@ -22,6 +23,7 @@
     let pendingWheelZoomDelta = 0;
     let pendingWheelZoomPoint = null;
     let pendingWheelZoomAnimationFrame = null;
+    const patchedLinkServices = new WeakSet();
     class NavigationHistory {
         _onNavigate;
         _backStack;
@@ -98,11 +100,10 @@
             && a.pdfTop === b.pdfTop;
     }
     function getViewer() {
-        return window.PDFViewerApplication && window.PDFViewerApplication.pdfViewer;
+        return pdfjsAdapter.getViewer();
     }
     function getContainer() {
-        const viewer = getViewer();
-        return viewer && viewer.container || document.getElementById("viewerContainer");
+        return pdfjsAdapter.getViewerContainer();
     }
     function captureLocation() {
         const viewer = getViewer();
@@ -110,7 +111,7 @@
         if (!viewer || !container) {
             return null;
         }
-        const pdfLocation = getPdfLocation(viewer);
+        const pdfLocation = pdfjsAdapter.getPdfLocation(viewer);
         return normalizeLocation({
             pageNumber: viewer.currentPageNumber,
             scrollTop: container.scrollTop,
@@ -127,7 +128,7 @@
             return;
         }
         restoring = true;
-        const app = window.PDFViewerApplication;
+        const app = pdfjsAdapter.getApplication();
         const pdfLeft = typeof location.pdfLeft === "number" && Number.isFinite(location.pdfLeft) ? location.pdfLeft : 0;
         const pdfTop = typeof location.pdfTop === "number" && Number.isFinite(location.pdfTop) ? location.pdfTop : 0;
         if (canRestoreWithPdfDestination(location, viewer)) {
@@ -184,7 +185,7 @@
     }
     function patchExplicitNavigation(app) {
         const linkService = app.pdfLinkService;
-        if (linkService && !isAcademicHistoryPatched(linkService)) {
+        if (linkService && !patchedLinkServices.has(linkService)) {
             const goToDestination = linkService.goToDestination.bind(linkService);
             linkService.goToDestination = function (...args) {
                 recordDeparture();
@@ -200,19 +201,14 @@
                 recordDeparture();
                 return setHash(...args);
             };
-            markAcademicHistoryPatched(linkService);
+            patchedLinkServices.add(linkService);
         }
         const viewer = app.pdfViewer;
-        const setCurrentPageNumber = getSetCurrentPageNumber(viewer);
-        if (viewer && !isAcademicHistoryPatched(viewer) && setCurrentPageNumber) {
-            viewer._setCurrentPageNumber = function (pageNumber, resetCurrentPageView) {
-                if (resetCurrentPageView && pageNumber !== viewer.currentPageNumber) {
-                    recordDeparture();
-                }
-                return setCurrentPageNumber(pageNumber, resetCurrentPageView);
-            };
-            markAcademicHistoryPatched(viewer);
-        }
+        pdfjsAdapter.interceptPageNumberChanges(viewer, (pageNumber, resetCurrentPageView) => {
+            if (resetCurrentPageView && pageNumber !== viewer.currentPageNumber) {
+                recordDeparture();
+            }
+        });
     }
     function handleNavigationMessage(data, allowPressedKey = false) {
         if (!history) {
@@ -294,7 +290,7 @@
         });
     }
     function handleWheel(event) {
-        const app = window.PDFViewerApplication;
+        const app = pdfjsAdapter.getApplication();
         const viewer = app && app.pdfViewer;
         if (!viewer || viewer.isInPresentationMode) {
             return;
@@ -376,29 +372,10 @@
         container.scrollLeft += dx * scaleCorrectionFactor;
         container.scrollTop += dy * scaleCorrectionFactor;
     }
-    function getPdfLocation(viewer) {
-        const location = viewer._location;
-        return {
-            left: typeof location?.left === "number" ? location.left : null,
-            top: typeof location?.top === "number" ? location.top : null
-        };
-    }
-    function getSetCurrentPageNumber(viewer) {
-        if (!viewer || typeof viewer._setCurrentPageNumber !== "function") {
-            return null;
-        }
-        return viewer._setCurrentPageNumber.bind(viewer);
-    }
-    function isAcademicHistoryPatched(target) {
-        return Boolean(target.__academicHistoryPatched);
-    }
-    function markAcademicHistoryPatched(target) {
-        target.__academicHistoryPatched = true;
-    }
     let history = null;
     let restoring = false;
     async function initialize() {
-        const app = window.PDFViewerApplication;
+        const app = pdfjsAdapter.getApplication();
         if (!app) {
             return;
         }
@@ -418,7 +395,7 @@
     }
     let initializationStarted = false;
     function startInitialization() {
-        if (initializationStarted || !window.PDFViewerApplication) {
+        if (initializationStarted || !pdfjsAdapter.getApplication()) {
             return;
         }
         initializationStarted = true;

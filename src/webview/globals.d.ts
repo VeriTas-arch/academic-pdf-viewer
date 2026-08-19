@@ -1,7 +1,3 @@
-interface PdfJsPatchable {
-    __academicHistoryPatched?: boolean;
-}
-
 interface PdfJsEventBus {
     on<T>(name: string, listener: (event: T) => void): void;
     off<T>(name: string, listener: (event: T) => void): void;
@@ -52,9 +48,6 @@ interface PdfJsPage {
 
 interface PdfJsDocument {
     numPages: number;
-    _pdfInfo?: {
-        fingerprints: string[];
-    };
     cachedPageNumber?(destinationReference: object): number | null;
     getDestination(name: string): Promise<unknown[] | null>;
     getPage(pageNumber: number): Promise<PdfJsPage>;
@@ -68,7 +61,7 @@ interface PdfJsPageView {
     viewport: PdfJsViewport;
 }
 
-interface PdfJsViewer extends PdfJsPatchable {
+interface PdfJsViewer {
     container: HTMLElement;
     currentPageNumber: number;
     currentScale: number;
@@ -76,12 +69,6 @@ interface PdfJsViewer extends PdfJsPatchable {
     isInPresentationMode: boolean;
     pagesCount: number;
     pagesPromise: Promise<void>;
-    _location?: {
-        left?: number;
-        top?: number;
-    };
-    _pages?: PdfJsPageView[];
-    _setCurrentPageNumber?(pageNumber: number, resetCurrentPageView: boolean): unknown;
     getPageView(index: number): PdfJsPageView | undefined;
     scrollPageIntoView(options: {
         pageNumber: number;
@@ -91,7 +78,7 @@ interface PdfJsViewer extends PdfJsPatchable {
     }): void;
 }
 
-interface PdfJsLinkService extends PdfJsPatchable {
+interface PdfJsLinkService {
     goToDestination(...args: unknown[]): unknown;
     goToPage(...args: unknown[]): unknown;
     setHash(...args: unknown[]): unknown;
@@ -120,7 +107,27 @@ interface PdfJsViewerOptions {
     set(name: string, value: unknown): void;
 }
 
+interface PdfJsLocation {
+    left: number | null;
+    top: number | null;
+}
+
+interface AcademicPdfJsAdapter {
+    getApplication(): PdfJsApplication | null;
+    getViewer(): PdfJsViewer | null;
+    getViewerContainer(viewer?: PdfJsViewer | null): HTMLElement | null;
+    getToolbarHost(): HTMLElement | null;
+    getPageViews(viewer: PdfJsViewer): PdfJsPageView[];
+    getPdfLocation(viewer: PdfJsViewer): PdfJsLocation;
+    setDocumentFingerprint(document: PdfJsDocument, fingerprint: string): boolean;
+    interceptPageNumberChanges(
+        viewer: PdfJsViewer,
+        beforeChange: (pageNumber: number, resetCurrentPageView: boolean) => void
+    ): boolean;
+}
+
 interface Window {
+    academicPdfJsAdapter: AcademicPdfJsAdapter;
     PDFViewerApplication: PdfJsApplication;
     PDFViewerApplicationOptions?: PdfJsViewerOptions;
 }

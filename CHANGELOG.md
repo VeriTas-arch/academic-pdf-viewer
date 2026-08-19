@@ -8,6 +8,11 @@ All notable changes to the Academic PDF Viewer extension are documented in this 
 
 - Added an independently invoked browser smoke test for the bundled PDF.js viewer, covering offline Worker startup, first-page rendering, VS Code shortcut routing, and both Control-hover input orders.
 - Added a compact, reproducible Typst and PDF fixture for viewer integration tests.
+- Added a PDF.js compatibility adapter that centralizes private viewer hooks, page enumeration, fingerprint overrides, and upstream DOM anchors.
+
+### Fixed
+
+- Precomputed PDF diff highlights for every page in small documents, applied original-only removed-page markers without manual navigation, and maintained a bounded seven-page comparison window while scrolling longer documents.
 
 ## [1.1.1] - 2026-08-19
 
