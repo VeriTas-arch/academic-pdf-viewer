@@ -1,5 +1,5 @@
 /// <reference path="./globals.d.ts" />
-import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, maximumTextTokensPerPage, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
 import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
 "use strict";
 (function () {
@@ -691,7 +691,13 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             const originalViewport = originalPage.getViewport({ scale });
             const modifiedViewport = modifiedPage.getViewport({ scale });
             const originalTokens = collectTextTokens(originalContent, originalViewport);
+            if (!originalTokens) {
+                return null;
+            }
             const modifiedTokens = collectTextTokens(modifiedContent, modifiedViewport);
+            if (!modifiedTokens) {
+                return null;
+            }
             return compareTextTokens(originalTokens, modifiedTokens, originalViewport.width, originalViewport.height, modifiedViewport.width, modifiedViewport.height);
         }
         catch (error) {
@@ -729,6 +735,9 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 : 0;
             const matches = item.str.matchAll(/\S+/gu);
             for (const match of matches) {
+                if (tokens.length >= maximumTextTokensPerPage) {
+                    return null;
+                }
                 const start = match.index;
                 const end = start + match[0].length;
                 let leftRatio = start / item.str.length;

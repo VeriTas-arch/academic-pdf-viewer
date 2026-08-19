@@ -17,6 +17,8 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
     const MIN_HIT_HEIGHT_PX = 10;
     const SCALE_RENDER_DEBOUNCE_MS = 140;
     const MAX_PREVIEW_CACHE_ENTRIES = 16;
+    const MAX_PREVIEW_CACHE_BYTES = 128 * 1024 * 1024;
+    const MAX_PENDING_PREVIEW_ENCODINGS = 1;
     const MAX_DOCUMENT_CACHE_ENTRIES = 64;
     const WHEEL_ZOOM_SUPPRESS_HOVER_MS = 260;
     const CLOSE_DELAY_MS = 180;
@@ -48,6 +50,8 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         _pendingPointerMoveFrame;
         _hoverDelayer;
         _previewCache;
+        _previewCacheBytes;
+        _pendingPreviewEncodings;
         _textCache;
         _pageCache;
         _annotationCache;
@@ -78,6 +82,8 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             this._pendingPointerMoveFrame = null;
             this._hoverDelayer = new HoverDelayer();
             this._previewCache = new Map();
+            this._previewCacheBytes = 0;
+            this._pendingPreviewEncodings = new Map();
             this._textCache = new Map();
             this._pageCache = new Map();
             this._annotationCache = new Map();
@@ -163,6 +169,9 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             window.addEventListener("pointermove", event => {
                 this._pointerPosition = { x: event.clientX, y: event.clientY };
                 this._controlPressed ||= event.ctrlKey;
+                if (!this._controlPressed) {
+                    return;
+                }
                 if (this._pendingPointerMoveFrame !== null) {
                     return;
                 }
@@ -224,7 +233,12 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         }
         _releaseControl() {
             this._controlPressed = false;
-            this._hidePopup();
+            if (this._hoveredPreview) {
+                this._setHoveredPreview(null);
+            }
+            else {
+                this._hidePopup();
+            }
         }
         _configure(enabled, resolutionScale) {
             const normalizedScale = normalizeResolutionScale(resolutionScale);
@@ -635,6 +649,11 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             if (cachedPreview) {
                 return cachedPreview;
             }
+            const encodingKey = `${this._documentGeneration}:${this._resolutionScale}:${key}`;
+            const pendingPreview = this._pendingPreviewEncodings.get(encodingKey);
+            if (pendingPreview) {
+                return pendingPreview.image;
+            }
             const pdfDocument = this._pdfDocument;
             const resolutionScale = this._resolutionScale;
             const page = await this._getPage(destination.pageNumber);
@@ -712,25 +731,41 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 durationMs: performance.now() - startedAt,
                 sizeBytes: canvas.width * canvas.height * 4
             });
+            this._startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, resolutionScale, destination.pageNumber);
+            return image;
+        }
+        _startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, resolutionScale, pageNumber) {
+            if (this._pendingPreviewEncodings.has(encodingKey)
+                || this._pendingPreviewEncodings.size >= MAX_PENDING_PREVIEW_ENCODINGS) {
+                return;
+            }
             const encodingStartedAt = performance.now();
-            void canvasToPngBlob(canvas).then(blob => {
+            const encoding = canvasToPngBlob(canvas).then((blob) => {
                 if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
-                    return;
+                    return null;
                 }
-                this._rememberImagePreview(key, {
+                const encodedPreview = {
                     src: URL.createObjectURL(blob),
+                    sizeBytes: blob.size,
                     targetXRatio: image.targetXRatio,
                     targetYRatio: image.targetYRatio
-                });
+                };
+                this._rememberImagePreview(key, encodedPreview);
                 this._reportDebug("linkPreviewEncoded", {
-                    pageNumber: destination.pageNumber,
+                    pageNumber,
                     durationMs: performance.now() - encodingStartedAt,
                     sizeBytes: blob.size
                 });
+                return encodedPreview;
             }).catch((error) => {
                 console.warn("Failed to cache PDF link image preview.", error);
+                return null;
+            }).finally(() => {
+                if (this._pendingPreviewEncodings.get(encodingKey)?.task === encoding) {
+                    this._pendingPreviewEncodings.delete(encodingKey);
+                }
             });
-            return image;
+            this._pendingPreviewEncodings.set(encodingKey, { image, task: encoding });
         }
         _reportDebug(event, fields) {
             if (!this._debug) {
@@ -784,10 +819,13 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             const existing = this._previewCache.get(key);
             if (existing) {
                 URL.revokeObjectURL(existing.src);
+                this._previewCacheBytes -= existing.sizeBytes ?? 0;
                 this._previewCache.delete(key);
             }
             this._previewCache.set(key, image);
-            while (this._previewCache.size > MAX_PREVIEW_CACHE_ENTRIES) {
+            this._previewCacheBytes += image.sizeBytes ?? 0;
+            while (this._previewCache.size > MAX_PREVIEW_CACHE_ENTRIES
+                || this._previewCacheBytes > MAX_PREVIEW_CACHE_BYTES) {
                 const oldestKey = this._previewCache.keys().next().value;
                 if (oldestKey === undefined) {
                     return;
@@ -795,15 +833,18 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 const oldest = this._previewCache.get(oldestKey);
                 if (oldest) {
                     URL.revokeObjectURL(oldest.src);
+                    this._previewCacheBytes -= oldest.sizeBytes ?? 0;
                 }
                 this._previewCache.delete(oldestKey);
             }
+            this._previewCacheBytes = Math.max(0, this._previewCacheBytes);
         }
         _clearPreviewCache() {
             for (const image of this._previewCache.values()) {
                 URL.revokeObjectURL(image.src);
             }
             this._previewCache.clear();
+            this._previewCacheBytes = 0;
         }
         _cancelActiveRenderTask() {
             if (!this._activeRenderTask) {

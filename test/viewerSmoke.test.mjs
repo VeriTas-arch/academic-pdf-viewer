@@ -129,6 +129,36 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await page.keyboard.up("Control");
     });
 
+    await t.test("defers citation hit testing until Control is held", async () => {
+        await page.mouse.move(4, 4);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        await page.evaluate(() => {
+            const original = document.elementsFromPoint.bind(document);
+            window.__academicOriginalElementsFromPoint = original;
+            window.__academicElementsFromPointCalls = 0;
+            document.elementsFromPoint = (...args) => {
+                window.__academicElementsFromPointCalls += 1;
+                return original(...args);
+            };
+        });
+        try {
+            await page.mouse.move(target.x, target.y, { steps: 12 });
+            await page.evaluate(() => new Promise(requestAnimationFrame));
+            assert.equal(await page.evaluate(() => window.__academicElementsFromPointCalls), 0);
+
+            await page.keyboard.down("Control");
+            await waitForPreview(page);
+            assert.equal(await page.evaluate(() => window.__academicElementsFromPointCalls > 0), true);
+        } finally {
+            await page.keyboard.up("Control");
+            await page.evaluate(() => {
+                document.elementsFromPoint = window.__academicOriginalElementsFromPoint;
+                delete window.__academicOriginalElementsFromPoint;
+                delete window.__academicElementsFromPointCalls;
+            });
+        }
+    });
+
     await t.test("keeps the preview open and scrollable while Control is held", async () => {
         await page.mouse.move(target.x, target.y);
         await page.keyboard.down("Control");
@@ -160,6 +190,72 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
             await page.keyboard.up("Control");
         }
         await page.waitForFunction(() => !document.querySelector(".academic-citation-popup")?.classList.contains("is-open"));
+    });
+
+    await t.test("reuses an in-flight PNG encoding on repeated preview", async () => {
+        const renderedBefore = await page.evaluate(() => window.__academicTestDebug.filter(
+            message => message.event === "linkPreviewRendered"
+        ).length);
+        const encodedBefore = await page.evaluate(() => window.__academicTestDebug.filter(
+            message => message.event === "linkPreviewEncoded"
+        ).length);
+        await page.evaluate(() => {
+            window.postMessage({
+                type: "linkPreview.configure",
+                enabled: true,
+                resolutionScale: 2
+            }, "*");
+            const original = HTMLCanvasElement.prototype.toBlob;
+            window.__academicOriginalToBlob = original;
+            window.__academicToBlobCalls = 0;
+            window.__academicPendingToBlobCallbacks = [];
+            HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+                window.__academicToBlobCalls += 1;
+                return original.call(this, blob => {
+                    window.__academicPendingToBlobCallbacks.push(() => callback(blob));
+                }, type, quality);
+            };
+        });
+        try {
+            await page.mouse.move(target.x, target.y);
+            await page.keyboard.down("Control");
+            await waitForPreview(page);
+            await page.waitForFunction(() => window.__academicToBlobCalls === 1);
+            await page.waitForFunction(() => window.__academicPendingToBlobCallbacks.length === 1);
+            await page.keyboard.up("Control");
+            await page.waitForFunction(() => !document.querySelector(
+                ".academic-citation-popup"
+            )?.classList.contains("is-open"));
+
+            await page.keyboard.down("Control");
+            await page.waitForFunction(() => document.querySelector(
+                ".academic-citation-popup.is-open canvas.academic-citation-popup__image"
+            ), undefined, { timeout: 1_000 });
+            assert.equal(await page.evaluate(() => window.__academicToBlobCalls), 1);
+            assert.equal(await page.evaluate(start => window.__academicTestDebug.filter(
+                message => message.event === "linkPreviewRendered"
+            ).length - start, renderedBefore), 1);
+            assert.equal(await page.evaluate(start => window.__academicTestDebug.filter(
+                message => message.event === "linkPreviewEncoded"
+            ).length - start, encodedBefore), 0);
+            await page.evaluate(() => {
+                window.__academicPendingToBlobCallbacks.splice(0).forEach(callback => callback());
+            });
+        } finally {
+            await page.keyboard.up("Control");
+            await page.evaluate(() => {
+                window.__academicPendingToBlobCallbacks.splice(0).forEach(callback => callback());
+                HTMLCanvasElement.prototype.toBlob = window.__academicOriginalToBlob;
+                delete window.__academicOriginalToBlob;
+                delete window.__academicToBlobCalls;
+                delete window.__academicPendingToBlobCallbacks;
+                window.postMessage({
+                    type: "linkPreview.configure",
+                    enabled: true,
+                    resolutionScale: 1
+                }, "*");
+            });
+        }
     });
 
     await t.test("restores a stationary preview after Control-wheel zoom", async () => {

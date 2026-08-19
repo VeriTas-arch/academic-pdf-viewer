@@ -125,7 +125,7 @@ const horizontalMergeDistance = 6;
 const verticalMergeDistance = 3;
 const regionPadding = 2;
 const minimumTextMatchRatio = 0.5;
-const maximumTextTokensPerPage = 1500;
+export const maximumTextTokensPerPage = 1500;
 const minimumSameLineHeightRatio = 0.6;
 const minimumPairedRegionHeightRatio = 0.6;
 

@@ -5,6 +5,7 @@ import {
     compareTextTokens,
     findNextDiffPage,
     fullPageRegion,
+    maximumTextTokensPerPage,
     mergeTextAndRasterResults,
     nextDiffRegionIndex,
     type DiffRegion,
@@ -891,7 +892,13 @@ import {
             const originalViewport = originalPage.getViewport({ scale });
             const modifiedViewport = modifiedPage.getViewport({ scale });
             const originalTokens = collectTextTokens(originalContent, originalViewport);
+            if (!originalTokens) {
+                return null;
+            }
             const modifiedTokens = collectTextTokens(modifiedContent, modifiedViewport);
+            if (!modifiedTokens) {
+                return null;
+            }
             return compareTextTokens(
                 originalTokens,
                 modifiedTokens,
@@ -912,7 +919,7 @@ import {
         }
     }
 
-    function collectTextTokens(content: PdfJsTextContent, viewport: PdfJsViewport): TextToken[] {
+    function collectTextTokens(content: PdfJsTextContent, viewport: PdfJsViewport): TextToken[] | null {
         const tokens: TextToken[] = [];
         for (const item of content.items) {
             if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
@@ -937,6 +944,9 @@ import {
                 : 0;
             const matches = item.str.matchAll(/\S+/gu);
             for (const match of matches) {
+                if (tokens.length >= maximumTextTokensPerPage) {
+                    return null;
+                }
                 const start = match.index;
                 const end = start + match[0].length;
                 let leftRatio = start / item.str.length;

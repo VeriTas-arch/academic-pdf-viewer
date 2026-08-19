@@ -6,6 +6,7 @@ import {
     compareTextTokenChanges,
     compareTextTokens,
     findNextDiffPage,
+    maximumTextTokensPerPage,
     mergeTextAndRasterResults,
     nextDiffRegionIndex,
 } from '../src/webview/pdfDiffAlgorithm.mts';
@@ -86,6 +87,15 @@ test('retains behavior with long mostly unchanged front and back', () => {
     assert.equal(changes[0].kind, 'replace');
     assert.deepEqual(changes[0].original?.regions.map(region => region.text), ['body-40']);
     assert.deepEqual(changes[0].modified?.regions.map(region => region.text), ['changed']);
+});
+
+test('falls back before matching pages above the semantic token limit', () => {
+    const tokens = Array.from(
+        { length: maximumTextTokensPerPage + 1 },
+        (_, index) => token(`body-${index}`, index),
+    );
+
+    assert.equal(compareTextTokenChanges(tokens, [...tokens]), null);
 });
 
 test('does not synchronize heights across unrelated deletion and insertion', () => {
