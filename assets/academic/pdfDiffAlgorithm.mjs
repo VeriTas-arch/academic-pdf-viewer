@@ -265,21 +265,47 @@ function textTokensEqual(original, modified) {
         && original.every((token, index) => token.text === modified[index].text);
 }
 function findTextTokenMatches(original, modified) {
-    const lengths = Array.from({ length: original.length + 1 }, () => new Uint16Array(modified.length + 1));
-    for (let originalIndex = 1; originalIndex <= original.length; originalIndex += 1) {
-        for (let modifiedIndex = 1; modifiedIndex <= modified.length; modifiedIndex += 1) {
-            lengths[originalIndex][modifiedIndex] = original[originalIndex - 1].text
-                === modified[modifiedIndex - 1].text
+    let prefixLength = 0;
+    const maxPrefixLength = Math.min(original.length, modified.length);
+    while (prefixLength < maxPrefixLength
+        && original[prefixLength].text === modified[prefixLength].text) {
+        prefixLength += 1;
+    }
+    let originalSuffixLength = original.length;
+    let modifiedSuffixLength = modified.length;
+    while (originalSuffixLength > prefixLength
+        && modifiedSuffixLength > prefixLength
+        && original[originalSuffixLength - 1].text === modified[modifiedSuffixLength - 1].text) {
+        originalSuffixLength -= 1;
+        modifiedSuffixLength -= 1;
+    }
+    const trimmedOriginalLength = originalSuffixLength - prefixLength;
+    const trimmedModifiedLength = modifiedSuffixLength - prefixLength;
+    const lengths = Array.from({ length: trimmedOriginalLength + 1 }, () => new Uint16Array(trimmedModifiedLength + 1));
+    for (let originalIndex = 1; originalIndex <= trimmedOriginalLength; originalIndex += 1) {
+        for (let modifiedIndex = 1; modifiedIndex <= trimmedModifiedLength; modifiedIndex += 1) {
+            const originalToken = original[prefixLength + originalIndex - 1];
+            const modifiedToken = modified[prefixLength + modifiedIndex - 1];
+            lengths[originalIndex][modifiedIndex] = originalToken.text === modifiedToken.text
                 ? lengths[originalIndex - 1][modifiedIndex - 1] + 1
                 : Math.max(lengths[originalIndex - 1][modifiedIndex], lengths[originalIndex][modifiedIndex - 1]);
         }
     }
     const matches = [];
-    let originalIndex = original.length;
-    let modifiedIndex = modified.length;
+    for (let index = 0; index < prefixLength; index += 1) {
+        matches.push({ original: index, modified: index });
+    }
+    const middleMatches = [];
+    let originalIndex = trimmedOriginalLength;
+    let modifiedIndex = trimmedModifiedLength;
     while (originalIndex > 0 && modifiedIndex > 0) {
-        if (original[originalIndex - 1].text === modified[modifiedIndex - 1].text) {
-            matches.push({ original: originalIndex - 1, modified: modifiedIndex - 1 });
+        const originalToken = original[prefixLength + originalIndex - 1];
+        const modifiedToken = modified[prefixLength + modifiedIndex - 1];
+        if (originalToken.text === modifiedToken.text) {
+            middleMatches.push({
+                original: prefixLength + originalIndex - 1,
+                modified: prefixLength + modifiedIndex - 1,
+            });
             originalIndex -= 1;
             modifiedIndex -= 1;
         }
@@ -291,7 +317,17 @@ function findTextTokenMatches(original, modified) {
             modifiedIndex -= 1;
         }
     }
-    return matches.reverse();
+    for (let index = middleMatches.length - 1; index >= 0; index -= 1) {
+        matches.push(middleMatches[index]);
+    }
+    const suffixMatchCount = original.length - originalSuffixLength;
+    for (let index = 0; index < suffixMatchCount; index += 1) {
+        matches.push({
+            original: originalSuffixLength + index,
+            modified: modifiedSuffixLength + index,
+        });
+    }
+    return matches;
 }
 function collectTextChanges(original, modified, matches) {
     const changes = [];

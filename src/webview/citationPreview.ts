@@ -452,10 +452,18 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
         }
         const overlays = page ? this._pageOverlays.get(page) : null;
+        const pageRect = page && !directAnchor ? page.getBoundingClientRect() : null;
         let anchor = directAnchor;
         if (!anchor && overlays) {
+            if (!pageRect) {
+                return this._setHoveredPreview(null);
+            }
             for (const candidate of overlays) {
-                if (containsClientPoint(candidate.getBoundingClientRect(), x, y)) {
+                const link = this._overlayLinks.get(candidate);
+                if (!link) {
+                    continue;
+                }
+                if (containsClientPointInPage(pageRect, link.rect, x, y)) {
                     anchor = candidate;
                     break;
                 }
@@ -1108,8 +1116,12 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         return Math.min(Math.max(value, min), max);
     }
 
-    function containsClientPoint(rect: DOMRect, x: number, y: number): boolean {
-        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    function containsClientPointInPage(pageRect: DOMRect, rect: ViewportRect, x: number, y: number): boolean {
+        const left = pageRect.left + rect.left;
+        const right = left + rect.width;
+        const top = pageRect.top + rect.top;
+        const bottom = top + rect.height;
+        return x >= left && x <= right && y >= top && y <= bottom;
     }
 
     function normalizeResolutionScale(value: unknown): number {

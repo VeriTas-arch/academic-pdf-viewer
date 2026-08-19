@@ -358,10 +358,18 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
                 }
             }
             const overlays = page ? this._pageOverlays.get(page) : null;
+            const pageRect = page && !directAnchor ? page.getBoundingClientRect() : null;
             let anchor = directAnchor;
             if (!anchor && overlays) {
+                if (!pageRect) {
+                    return this._setHoveredPreview(null);
+                }
                 for (const candidate of overlays) {
-                    if (containsClientPoint(candidate.getBoundingClientRect(), x, y)) {
+                    const link = this._overlayLinks.get(candidate);
+                    if (!link) {
+                        continue;
+                    }
+                    if (containsClientPointInPage(pageRect, link.rect, x, y)) {
                         anchor = candidate;
                         break;
                     }
@@ -945,8 +953,12 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
     function clamp(value, min, max) {
         return Math.min(Math.max(value, min), max);
     }
-    function containsClientPoint(rect, x, y) {
-        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    function containsClientPointInPage(pageRect, rect, x, y) {
+        const left = pageRect.left + rect.left;
+        const right = left + rect.width;
+        const top = pageRect.top + rect.top;
+        const bottom = top + rect.height;
+        return x >= left && x <= right && y >= top && y <= bottom;
     }
     function normalizeResolutionScale(value) {
         if (typeof value !== "number" || !Number.isFinite(value)) {

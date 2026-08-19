@@ -49,6 +49,44 @@ test('keeps unrelated deletion and insertion in separate change groups', () => {
     ]);
 });
 
+test('finds matches with large common prefix and suffix', () => {
+    const changes = compareTextTokenChanges(
+        [
+            token('left', 10),
+            token('kept-1', 20),
+            token('old', 30),
+            token('kept-2', 40),
+            token('tail', 50),
+        ],
+        [
+            token('left', 10),
+            token('kept-1', 20),
+            token('new', 35),
+            token('kept-2', 40),
+            token('tail', 50),
+        ],
+    );
+
+    assert(changes);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].kind, 'replace');
+    assert.deepEqual(changes[0].original?.regions.map(region => region.text), ['old']);
+    assert.deepEqual(changes[0].modified?.regions.map(region => region.text), ['new']);
+});
+
+test('retains behavior with long mostly unchanged front and back', () => {
+    const original = Array.from({ length: 80 }, (_, index) => token(`body-${index}`, index));
+    const modified = [...original.slice(0, 40), token('changed', 400), ...original.slice(41)];
+
+    const changes = compareTextTokenChanges(original, modified);
+
+    assert(changes);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].kind, 'replace');
+    assert.deepEqual(changes[0].original?.regions.map(region => region.text), ['body-40']);
+    assert.deepEqual(changes[0].modified?.regions.map(region => region.text), ['changed']);
+});
+
 test('does not synchronize heights across unrelated deletion and insertion', () => {
     const result = compareTextTokens(
         [token('A', 0), token('removed', 20, 10, 20), token('B', 50), token('C', 100)],
