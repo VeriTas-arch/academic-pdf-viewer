@@ -3,6 +3,8 @@ import { rm } from 'node:fs/promises';
 const generatedPaths = [
     'out',
     'assets/academic/citationPreview.js',
+    'assets/academic/citationPreviewLines.js',
+    'assets/academic/citationPreviewLines.mjs',
     'assets/academic/pdfDiff.js',
     'assets/academic/pdfDiffAlgorithm.mjs',
     'assets/academic/pdfjsAdapter.js',

@@ -43,6 +43,7 @@
 
 .academic-citation-popup.is-open {
     display: block;
+    pointer-events: auto;
 }
 
 .academic-citation-popup__meta {

@@ -339,6 +339,10 @@
     }
 
     function handleWheel(event: WheelEvent): void {
+        if (event.target instanceof Element
+            && event.target.closest(".academic-citation-popup.is-open")) {
+            return;
+        }
         const app = pdfjsAdapter.getApplication();
         const viewer = app && app.pdfViewer;
         if (!viewer || viewer.isInPresentationMode) {

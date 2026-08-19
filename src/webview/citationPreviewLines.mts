@@ -49,4 +49,3 @@ export function collectNearbyLinesFromRows(
 
     return isFallback ? renderedLines.slice(0, options.maxReturnedLines ?? 4) : renderedLines;
 }
-

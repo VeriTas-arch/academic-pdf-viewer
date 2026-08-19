@@ -1,6 +1,6 @@
 /// <reference path="./globals.d.ts" />
 "use strict";
-import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
+import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
 (function () {
     const OPEN_DELAY_MS = 200;
     const TEXT_RADIUS_PX = 90;
@@ -19,6 +19,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
     const MAX_PREVIEW_CACHE_ENTRIES = 16;
     const MAX_DOCUMENT_CACHE_ENTRIES = 64;
     const WHEEL_ZOOM_SUPPRESS_HOVER_MS = 260;
+    const CLOSE_DELAY_MS = 180;
     const pdfjsAdapter = window.academicPdfJsAdapter;
     class HoverDelayer {
         _openTimer;
@@ -59,6 +60,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
         _popup;
         _scaleRenderTimer;
         _suppressedOpenTimer;
+        _closeTimer;
         _suppressHoverUntil;
         _activeRenderTask;
         _debug;
@@ -87,6 +89,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
             this._popup = this._createPopup();
             this._scaleRenderTimer = null;
             this._suppressedOpenTimer = null;
+            this._closeTimer = null;
             this._suppressHoverUntil = 0;
             this._activeRenderTask = null;
             this._debug = initialConfiguration.debug;
@@ -170,6 +173,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
             window.addEventListener("pointerout", event => {
                 if (event.relatedTarget === null) {
                     this._pointerPosition = null;
+                    this._cancelClose();
                     this._setHoveredPreview(null);
                     this._cancelPendingPointerMoveFrame();
                 }
@@ -340,10 +344,16 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
         }
         _syncHoveredPreviewAtPointer() {
             if (!this._pointerPosition) {
+                this._cancelClose();
                 return this._setHoveredPreview(null);
             }
             const { x, y } = this._pointerPosition;
             const elements = document.elementsFromPoint(x, y);
+            if (this._popup.classList.contains("is-open")
+                && elements.some(element => element === this._popup || this._popup.contains(element))) {
+                this._cancelClose();
+                return false;
+            }
             let directAnchor = null;
             let page = null;
             for (const element of elements) {
@@ -376,7 +386,16 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
                 }
             }
             const link = anchor && this._overlayLinks.get(anchor);
-            return this._setHoveredPreview(anchor && link ? { anchor, link } : null);
+            if (anchor && link) {
+                this._cancelClose();
+                return this._setHoveredPreview({ anchor, link });
+            }
+            if (this._popup.classList.contains("is-open") && this._hoveredPreview) {
+                this._scheduleClose();
+                return false;
+            }
+            this._cancelClose();
+            return this._setHoveredPreview(null);
         }
         _setHoveredPreview(hovered) {
             if (this._hoveredPreview?.anchor === hovered?.anchor) {
@@ -453,9 +472,33 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
             this._cancelActiveRenderTask();
             this._hoverDelayer.cancelOpen();
             this._cancelSuppressedOpen();
+            this._cancelClose();
             this._cancelPendingPointerMoveFrame();
             this._popup.classList.remove("is-open");
             this._popup.innerHTML = "";
+        }
+        _scheduleClose() {
+            if (this._closeTimer !== null) {
+                return;
+            }
+            this._closeTimer = setTimeout(() => {
+                this._closeTimer = null;
+                if (this._pointerPosition && this._popup.classList.contains("is-open")) {
+                    const { x, y } = this._pointerPosition;
+                    const rect = this._popup.getBoundingClientRect();
+                    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                        return;
+                    }
+                }
+                this._setHoveredPreview(null);
+            }, CLOSE_DELAY_MS);
+        }
+        _cancelClose() {
+            if (this._closeTimer === null) {
+                return;
+            }
+            clearTimeout(this._closeTimer);
+            this._closeTimer = null;
         }
         _cancelPendingPointerMoveFrame() {
             if (this._pendingPointerMoveFrame === null) {
@@ -469,6 +512,23 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
             popup.className = "academic-citation-popup";
             popup.draggable = false;
             popup.addEventListener("dragstart", preventDefaultDrag);
+            popup.addEventListener("wheel", event => {
+                if (!event.ctrlKey && !event.metaKey) {
+                    return;
+                }
+                const scrollTarget = event.target instanceof Element
+                    ? event.target.closest(".academic-citation-popup__preview") ?? popup
+                    : popup;
+                const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+                    ? 16
+                    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+                        ? scrollTarget.clientHeight
+                        : 1;
+                scrollTarget.scrollLeft += event.deltaX * deltaScale;
+                scrollTarget.scrollTop += event.deltaY * deltaScale;
+                event.preventDefault();
+                event.stopPropagation();
+            }, { passive: false });
             document.body.append(popup);
             return popup;
         }
@@ -877,7 +937,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
             : null;
     }
     function collectNearbyLines(items, viewport, targetY) {
-        const nearbyRows = [];
         const allRows = [];
         for (const item of items) {
             if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
@@ -891,9 +950,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
                 y
             };
             allRows.push(row);
-            if (targetY === null || Math.abs(y - targetY) <= TEXT_RADIUS_PX) {
-                nearbyRows.push(row);
-            }
         }
         return collectNearbyLinesFromRows(allRows, targetY, {
             textRadiusPx: TEXT_RADIUS_PX,

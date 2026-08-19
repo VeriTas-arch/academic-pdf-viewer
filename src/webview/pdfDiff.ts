@@ -1008,15 +1008,15 @@ import {
                     return;
                 }
                 const selectedIndexKey = String(selectedIndex);
-            if (selectedMarkers.length > 0
-                && selectedMarkers[0].dataset.pageNumber === String(pageNumber)
-                && selectedMarkers[0].dataset.changeIndex === selectedIndexKey) {
-                selectedMarkers[0].scrollIntoView({ block: "center", inline: "center" });
-                return;
-            }
-            const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
-            const marker = pageView?.div.querySelector<HTMLElement>(
-                `.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`
+                if (selectedMarkers.length > 0
+                    && selectedMarkers[0].dataset.pageNumber === String(pageNumber)
+                    && selectedMarkers[0].dataset.changeIndex === selectedIndexKey) {
+                    selectedMarkers[0].scrollIntoView({ block: "center", inline: "center" });
+                    return;
+                }
+                const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
+                const marker = pageView?.div.querySelector<HTMLElement>(
+                    `.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`
                 );
                 marker?.scrollIntoView({ block: "center", inline: "center" });
             });

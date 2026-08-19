@@ -74,7 +74,7 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('git.blob.start', fields);
 
     try {
-        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot);
+        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, true);
         if (stat.length === 0) {
             logger?.warn('git.blob.missing', {
                 ...fields,

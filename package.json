@@ -173,11 +173,11 @@
         "compile:extension": "tsc -p ./",
         "compile:webview": "tsc -p ./tsconfig.webview.json",
         "typecheck:scripts": "tsc -p ./tsconfig.scripts.json",
-        "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.mts\"",
+        "lint": "eslint \"src/**/*.ts\" \"src/**/*.mts\" \"scripts/**/*.mts\"",
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs",
+        "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs",
         "test:extension": "node test/extensionHost/run.mjs",
         "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },

@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const vscode = require('vscode');
 
+const { readPdfData } = require('../../out/extension/pdfDataSource.js');
+
 const extensionId = 'ovolab-veritas.academic-pdf-viewer';
 const viewType = 'academicPdfViewer.pdf';
 
@@ -48,6 +50,15 @@ async function run() {
 
     const fixtureRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     assert(fixtureRoot, 'The manual test workspace was not opened.');
+
+    const missingGitPdfPath = path.join(fixtureRoot, '__missing_git_revision__.pdf');
+    const missingGitPdf = vscode.Uri.from({
+        scheme: 'git',
+        path: missingGitPdfPath,
+        query: JSON.stringify({ path: missingGitPdfPath, ref: 'HEAD' }),
+    });
+    const missingGitData = await readPdfData(missingGitPdf);
+    assert.equal(missingGitData.byteLength, 0, 'A missing Git revision should be treated as an empty PDF.');
 
     const ordinaryPdf = vscode.Uri.file(path.join(fixtureRoot, 'lewm.pdf'));
     await vscode.commands.executeCommand('vscode.openWith', ordinaryPdf, viewType);

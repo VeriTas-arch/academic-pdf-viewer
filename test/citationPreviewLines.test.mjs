@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { collectNearbyLinesFromRows } from "../assets/academic/citationPreviewLines.js";
+import { collectNearbyLinesFromRows } from "../assets/academic/citationPreviewLines.mjs";
 
 test("collectNearbyLinesFromRows keeps fallback behavior at 40-row cap and 4-line return", () => {
     const rows = Array.from({ length: 80 }, (_, index) => ({
         text: `token-${index + 1}`,
-        x: index,
-        y: 0
+        x: index % 10,
+        y: Math.floor(index / 10) * 10
     }));
 
     const lines = collectNearbyLinesFromRows(rows, 10000, {
         textRadiusPx: 10
     });
-    assert.equal(lines.length, 1);
-    assert.equal(lines[0].includes("token-40"), true);
-    assert.equal(lines[0].includes("token-10"), true);
-    assert.equal(lines[0].includes("token-5"), true);
+    assert.equal(lines.length, 4);
+    assert.equal(lines[0].startsWith("token-41 "), true);
+    assert.equal(lines[3].endsWith(" token-80"), true);
+    assert.equal(lines.join(" ").includes("token-40"), false);
 });
 
 test("collectNearbyLinesFromRows does not truncate to first 4 lines when near target", () => {

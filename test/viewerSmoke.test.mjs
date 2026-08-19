@@ -128,10 +128,43 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await page.keyboard.up("Control");
     });
 
-    await t.test("restores a stationary preview after Control-wheel zoom", async () => {
+    await t.test("keeps the preview open and scrollable while Control is held", async () => {
         await page.mouse.move(target.x, target.y);
         await page.keyboard.down("Control");
-        await waitForPreview(page);
+        const popup = page.locator(".academic-citation-popup");
+        try {
+            await waitForPreview(page);
+            const preview = popup.locator(".academic-citation-popup__preview");
+            await preview.evaluate(element => {
+                element.style.maxHeight = "80px";
+                element.scrollTop = 0;
+            });
+            const previewBox = await preview.boundingBox();
+            assert(previewBox);
+            await page.mouse.move(
+                previewBox.x + previewBox.width / 2,
+                previewBox.y + previewBox.height / 2,
+                { steps: 12 }
+            );
+            assert.equal(await popup.evaluate(element => element.classList.contains("is-open")), true);
+            const previousScale = await page.evaluate(() => window.PDFViewerApplication.pdfViewer.currentScale);
+            await page.mouse.wheel(0, 240);
+            await page.waitForFunction(() => {
+                const element = document.querySelector(".academic-citation-popup__preview");
+                return element instanceof HTMLElement && element.scrollTop > 0;
+            }, undefined, { timeout: 5_000 });
+            assert.equal(await page.evaluate(() => window.PDFViewerApplication.pdfViewer.currentScale), previousScale);
+            assert.equal(await popup.evaluate(element => element.classList.contains("is-open")), true);
+        } finally {
+            await page.keyboard.up("Control");
+        }
+        await page.waitForFunction(() => !document.querySelector(".academic-citation-popup")?.classList.contains("is-open"));
+    });
+
+    await t.test("restores a stationary preview after Control-wheel zoom", async () => {
+        await page.mouse.move(4, 4);
+        await page.keyboard.down("Control");
+        await page.mouse.move(target.x, target.y);
         const previousScale = await page.evaluate(() => window.PDFViewerApplication.pdfViewer.currentScale);
         await page.mouse.wheel(0, -10);
         await page.waitForTimeout(80);
@@ -346,7 +379,8 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 "(left) Tj",
                 "0 -24 Td",
                 "(tail) Tj"
-            ]
+            ],
+            ["(unchanged second page) Tj"]
         ]);
         const modifiedData = createTextPdfWithCommands([
             [
@@ -357,7 +391,8 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 "(second) Tj",
                 "0 -24 Td",
                 "(tail) Tj"
-            ]
+            ],
+            ["(unchanged second page) Tj"]
         ]);
         await diffPage.evaluate(data => {
             window.postMessage({
@@ -735,7 +770,7 @@ function createTextPdfWithCommands(pages) {
 }
 
 function createPdfFromStrings(pageTexts) {
-    return createPdfFromObjects(pageTexts.map(text => [
+    return createTextPdfWithCommands(pageTexts.map(text => [
         `(${text.replace(/([\\()])/g, "\\$1")}) Tj`
     ]));
 }
