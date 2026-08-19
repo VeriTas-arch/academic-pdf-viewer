@@ -1,11 +1,5 @@
 <p align="center">
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer">
-    <img
-      src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/icon.png"
-      alt="Academic PDF Viewer icon"
-      width="104"
-    >
-  </a>
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer"><img src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/icon.png" alt="Academic PDF Viewer icon" width="104"></a>
 </p>
 
 <h1 align="center">Academic PDF Viewer</h1>
@@ -15,13 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases">
-    <img alt="Latest preview release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?include_prereleases&label=preview&color=7c3aed">
-  </a>
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases"><img alt="Latest preview release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?include_prereleases&label=preview&color=7c3aed"></a>
   <img alt="VS Code 1.133 or later" src="https://img.shields.io/badge/VS%20Code-1.133%2B-007ACC?logo=visualstudiocode&logoColor=white">
-  <a href="./LICENSE">
-    <img alt="MIT License" src="https://img.shields.io/github/license/VeriTas-arch/academic-pdf-viewer?color=2563eb">
-  </a>
+  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/VeriTas-arch/academic-pdf-viewer?color=2563eb"></a>
 </p>
 
 <p align="center">
