@@ -50,7 +50,7 @@
     </td>
     <td width="33%" align="center" valign="top">
       <h3>Compare</h3>
-      <p>Review changed or staged PDFs side by side with semantic highlights through VS Code's proposed diff API.</p>
+      <p>Review changed or staged PDFs side by side with semantic highlights on both revisions.</p>
     </td>
   </tr>
 </table>
