@@ -1,7 +1,62 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { compareRasters, compareTextTokens } from '../src/webview/pdfDiffAlgorithm.mts';
+import {
+    compareRasters,
+    compareTextTokens,
+    findNextDiffPage,
+    nextDiffRegionIndex,
+} from '../src/webview/pdfDiffAlgorithm.mts';
+
+test('selects diff regions without wrapping at page boundaries', () => {
+    assert.equal(nextDiffRegionIndex(3, undefined, 'next'), 0);
+    assert.equal(nextDiffRegionIndex(3, undefined, 'previous'), 2);
+    assert.equal(nextDiffRegionIndex(3, 0, 'next'), 1);
+    assert.equal(nextDiffRegionIndex(3, 2, 'next'), undefined);
+    assert.equal(nextDiffRegionIndex(3, 2, 'previous'), 1);
+    assert.equal(nextDiffRegionIndex(3, 0, 'previous'), undefined);
+    assert.equal(nextDiffRegionIndex(0, undefined, 'next'), undefined);
+});
+
+test('scans diff pages on demand and stops at the first change', async () => {
+    const visited = [];
+    const pages = new Map([
+        [1, []],
+        [2, []],
+        [3, ['first', 'second']],
+        [4, ['later']],
+    ]);
+    const target = await findNextDiffPage(1, 4, 'next', async pageNumber => {
+        visited.push(pageNumber);
+        return pages.get(pageNumber);
+    });
+    assert.deepEqual(visited, [1, 2, 3]);
+    assert.deepEqual(target, {
+        pageNumber: 3,
+        index: 0,
+        regions: ['first', 'second'],
+    });
+});
+
+test('scans backward without wrapping and preserves cancellation', async () => {
+    const visited = [];
+    const target = await findNextDiffPage(4, 4, 'previous', async pageNumber => {
+        visited.push(pageNumber);
+        if (pageNumber === 3) {
+            return undefined;
+        }
+        return [];
+    });
+    assert.deepEqual(visited, [4, 3]);
+    assert.equal(target, undefined);
+
+    let called = false;
+    assert.equal(await findNextDiffPage(5, 4, 'next', async () => {
+        called = true;
+        return [];
+    }), undefined);
+    assert.equal(called, false);
+});
 
 function raster(width, height, changes = []) {
     const pixels = new Uint8ClampedArray(width * height * 4);

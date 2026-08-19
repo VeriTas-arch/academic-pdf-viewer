@@ -2,21 +2,38 @@ export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
     | { type: 'document.load'; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
-    | { type: 'diff.setEnabled'; enabled: false }
-    | { type: 'diff.setEnabled'; enabled: true; role: 'original'; allPagesChanged: boolean }
+    | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
+    | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
     | {
         type: 'diff.setEnabled';
         enabled: true;
+        sessionId: number;
         role: 'modified';
         originalData: ArrayBuffer;
         originalFingerprint: string;
         originalIsEmptyRevision: boolean;
         modifiedIsEmptyRevision: boolean;
     }
-    | { type: 'diff.applyPage'; pageNumber: number; regions: PdfDiffRegion[] }
-    | { type: 'diff.setRemovedPageRange'; fromPage: number; toPage: number }
+    | { type: 'diff.applyPage'; sessionId: number; pageNumber: number; regions: PdfDiffRegion[] }
+    | { type: 'diff.setRemovedPageRange'; sessionId: number; fromPage: number; toPage: number }
     | { type: 'diff.applyScroll'; pageNumber: number; pageRatio: number; documentRatio: number }
-    | { type: 'diff.navigate'; direction: DiffNavigationDirection }
+    | { type: 'diff.navigate'; sessionId: number; direction: DiffNavigationDirection }
+    | {
+        type: 'diff.scanForChange';
+        sessionId: number;
+        requestId: number;
+        role: DiffRole;
+        direction: DiffNavigationDirection;
+        startPage: number;
+    }
+    | {
+        type: 'diff.revealChange';
+        sessionId: number;
+        requestId: number;
+        pageNumber: number;
+        index: number;
+        regions: PdfDiffRegion[];
+    }
     | {
         type: 'linkPreview.configure';
         enabled: boolean;
@@ -31,6 +48,7 @@ export interface PdfDiffRegion {
 }
 
 export type DiffNavigationDirection = 'next' | 'previous';
+export type DiffRole = 'original' | 'modified';
 
 export const DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE = 2;
 export const MIN_LINK_PREVIEW_RESOLUTION_SCALE = 1;
@@ -62,6 +80,8 @@ const pdfDebugEventValues = [
     'diffComputed',
     'diffTextFallback',
     'diffFailed',
+    'linkPreviewRendered',
+    'linkPreviewEncoded',
 ] as const;
 
 type PdfDebugEvent = typeof pdfDebugEventValues[number];
@@ -70,8 +90,25 @@ export type WebviewToExtensionMessage =
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
     | { type: 'workbench.showCommands' }
     | { type: 'webview.ready' }
-    | { type: 'diff.pageResult'; pageNumber: number; originalRegions: PdfDiffRegion[] }
-    | { type: 'diff.removedPageRange'; fromPage: number; toPage: number }
+    | { type: 'diff.pageResult'; sessionId: number; pageNumber: number; originalRegions: PdfDiffRegion[] }
+    | { type: 'diff.removedPageRange'; sessionId: number; fromPage: number; toPage: number }
+    | {
+        type: 'diff.navigationRequest';
+        sessionId: number;
+        requestId: number;
+        role: DiffRole;
+        direction: DiffNavigationDirection;
+        startPage: number;
+    }
+    | {
+        type: 'diff.navigationResult';
+        sessionId: number;
+        requestId: number;
+        role: DiffRole;
+        pageNumber: number;
+        index: number;
+        regions: PdfDiffRegion[];
+    }
     | { type: 'diff.scroll'; pageNumber: number; pageRatio: number; documentRatio: number }
     | {
         type: 'pdf.debug';
@@ -108,14 +145,34 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'webview.ready':
             return true;
         case 'diff.pageResult':
-            return isPageNumber(value.pageNumber)
+            return isSessionId(value.sessionId)
+                && isPageNumber(value.pageNumber)
                 && Array.isArray(value.originalRegions)
                 && value.originalRegions.length <= 200
                 && value.originalRegions.every(isPdfDiffRegion);
         case 'diff.removedPageRange':
-            return isPageNumber(value.fromPage)
+            return isSessionId(value.sessionId)
+                && isPageNumber(value.fromPage)
                 && isPageNumber(value.toPage)
                 && value.fromPage <= value.toPage;
+        case 'diff.navigationRequest':
+            return isSessionId(value.sessionId)
+                && isSessionId(value.requestId)
+                && isDiffRole(value.role)
+                && isDiffNavigationDirection(value.direction)
+                && isPageNumber(value.startPage);
+        case 'diff.navigationResult':
+            return isSessionId(value.sessionId)
+                && isSessionId(value.requestId)
+                && isDiffRole(value.role)
+                && isPageNumber(value.pageNumber)
+                && typeof value.index === 'number'
+                && Number.isSafeInteger(value.index)
+                && value.index >= 0
+                && Array.isArray(value.regions)
+                && value.regions.length > value.index
+                && value.regions.length <= 200
+                && value.regions.every(isPdfDiffRegion);
         case 'diff.scroll':
             return isPageNumber(value.pageNumber)
                 && isNormalizedNumber(value.pageRatio)
@@ -151,6 +208,20 @@ function isPageNumber(value: unknown): value is number {
     return typeof value === 'number'
         && Number.isSafeInteger(value)
         && value >= 1;
+}
+
+function isSessionId(value: unknown): value is number {
+    return typeof value === 'number'
+        && Number.isSafeInteger(value)
+        && value >= 1;
+}
+
+function isDiffRole(value: unknown): value is DiffRole {
+    return value === 'original' || value === 'modified';
+}
+
+function isDiffNavigationDirection(value: unknown): value is DiffNavigationDirection {
+    return value === 'next' || value === 'previous';
 }
 
 function isPdfDiffRegion(value: unknown): value is PdfDiffRegion {

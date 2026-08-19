@@ -16,6 +16,7 @@
 }
 
 .academic-citation-link:hover,
+.academic-citation-link.is-pointer-over,
 .academic-citation-link:focus-visible {
     background: color-mix(in srgb, var(--vscode-editorLink-activeForeground, #3794ff) 24%, transparent);
     outline: 1px solid color-mix(in srgb, var(--vscode-editorLink-activeForeground, #3794ff) 55%, transparent);

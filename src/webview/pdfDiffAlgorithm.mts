@@ -18,6 +18,52 @@ export interface PageDiffResult {
     strategy: "page" | "raster" | "text";
 }
 
+export function nextDiffRegionIndex(
+    regionCount: number,
+    selectedIndex: number | undefined,
+    direction: "next" | "previous"
+): number | undefined {
+    if (regionCount < 1) {
+        return undefined;
+    }
+    if (selectedIndex === undefined) {
+        return direction === "next" ? 0 : regionCount - 1;
+    }
+    const index = direction === "next" ? selectedIndex + 1 : selectedIndex - 1;
+    return index >= 0 && index < regionCount ? index : undefined;
+}
+
+export interface DiffPageNavigationTarget<T> {
+    pageNumber: number;
+    index: number;
+    regions: T[];
+}
+
+export async function findNextDiffPage<T>(
+    startPage: number,
+    lastPage: number,
+    direction: "next" | "previous",
+    loadRegions: (pageNumber: number) => Promise<T[] | undefined>
+): Promise<DiffPageNavigationTarget<T> | undefined> {
+    const step = direction === "next" ? 1 : -1;
+    for (let pageNumber = startPage;
+        pageNumber >= 1 && pageNumber <= lastPage;
+        pageNumber += step) {
+        const regions = await loadRegions(pageNumber);
+        if (regions === undefined) {
+            return undefined;
+        }
+        if (regions.length > 0) {
+            return {
+                pageNumber,
+                index: direction === "next" ? 0 : regions.length - 1,
+                regions
+            };
+        }
+    }
+    return undefined;
+}
+
 export interface PixelRegion {
     left: number;
     top: number;

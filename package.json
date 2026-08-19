@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -86,13 +86,13 @@
             },
             {
                 "command": "academicPdfViewer.previousDiffChange",
-                "title": "PDF Diff: Previous Change on Page",
+                "title": "PDF Diff: Previous Change",
                 "icon": "$(arrow-up)",
                 "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled"
             },
             {
                 "command": "academicPdfViewer.nextDiffChange",
-                "title": "PDF Diff: Next Change on Page",
+                "title": "PDF Diff: Next Change",
                 "icon": "$(arrow-down)",
                 "enablement": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled"
             }

@@ -1,3 +1,30 @@
+export function nextDiffRegionIndex(regionCount, selectedIndex, direction) {
+    if (regionCount < 1) {
+        return undefined;
+    }
+    if (selectedIndex === undefined) {
+        return direction === "next" ? 0 : regionCount - 1;
+    }
+    const index = direction === "next" ? selectedIndex + 1 : selectedIndex - 1;
+    return index >= 0 && index < regionCount ? index : undefined;
+}
+export async function findNextDiffPage(startPage, lastPage, direction, loadRegions) {
+    const step = direction === "next" ? 1 : -1;
+    for (let pageNumber = startPage; pageNumber >= 1 && pageNumber <= lastPage; pageNumber += step) {
+        const regions = await loadRegions(pageNumber);
+        if (regions === undefined) {
+            return undefined;
+        }
+        if (regions.length > 0) {
+            return {
+                pageNumber,
+                index: direction === "next" ? 0 : regions.length - 1,
+                regions
+            };
+        }
+    }
+    return undefined;
+}
 const colorDeltaThreshold = 60;
 const minimumChangedPixelsPerRegion = 3;
 const maximumRunsPerPage = 20000;

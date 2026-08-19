@@ -46,7 +46,11 @@ export function logPdfDebugMessage(
     } else {
         const event = message.event === 'diffComputed'
             ? 'visualDiff.computed'
-            : `pdfjs.${message.event}`;
+            : message.event === 'linkPreviewRendered'
+                ? 'linkPreview.rendered'
+                : message.event === 'linkPreviewEncoded'
+                    ? 'linkPreview.encoded'
+                    : `pdfjs.${message.event}`;
         logger.info(event, fields);
     }
 }

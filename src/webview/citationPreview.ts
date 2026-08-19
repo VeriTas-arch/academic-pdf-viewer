@@ -37,6 +37,7 @@
 
     interface ImagePreview {
         src: string;
+        canvas?: HTMLCanvasElement;
         targetXRatio: number;
         targetYRatio: number;
     }
@@ -59,12 +60,12 @@
     }
 
     interface LinkPreviewConfiguration {
+        debug: boolean;
         enabled: boolean;
         resolutionScale: number;
     }
 
     const OPEN_DELAY_MS = 200;
-    const CLOSE_DELAY_MS = 120;
     const TEXT_RADIUS_PX = 90;
     const DEFAULT_RESOLUTION_SCALE = 2;
     const MIN_RESOLUTION_SCALE = 1;
@@ -84,31 +85,17 @@
 
     class HoverDelayer {
         _openTimer: Timer;
-        _closeTimer: Timer;
 
         constructor() {
             this._openTimer = null;
-            this._closeTimer = null;
         }
 
         open(callback: () => void): void {
-            this.cancelClose();
             this.cancelOpen();
             this._openTimer = setTimeout(() => {
                 this._openTimer = null;
                 callback();
             }, OPEN_DELAY_MS);
-        }
-
-        close(callback: () => void): void {
-            this.cancelOpen();
-            if (this._closeTimer) {
-                return;
-            }
-            this._closeTimer = setTimeout(() => {
-                this._closeTimer = null;
-                callback();
-            }, CLOSE_DELAY_MS);
         }
 
         cancelOpen(): void {
@@ -119,13 +106,6 @@
             this._openTimer = null;
         }
 
-        cancelClose(): void {
-            if (!this._closeTimer) {
-                return;
-            }
-            clearTimeout(this._closeTimer);
-            this._closeTimer = null;
-        }
     }
 
     class CitationPreviewController {
@@ -139,15 +119,19 @@
         _annotationCache: Map<number, Promise<PdfJsAnnotation[]>>;
         _textContentCache: Map<number, Promise<PdfJsTextContent>>;
         _pageRenderIds: Map<number, number>;
+        _overlayLinks: WeakMap<HTMLElement, PreviewLink>;
         _previewRequestId: number;
         _popup: HTMLDivElement;
         _scaleRenderTimer: Timer;
+        _suppressedOpenTimer: Timer;
         _suppressHoverUntil: number;
         _activeRenderTask: PdfJsRenderTask | null;
+        _debug: boolean;
         _enabled: boolean;
         _resolutionScale: number;
         _controlPressed: boolean;
         _hoveredPreview: HoveredPreview | null;
+        _pointerPosition: { x: number; y: number } | null;
 
         constructor(app: PdfJsApplication) {
             const initialConfiguration = readInitialConfiguration();
@@ -161,15 +145,19 @@
             this._annotationCache = new Map();
             this._textContentCache = new Map();
             this._pageRenderIds = new Map();
+            this._overlayLinks = new WeakMap();
             this._previewRequestId = 0;
             this._popup = this._createPopup();
             this._scaleRenderTimer = null;
+            this._suppressedOpenTimer = null;
             this._suppressHoverUntil = 0;
             this._activeRenderTask = null;
+            this._debug = initialConfiguration.debug;
             this._enabled = initialConfiguration.enabled;
             this._resolutionScale = initialConfiguration.resolutionScale;
             this._controlPressed = false;
             this._hoveredPreview = null;
+            this._pointerPosition = null;
         }
 
         initialize(): void {
@@ -211,6 +199,7 @@
             window.addEventListener("academic-pdf-wheel-zoom", () => {
                 this._suppressHoverUntil = performance.now() + WHEEL_ZOOM_SUPPRESS_HOVER_MS;
                 this._hidePopup();
+                this._openHoveredPreview(true);
             });
 
             window.addEventListener("message", event => {
@@ -224,6 +213,7 @@
                     return;
                 }
                 this._controlPressed = true;
+                this._syncHoveredPreviewAtPointer();
                 this._openHoveredPreview(true);
             }, true);
             window.addEventListener("keyup", event => {
@@ -232,13 +222,32 @@
                 }
             }, true);
             window.addEventListener("blur", () => this._releaseControl());
+            window.addEventListener("pointermove", event => {
+                this._pointerPosition = { x: event.clientX, y: event.clientY };
+                this._controlPressed ||= event.ctrlKey;
+                if (this._syncHoveredPreviewAtPointer() && this._controlPressed) {
+                    this._openHoveredPreview();
+                }
+            }, { capture: true, passive: true });
+            window.addEventListener("pointerout", event => {
+                if (event.relatedTarget === null) {
+                    this._pointerPosition = null;
+                    this._setHoveredPreview(null);
+                }
+            }, true);
         }
 
         _openHoveredPreview(immediate = false): void {
             const hovered = this._hoveredPreview;
-            if (!this._enabled || !this._controlPressed || !hovered?.anchor.isConnected || this._isHoverSuppressed()) {
+            if (!this._enabled || !this._controlPressed || !hovered?.anchor.isConnected) {
                 return;
             }
+            const suppressedForMs = this._suppressHoverUntil - performance.now();
+            if (suppressedForMs > 0) {
+                this._scheduleSuppressedOpen(hovered, suppressedForMs);
+                return;
+            }
+            this._cancelSuppressedOpen();
             const open = () => {
                 if (this._controlPressed && this._hoveredPreview === hovered) {
                     this._showPopup(hovered.anchor, hovered.link);
@@ -250,6 +259,24 @@
             } else {
                 this._hoverDelayer.open(open);
             }
+        }
+
+        _scheduleSuppressedOpen(hovered: HoveredPreview, delayMs: number): void {
+            this._cancelSuppressedOpen();
+            this._suppressedOpenTimer = setTimeout(() => {
+                this._suppressedOpenTimer = null;
+                if (this._hoveredPreview === hovered) {
+                    this._openHoveredPreview(true);
+                }
+            }, Math.ceil(delayMs) + 1);
+        }
+
+        _cancelSuppressedOpen(): void {
+            if (!this._suppressedOpenTimer) {
+                return;
+            }
+            clearTimeout(this._suppressedOpenTimer);
+            this._suppressedOpenTimer = null;
         }
 
         _releaseControl(): void {
@@ -335,6 +362,8 @@
                 }
                 this._appendOverlay(pageView, annotation, pageNumber);
             }
+            this._syncHoveredPreviewAtPointer();
+            this._openHoveredPreview(true);
         }
 
         _getPageAnnotations(pageNumber: number): Promise<PdfJsAnnotation[]> {
@@ -375,18 +404,7 @@
                 rect,
                 dest: annotation.dest
             };
-
-            overlay.addEventListener("pointerenter", (event: PointerEvent) => {
-                this._hoveredPreview = { anchor: overlay, link };
-                this._controlPressed = event.ctrlKey;
-                this._openHoveredPreview();
-            });
-            overlay.addEventListener("pointerleave", () => {
-                if (this._hoveredPreview?.anchor === overlay) {
-                    this._hoveredPreview = null;
-                }
-                this._hoverDelayer.close(() => this._hidePopup());
-            });
+            this._overlayLinks.set(overlay, link);
             overlay.addEventListener("click", (event: MouseEvent) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -395,6 +413,37 @@
             });
 
             layer.append(overlay);
+        }
+
+        _syncHoveredPreviewAtPointer(): boolean {
+            if (!this._pointerPosition) {
+                return this._setHoveredPreview(null);
+            }
+            const { x, y } = this._pointerPosition;
+            const elements = document.elementsFromPoint(x, y);
+            const directAnchor = elements
+                .map(element => element.closest<HTMLElement>(".academic-citation-link"))
+                .find((anchor): anchor is HTMLElement => Boolean(anchor));
+            const page = elements
+                .map(element => element.closest<HTMLElement>(".page"))
+                .find((element): element is HTMLElement => Boolean(element));
+            const anchor = directAnchor || [...(page?.querySelectorAll<HTMLElement>(".academic-citation-link") || [])]
+                .find(candidate => containsClientPoint(candidate.getBoundingClientRect(), x, y));
+            const link = anchor && this._overlayLinks.get(anchor);
+            return this._setHoveredPreview(anchor && link ? { anchor, link } : null);
+        }
+
+        _setHoveredPreview(hovered: HoveredPreview | null): boolean {
+            if (this._hoveredPreview?.anchor === hovered?.anchor) {
+                return false;
+            }
+            this._hoveredPreview?.anchor.classList.remove("is-pointer-over");
+            if (this._hoveredPreview) {
+                this._hidePopup();
+            }
+            this._hoveredPreview = hovered;
+            hovered?.anchor.classList.add("is-pointer-over");
+            return true;
         }
 
         async _showPopup(anchor: HTMLElement, link: PreviewLink): Promise<void> {
@@ -439,7 +488,12 @@
             if (requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
-            this._renderPopupContent(destination, text, image?.src ? image : null, anchor);
+            this._renderPopupContent(
+                destination,
+                text,
+                image?.src || image?.canvas ? image : null,
+                anchor
+            );
         }
 
         _renderPopupContent(
@@ -450,9 +504,14 @@
         ): void {
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image ? `<div class="academic-citation-popup__preview"><img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false"></div>` : ""}
+        ${image ? `<div class="academic-citation-popup__preview">${image.src ? `<img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false">` : ""}</div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
+            if (image?.canvas) {
+                image.canvas.className = "academic-citation-popup__image";
+                image.canvas.setAttribute("aria-hidden", "true");
+                this._popup.querySelector(".academic-citation-popup__preview")?.append(image.canvas);
+            }
             this._bindPreviewScroll(image, anchor);
             requestAnimationFrame(() => this._positionPopup(anchor));
         }
@@ -465,6 +524,7 @@
             this._previewRequestId++;
             this._cancelActiveRenderTask();
             this._hoverDelayer.cancelOpen();
+            this._cancelSuppressedOpen();
             this._popup.classList.remove("is-open");
             this._popup.innerHTML = "";
         }
@@ -486,16 +546,18 @@
             if (!image) {
                 return;
             }
-            const previewImage = preview.querySelector<HTMLImageElement>(".academic-citation-popup__image");
+            const previewImage = preview.querySelector<HTMLElement>(".academic-citation-popup__image");
             const settlePreview = () => {
                 this._positionPopup(anchor);
                 preview.scrollTop = Math.max(0, preview.scrollHeight * image.targetYRatio - preview.clientHeight * 0.32);
                 preview.scrollLeft = Math.max(0, preview.scrollWidth * image.targetXRatio - preview.clientWidth * 0.5);
             };
-            if (previewImage && previewImage.complete) {
+            if (previewImage instanceof HTMLImageElement && previewImage.complete) {
                 requestAnimationFrame(settlePreview);
-            } else if (previewImage) {
+            } else if (previewImage instanceof HTMLImageElement) {
                 previewImage.addEventListener("load", () => requestAnimationFrame(settlePreview), { once: true });
+            } else if (previewImage) {
+                requestAnimationFrame(settlePreview);
             }
         }
 
@@ -563,6 +625,7 @@
         }
 
         async _getImagePreview(destination: ResolvedDestination): Promise<ImagePreview> {
+            const startedAt = performance.now();
             const key = imagePreviewKey(destination);
             const cachedPreview = this._getCachedImagePreview(destination);
             if (cachedPreview) {
@@ -626,11 +689,9 @@
                 }
             }
             drawPreviewTarget(context, point, crop, crop.width / displayWidth);
-
-            const blob = await canvasToPngBlob(canvas);
-            canvas.width = 0;
-            canvas.height = 0;
             if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
+                canvas.width = 0;
+                canvas.height = 0;
                 return {
                     src: "",
                     targetXRatio: 0,
@@ -638,12 +699,45 @@
                 };
             }
             const image = {
-                src: URL.createObjectURL(blob),
+                src: "",
+                canvas,
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
-            this._rememberImagePreview(key, image);
+            this._reportDebug("linkPreviewRendered", {
+                pageNumber: destination.pageNumber,
+                durationMs: performance.now() - startedAt,
+                sizeBytes: canvas.width * canvas.height * 4
+            });
+
+            const encodingStartedAt = performance.now();
+            void canvasToPngBlob(canvas).then(blob => {
+                if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
+                    return;
+                }
+                this._rememberImagePreview(key, {
+                    src: URL.createObjectURL(blob),
+                    targetXRatio: image.targetXRatio,
+                    targetYRatio: image.targetYRatio
+                });
+                this._reportDebug("linkPreviewEncoded", {
+                    pageNumber: destination.pageNumber,
+                    durationMs: performance.now() - encodingStartedAt,
+                    sizeBytes: blob.size
+                });
+            }).catch((error: unknown) => {
+                console.warn("Failed to cache PDF link image preview.", error);
+            });
             return image;
+        }
+
+        _reportDebug(event: string, fields: Record<string, unknown>): void {
+            if (!this._debug) {
+                return;
+            }
+            window.dispatchEvent(new CustomEvent("academic-pdf-debug", {
+                detail: { type: "pdf.debug", event, ...fields }
+            }));
         }
 
         _getCachedImagePreview(destination: ResolvedDestination): ImagePreview | undefined {
@@ -803,19 +897,21 @@
         const configElement = document.getElementById("pdf-preview-config");
         const config = configElement?.getAttribute("data-config");
         if (!config) {
-            return { enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
+            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
         }
         try {
             const settings = JSON.parse(config) as {
                 linkPreviewEnabled?: unknown;
                 linkPreviewResolutionScale?: unknown;
+                debug?: unknown;
             };
             return {
+                debug: settings.debug === true,
                 enabled: settings.linkPreviewEnabled !== false,
                 resolutionScale: normalizeResolutionScale(settings.linkPreviewResolutionScale)
             };
         } catch {
-            return { enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
+            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
         }
     }
 
@@ -978,6 +1074,10 @@
 
     function clamp(value: number, min: number, max: number): number {
         return Math.min(Math.max(value, min), max);
+    }
+
+    function containsClientPoint(rect: DOMRect, x: number, y: number): boolean {
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
     }
 
     function normalizeResolutionScale(value: unknown): number {

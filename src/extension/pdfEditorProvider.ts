@@ -5,6 +5,7 @@ import {
     isWebviewToExtensionMessage,
     normalizeLinkPreviewResolutionScale,
     type DiffNavigationDirection,
+    type DiffRole,
     type ExtensionToWebviewMessage,
     type NavigationDirection,
     type WebviewToExtensionMessage,
@@ -46,7 +47,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private readonly diffOriginalPanels = new Map<vscode.WebviewPanel, vscode.WebviewPanel>();
     private readonly diffPanelInfo = new Map<vscode.WebviewPanel, DiffPanelInfo>();
     private readonly diffHighlightsEnabled = new Set<vscode.WebviewPanel>();
+    private readonly diffSessionIds = new Map<vscode.WebviewPanel, number>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
+    private nextDiffSessionId = 1;
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
 
@@ -182,32 +185,44 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             return undefined;
         }
 
+        const sessionId = this.beginDiffSession(modifiedPanel);
         const modifiedMessage: ExtensionToWebviewMessage = enabled
             ? {
                 type: 'diff.setEnabled',
                 enabled: true,
+                sessionId,
                 role: 'modified',
                 originalData: copyToArrayBuffer(originalDocument.data),
                 originalFingerprint: originalDocument.uri.toString(),
                 originalIsEmptyRevision: originalDocument.data.byteLength === 0,
                 modifiedIsEmptyRevision: modifiedDocument.data.byteLength === 0,
             }
-            : { type: 'diff.setEnabled', enabled: false };
+            : { type: 'diff.setEnabled', enabled: false, sessionId };
         const originalMessage: ExtensionToWebviewMessage = enabled
             ? {
                 type: 'diff.setEnabled',
                 enabled: true,
+                sessionId,
                 role: 'original',
                 allPagesChanged: modifiedDocument.data.byteLength === 0
                     && originalDocument.data.byteLength > 0,
             }
-            : { type: 'diff.setEnabled', enabled: false };
+            : { type: 'diff.setEnabled', enabled: false, sessionId };
         const originalDelivered = await originalPanel.webview.postMessage(originalMessage);
         const modifiedDelivered = originalDelivered
             ? await modifiedPanel.webview.postMessage(modifiedMessage)
             : false;
-        if (!originalDelivered || !modifiedDelivered) {
-            const disableMessage = { type: 'diff.setEnabled', enabled: false } satisfies ExtensionToWebviewMessage;
+        if (this.diffSessionIds.get(modifiedPanel) !== sessionId) {
+            return this.diffHighlightsEnabled.has(modifiedPanel);
+        }
+        if (!this.isCurrentDiffPair(modifiedPanel, originalPanel)
+            || !originalDelivered
+            || !modifiedDelivered) {
+            const disableMessage = {
+                type: 'diff.setEnabled',
+                enabled: false,
+                sessionId,
+            } satisfies ExtensionToWebviewMessage;
             await Promise.allSettled([
                 originalPanel.webview.postMessage(disableMessage),
                 modifiedPanel.webview.postMessage(disableMessage),
@@ -226,6 +241,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.refreshDiffContext();
         this.logger?.info('visualDiff.toggled', {
             enabled,
+            sessionId,
             originalUri: originalDocument.uri.toString(),
             modifiedUri: this.panelDocuments.get(modifiedPanel)?.uri.toString(),
         });
@@ -235,11 +251,16 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     navigateDiffChange(direction: DiffNavigationDirection): boolean {
         const panel = this.activePanel;
         const modifiedPanel = panel && this.diffTargetPanels.get(panel);
-        if (!panel || !modifiedPanel || !this.diffHighlightsEnabled.has(modifiedPanel)) {
+        const sessionId = modifiedPanel && this.diffSessionIds.get(modifiedPanel);
+        if (!panel
+            || !modifiedPanel
+            || sessionId === undefined
+            || !this.diffHighlightsEnabled.has(modifiedPanel)) {
             return false;
         }
         void panel.webview.postMessage({
             type: 'diff.navigate',
+            sessionId,
             direction,
         } satisfies ExtensionToWebviewMessage);
         return true;
@@ -280,6 +301,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 ]);
                 originalDocument.data = originalData;
                 modifiedDocument.data = modifiedData;
+                this.beginDiffSession(modifiedPanel);
                 await Promise.all([
                     this.postDocument(originalPanel, originalDocument, true),
                     this.postDocument(modifiedPanel, modifiedDocument, true),
@@ -344,17 +366,54 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             });
             void this.postDocument(panel, document, false).catch(() => undefined);
         } else if (message.type === 'diff.pageResult') {
+            if (!this.isCurrentModifiedSession(panel, message.sessionId)) {
+                return;
+            }
             this.forwardToOriginal(panel, {
                 type: 'diff.applyPage',
+                sessionId: message.sessionId,
                 pageNumber: message.pageNumber,
                 regions: message.originalRegions,
             });
         } else if (message.type === 'diff.removedPageRange') {
+            if (!this.isCurrentModifiedSession(panel, message.sessionId)) {
+                return;
+            }
             this.forwardToOriginal(panel, {
                 type: 'diff.setRemovedPageRange',
+                sessionId: message.sessionId,
                 fromPage: message.fromPage,
                 toPage: message.toPage,
             });
+        } else if (message.type === 'diff.navigationRequest') {
+            const modifiedPanel = this.currentDiffSession(panel, message.sessionId);
+            if (!modifiedPanel || this.diffPanelInfo.get(panel)?.role !== message.role) {
+                return;
+            }
+            void modifiedPanel.webview.postMessage({
+                type: 'diff.scanForChange',
+                sessionId: message.sessionId,
+                requestId: message.requestId,
+                role: message.role,
+                direction: message.direction,
+                startPage: message.startPage,
+            } satisfies ExtensionToWebviewMessage);
+        } else if (message.type === 'diff.navigationResult') {
+            if (!this.isCurrentModifiedSession(panel, message.sessionId)) {
+                return;
+            }
+            const targetPanel = this.panelForDiffRole(panel, message.role);
+            if (!targetPanel) {
+                return;
+            }
+            void targetPanel.webview.postMessage({
+                type: 'diff.revealChange',
+                sessionId: message.sessionId,
+                requestId: message.requestId,
+                pageNumber: message.pageNumber,
+                index: message.index,
+                regions: message.regions,
+            } satisfies ExtensionToWebviewMessage);
         } else if (message.type === 'diff.scroll') {
             const modifiedPanel = this.diffTargetPanels.get(panel);
             const originalPanel = modifiedPanel && this.diffOriginalPanels.get(modifiedPanel);
@@ -427,28 +486,75 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     private forgetDiffPanel(panel: vscode.WebviewPanel): void {
         const modifiedPanel = this.diffTargetPanels.get(panel);
-        this.diffTargetPanels.delete(panel);
-        this.diffPanelInfo.delete(panel);
-        if (modifiedPanel !== panel) {
-            if (modifiedPanel && this.diffOriginalPanels.get(modifiedPanel) === panel) {
-                this.diffOriginalPanels.delete(modifiedPanel);
-            }
+        if (!modifiedPanel) {
+            this.diffPanelInfo.delete(panel);
             return;
         }
 
-        const originalPanel = this.diffOriginalPanels.get(panel);
-        for (const [candidate, target] of this.diffTargetPanels) {
-            if (target === panel) {
-                this.diffTargetPanels.delete(candidate);
-                this.diffPanelInfo.delete(candidate);
-            }
+        const originalPanel = this.diffOriginalPanels.get(modifiedPanel);
+        const sessionId = this.beginDiffSession(modifiedPanel);
+        const disableMessage = {
+            type: 'diff.setEnabled',
+            enabled: false,
+            sessionId,
+        } satisfies ExtensionToWebviewMessage;
+        if (originalPanel && originalPanel !== panel) {
+            void originalPanel.webview.postMessage(disableMessage);
         }
+        if (modifiedPanel !== panel) {
+            void modifiedPanel.webview.postMessage(disableMessage);
+        }
+
+        this.diffTargetPanels.delete(modifiedPanel);
+        this.diffPanelInfo.delete(modifiedPanel);
         if (originalPanel) {
+            this.diffTargetPanels.delete(originalPanel);
             this.diffPanelInfo.delete(originalPanel);
         }
-        this.diffOriginalDocuments.delete(panel);
-        this.diffOriginalPanels.delete(panel);
-        this.diffHighlightsEnabled.delete(panel);
+        this.diffOriginalDocuments.delete(modifiedPanel);
+        this.diffOriginalPanels.delete(modifiedPanel);
+        this.diffHighlightsEnabled.delete(modifiedPanel);
+        this.diffSessionIds.delete(modifiedPanel);
+        this.refreshDiffContext();
+    }
+
+    private beginDiffSession(modifiedPanel: vscode.WebviewPanel): number {
+        const sessionId = this.nextDiffSessionId++;
+        this.diffSessionIds.set(modifiedPanel, sessionId);
+        return sessionId;
+    }
+
+    private currentDiffSession(
+        panel: vscode.WebviewPanel,
+        sessionId: number,
+    ): vscode.WebviewPanel | undefined {
+        const modifiedPanel = this.diffTargetPanels.get(panel);
+        if (!modifiedPanel || this.diffSessionIds.get(modifiedPanel) !== sessionId) {
+            return undefined;
+        }
+        return modifiedPanel;
+    }
+
+    private isCurrentModifiedSession(panel: vscode.WebviewPanel, sessionId: number): boolean {
+        return this.currentDiffSession(panel, sessionId) === panel;
+    }
+
+    private isCurrentDiffPair(
+        modifiedPanel: vscode.WebviewPanel,
+        originalPanel: vscode.WebviewPanel,
+    ): boolean {
+        return this.diffTargetPanels.get(modifiedPanel) === modifiedPanel
+            && this.diffTargetPanels.get(originalPanel) === modifiedPanel
+            && this.diffOriginalPanels.get(modifiedPanel) === originalPanel;
+    }
+
+    private panelForDiffRole(
+        modifiedPanel: vscode.WebviewPanel,
+        role: DiffRole,
+    ): vscode.WebviewPanel | undefined {
+        return role === 'modified'
+            ? modifiedPanel
+            : this.diffOriginalPanels.get(modifiedPanel);
     }
 
     private setActivePanel(panel: vscode.WebviewPanel): void {

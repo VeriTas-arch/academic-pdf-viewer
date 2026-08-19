@@ -2,6 +2,24 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.1.1] - 2026-08-19
+
+### Added
+
+- Added on-demand cross-page navigation for PDF diff highlights without pre-scanning the full document.
+
+### Changed
+
+- Renamed the previous and next diff commands to reflect document-wide navigation.
+- Isolated each highlight computation behind a diff session identifier so reloads, rapid toggles, and reopened editors reject stale page and navigation results.
+- Cleaned up both sides of a diff pair when either webview is disposed.
+
+### Fixed
+
+- Preserved left-side deletion navigation and right-side addition or replacement navigation across page boundaries, including revisions with different page counts.
+- Displayed newly rendered link-preview canvases immediately while PNG cache encoding continues in the background, removing avoidable first-hover loading time without lowering configured image clarity.
+- Made Control-hover previews use citation-rectangle hit testing, including text glyphs that sit above the preview overlay and stationary pointers after page rerenders or wheel zooming.
+
 ## [1.1.0] - 2026-08-19
 
 ### Added

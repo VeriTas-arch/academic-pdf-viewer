@@ -1,5 +1,5 @@
 /// <reference path="./globals.d.ts" />
-import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
 "use strict";
 (function () {
     const maxRenderDimension = 1200;
@@ -9,6 +9,7 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
     const maximumQueuedPages = 16;
     let config;
     let enabled = false;
+    let currentSessionId = 0;
     let modifiedDocumentReady = false;
     let modifiedFingerprint = "";
     let originalFingerprint = "";
@@ -18,9 +19,13 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
     let originalDocument = null;
     let comparisonGeneration = 0;
     let pageGeneration = 0;
+    let navigationGeneration = 0;
+    let scanGeneration = 0;
     let activePageComparisons = 0;
     const pageResults = new Map();
+    const counterpartPageResults = new Map();
     const pendingPages = new Map();
+    const activePageTasks = new Set();
     const queuedPages = new Map();
     let removedPageRange = null;
     let selectedChange = null;
@@ -40,7 +45,7 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 void enableDiff(event.data);
             }
             else if (isDiffDisableMessage(event.data)) {
-                disableDiff();
+                disableDiff(event.data);
             }
             else if (isDiffApplyPageMessage(event.data)) {
                 applyForwardedPage(event.data);
@@ -49,7 +54,13 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 applyRemovedPageRange(event.data);
             }
             else if (isDiffNavigateMessage(event.data)) {
-                navigateChange(event.data.direction);
+                navigateChange(event.data);
+            }
+            else if (isDiffScanForChangeMessage(event.data)) {
+                scanForForwardedChange(event.data);
+            }
+            else if (isDiffRevealChangeMessage(event.data)) {
+                applyForwardedNavigation(event.data);
             }
             else if (isDiffApplyScrollMessage(event.data)) {
                 applySynchronizedScroll(event.data);
@@ -77,6 +88,8 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 }
             });
             eventBus.on("pagechanging", (event) => {
+                navigationGeneration += 1;
+                scanGeneration += 1;
                 clearSelectedChange();
                 if (config.diffRole === "modified") {
                     schedulePage(event.pageNumber);
@@ -102,27 +115,56 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
     function isDiffEnableMessage(value) {
         return isMessage(value, "diff.setEnabled")
             && value.enabled === true
+            && isPositiveInteger(value.sessionId)
             && (value.role === "original"
                 || value.role === "modified");
     }
     function isDiffDisableMessage(value) {
         return isMessage(value, "diff.setEnabled")
-            && value.enabled === false;
+            && value.enabled === false
+            && isPositiveInteger(value.sessionId);
     }
     function isDiffApplyPageMessage(value) {
         return isMessage(value, "diff.applyPage")
+            && isPositiveInteger(value.sessionId)
             && typeof value.pageNumber === "number"
             && Array.isArray(value.regions);
     }
     function isDiffRemovedPageRangeMessage(value) {
         return isMessage(value, "diff.setRemovedPageRange")
+            && isPositiveInteger(value.sessionId)
             && typeof value.fromPage === "number"
             && typeof value.toPage === "number";
     }
     function isDiffNavigateMessage(value) {
         return isMessage(value, "diff.navigate")
+            && isPositiveInteger(value.sessionId)
             && (value.direction === "next"
                 || value.direction === "previous");
+    }
+    function isDiffScanForChangeMessage(value) {
+        return isMessage(value, "diff.scanForChange")
+            && isPositiveInteger(value.sessionId)
+            && isPositiveInteger(value.requestId)
+            && (value.role === "original"
+                || value.role === "modified")
+            && (value.direction === "next"
+                || value.direction === "previous")
+            && isPositiveInteger(value.startPage);
+    }
+    function isDiffRevealChangeMessage(value) {
+        if (!isMessage(value, "diff.revealChange")) {
+            return false;
+        }
+        const message = value;
+        return isPositiveInteger(message.sessionId)
+            && isPositiveInteger(message.requestId)
+            && isPositiveInteger(message.pageNumber)
+            && typeof message.index === "number"
+            && Number.isSafeInteger(message.index)
+            && message.index >= 0
+            && Array.isArray(message.regions)
+            && message.index < message.regions.length;
     }
     function isDiffApplyScrollMessage(value) {
         if (!isMessage(value, "diff.applyScroll")) {
@@ -147,8 +189,13 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
             && "type" in value
             && value.type === type;
     }
+    function isPositiveInteger(value) {
+        return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+    }
     function handleDocumentLoad(message) {
         pageGeneration += 1;
+        navigationGeneration += 1;
+        scanGeneration += 1;
         modifiedFingerprint = message.fingerprint;
         modifiedDocumentReady = false;
         lastSentScrollAnchor = null;
@@ -164,8 +211,14 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         updateStatus();
     }
     async function enableDiff(message) {
+        if (message.sessionId < currentSessionId) {
+            return;
+        }
+        currentSessionId = message.sessionId;
         const currentComparisonGeneration = ++comparisonGeneration;
         pageGeneration += 1;
+        navigationGeneration += 1;
+        scanGeneration += 1;
         enabled = true;
         resetPageResults();
         if (message.role === "original") {
@@ -216,6 +269,7 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
             if (documentProxy.numPages > modifiedPages) {
                 postExtensionMessage({
                     type: "diff.removedPageRange",
+                    sessionId: currentSessionId,
                     fromPage: modifiedPages + 1,
                     toPage: documentProxy.numPages
                 });
@@ -234,9 +288,15 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
             });
         }
     }
-    function disableDiff() {
+    function disableDiff(message) {
+        if (message.sessionId < currentSessionId) {
+            return;
+        }
+        currentSessionId = message.sessionId;
         comparisonGeneration += 1;
         pageGeneration += 1;
+        navigationGeneration += 1;
+        scanGeneration += 1;
         enabled = false;
         modifiedIsEmptyRevision = false;
         resetPageResults();
@@ -264,6 +324,7 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
     }
     function resetPageResults() {
         pageResults.clear();
+        counterpartPageResults.clear();
         pendingPages.clear();
         queuedPages.clear();
         removedPageRange = null;
@@ -291,6 +352,17 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         if (cached !== undefined) {
             pageResults.delete(pageNumber);
             pageResults.set(pageNumber, cached);
+            const counterpart = counterpartPageResults.get(pageNumber);
+            if (counterpart !== undefined) {
+                counterpartPageResults.delete(pageNumber);
+                counterpartPageResults.set(pageNumber, counterpart);
+                postExtensionMessage({
+                    type: "diff.pageResult",
+                    sessionId: currentSessionId,
+                    pageNumber,
+                    originalRegions: counterpart
+                });
+            }
             applyPageResult(pageNumber);
             return;
         }
@@ -324,29 +396,36 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 || (!originalDocument && !originalIsEmptyRevision)) {
                 continue;
             }
-            activePageComparisons += 1;
-            const task = computeAndApplyPage(pageNumber, currentGeneration);
-            pendingPages.set(pageNumber, task);
-            void task.finally(() => {
-                activePageComparisons -= 1;
-                if (pendingPages.get(pageNumber) === task) {
-                    pendingPages.delete(pageNumber);
-                }
-                drainPageQueue();
-            });
+            startPageComparison(pageNumber, currentGeneration);
         }
+    }
+    function startPageComparison(pageNumber, currentGeneration) {
+        activePageComparisons += 1;
+        const task = computeAndApplyPage(pageNumber, currentGeneration);
+        pendingPages.set(pageNumber, task);
+        activePageTasks.add(task);
+        void task.finally(() => {
+            activePageComparisons -= 1;
+            activePageTasks.delete(task);
+            if (pendingPages.get(pageNumber) === task) {
+                pendingPages.delete(pageNumber);
+            }
+            drainPageQueue();
+        });
+        return task;
     }
     async function computeAndApplyPage(pageNumber, currentGeneration) {
         const startedAt = performance.now();
         try {
             const result = await computePageDiff(pageNumber);
             if (!enabled || pageGeneration !== currentGeneration) {
-                return;
+                return undefined;
             }
-            rememberPageResult(pageNumber, result.modifiedRegions);
+            rememberComputedPageResult(pageNumber, result);
             applyPageResult(pageNumber);
             postExtensionMessage({
                 type: "diff.pageResult",
+                sessionId: currentSessionId,
                 pageNumber,
                 originalRegions: result.originalRegions
             });
@@ -359,10 +438,11 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 regions: result.originalRegions.length + result.modifiedRegions.length,
                 changedPixels: result.changedPixels
             });
+            return result;
         }
         catch (error) {
             if (pageGeneration !== currentGeneration) {
-                return;
+                return undefined;
             }
             reportDebug("diffFailed", {
                 fingerprint: modifiedFingerprint,
@@ -371,12 +451,21 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 durationMs: elapsedSince(startedAt),
                 error: getErrorMessage(error)
             });
+            return undefined;
         }
     }
     async function computePageDiff(pageNumber) {
         const modifiedDocument = window.PDFViewerApplication.pdfDocument;
         if (!modifiedDocument) {
             throw new Error("The modified PDF is not loaded.");
+        }
+        if (pageNumber > modifiedDocument.numPages) {
+            return {
+                originalRegions: [fullPageRegion()],
+                modifiedRegions: [],
+                changedPixels: -1,
+                strategy: "page"
+            };
         }
         if (originalIsEmptyRevision || !originalDocument || pageNumber > originalDocument.numPages) {
             return {
@@ -422,6 +511,20 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
                 return;
             }
             pageResults.delete(oldestPage);
+        }
+    }
+    function rememberComputedPageResult(pageNumber, result) {
+        pageResults.delete(pageNumber);
+        counterpartPageResults.delete(pageNumber);
+        pageResults.set(pageNumber, result.modifiedRegions);
+        counterpartPageResults.set(pageNumber, result.originalRegions);
+        while (pageResults.size > maximumCachedPageResults) {
+            const oldestPage = pageResults.keys().next().value;
+            if (oldestPage === undefined) {
+                return;
+            }
+            pageResults.delete(oldestPage);
+            counterpartPageResults.delete(oldestPage);
         }
     }
     async function renderPage(page, scale) {
@@ -499,14 +602,14 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         return tokens;
     }
     function applyForwardedPage(message) {
-        if (config.diffRole !== "original") {
+        if (config.diffRole !== "original" || message.sessionId !== currentSessionId) {
             return;
         }
         rememberPageResult(message.pageNumber, message.regions);
         applyPageResult(message.pageNumber);
     }
     function applyRemovedPageRange(message) {
-        if (config.diffRole !== "original") {
+        if (config.diffRole !== "original" || message.sessionId !== currentSessionId) {
             return;
         }
         removedPageRange = {
@@ -520,6 +623,18 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         if (regions !== undefined) {
             applyOverlay(pageNumber, regions);
         }
+        if (selectedChange?.pageNumber === pageNumber) {
+            const selectedIndex = selectedChange.index;
+            window.requestAnimationFrame(() => {
+                if (selectedChange?.pageNumber !== pageNumber
+                    || selectedChange.index !== selectedIndex) {
+                    return;
+                }
+                const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
+                const markers = pageView?.div.querySelectorAll(".academicPdfDiffRegion");
+                markers?.[selectedIndex]?.scrollIntoView({ block: "center", inline: "center" });
+            });
+        }
         updateStatus();
     }
     function regionsForPage(pageNumber) {
@@ -530,8 +645,8 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         }
         return pageResults.get(pageNumber);
     }
-    function navigateChange(direction) {
-        if (!enabled) {
+    function navigateChange(message) {
+        if (!enabled || message.sessionId !== currentSessionId || !config.diffRole) {
             return;
         }
         const viewer = window.PDFViewerApplication.pdfViewer;
@@ -539,25 +654,169 @@ import { compareRasters, compareTextTokens, fullPageRegion, } from "./pdfDiffAlg
         if (!viewer || typeof pageNumber !== "number") {
             return;
         }
+        const requestId = ++navigationGeneration;
+        scanGeneration += 1;
         const regions = regionsForPage(pageNumber);
-        if (!regions || regions.length === 0) {
-            updateStatus();
+        const selectedIndex = selectedChange?.pageNumber === pageNumber
+            ? selectedChange.index
+            : undefined;
+        const localIndex = nextDiffRegionIndex(regions?.length ?? 0, selectedIndex, message.direction);
+        if (localIndex !== undefined && regions) {
+            revealChange(pageNumber, localIndex, regions);
             return;
         }
-        const previousIndex = selectedChange?.pageNumber === pageNumber
-            ? selectedChange.index
-            : direction === "next" ? -1 : 0;
-        const index = direction === "next"
-            ? (previousIndex + 1) % regions.length
-            : (previousIndex - 1 + regions.length) % regions.length;
+        const step = message.direction === "next" ? 1 : -1;
+        const startPage = regions === undefined ? pageNumber : pageNumber + step;
+        if (config.diffRole === "original") {
+            const unresolvedPage = navigateKnownOriginalPages(startPage, message.direction);
+            if (unresolvedPage === undefined) {
+                return;
+            }
+            postExtensionMessage({
+                type: "diff.navigationRequest",
+                sessionId: currentSessionId,
+                requestId,
+                role: "original",
+                direction: message.direction,
+                startPage: unresolvedPage
+            });
+            return;
+        }
+        void scanForChange({
+            sessionId: currentSessionId,
+            requestId,
+            role: "modified",
+            direction: message.direction,
+            startPage
+        }, false);
+    }
+    function navigateKnownOriginalPages(startPage, direction) {
+        const viewer = window.PDFViewerApplication.pdfViewer;
+        const step = direction === "next" ? 1 : -1;
+        for (let pageNumber = startPage; pageNumber >= 1 && pageNumber <= viewer.pagesCount; pageNumber += step) {
+            const regions = regionsForPage(pageNumber);
+            if (regions === undefined) {
+                return pageNumber;
+            }
+            if (regions.length > 0) {
+                revealChange(pageNumber, direction === "next" ? 0 : regions.length - 1, regions);
+                return undefined;
+            }
+        }
+        return undefined;
+    }
+    function scanForForwardedChange(message) {
+        if (config.diffRole !== "modified" || message.sessionId !== currentSessionId) {
+            return;
+        }
+        void scanForChange(message, true);
+    }
+    async function scanForChange(request, forwardResult) {
+        const currentScanGeneration = ++scanGeneration;
+        const modifiedDocument = window.PDFViewerApplication.pdfDocument;
+        const lastPage = request.role === "original"
+            ? originalDocument?.numPages ?? 0
+            : modifiedDocument?.numPages ?? 0;
+        const target = await findNextDiffPage(request.startPage, lastPage, request.direction, async (pageNumber) => {
+            const result = await ensurePageComparison(pageNumber, request.sessionId, currentScanGeneration);
+            if (!result
+                || !isCurrentScan(request.sessionId, currentScanGeneration)
+                || (!forwardResult && navigationGeneration !== request.requestId)) {
+                return undefined;
+            }
+            return request.role === "original"
+                ? result.originalRegions
+                : result.modifiedRegions;
+        });
+        if (!target
+            || !isCurrentScan(request.sessionId, currentScanGeneration)
+            || (!forwardResult && navigationGeneration !== request.requestId)) {
+            return;
+        }
+        if (forwardResult) {
+            postExtensionMessage({
+                type: "diff.navigationResult",
+                sessionId: request.sessionId,
+                requestId: request.requestId,
+                role: request.role,
+                pageNumber: target.pageNumber,
+                index: target.index,
+                regions: target.regions
+            });
+        }
+        else {
+            revealChange(target.pageNumber, target.index, target.regions);
+        }
+    }
+    async function ensurePageComparison(pageNumber, sessionId, currentScanGeneration) {
+        const cached = cachedComparison(pageNumber);
+        if (cached) {
+            return cached;
+        }
+        const pending = pendingPages.get(pageNumber);
+        if (pending) {
+            await pending;
+            return isCurrentScan(sessionId, currentScanGeneration)
+                ? cachedComparison(pageNumber)
+                : undefined;
+        }
+        queuedPages.delete(pageNumber);
+        while (activePageComparisons >= maximumConcurrentPageComparisons) {
+            const activeTasks = [...activePageTasks];
+            if (activeTasks.length === 0) {
+                return undefined;
+            }
+            await Promise.race(activeTasks);
+            if (!isCurrentScan(sessionId, currentScanGeneration)) {
+                return undefined;
+            }
+            const completed = cachedComparison(pageNumber);
+            if (completed) {
+                return completed;
+            }
+        }
+        if (!isCurrentScan(sessionId, currentScanGeneration)) {
+            return undefined;
+        }
+        const result = await startPageComparison(pageNumber, pageGeneration);
+        return result
+            ? {
+                originalRegions: result.originalRegions,
+                modifiedRegions: result.modifiedRegions
+            }
+            : undefined;
+    }
+    function cachedComparison(pageNumber) {
+        const modifiedRegions = pageResults.get(pageNumber);
+        const originalRegions = counterpartPageResults.get(pageNumber);
+        return modifiedRegions !== undefined && originalRegions !== undefined
+            ? { originalRegions, modifiedRegions }
+            : undefined;
+    }
+    function isCurrentScan(sessionId, currentScanGeneration) {
+        return enabled
+            && currentSessionId === sessionId
+            && scanGeneration === currentScanGeneration;
+    }
+    function applyForwardedNavigation(message) {
+        if (config.diffRole !== "original"
+            || message.sessionId !== currentSessionId
+            || message.requestId !== navigationGeneration) {
+            return;
+        }
+        rememberPageResult(message.pageNumber, message.regions);
+        revealChange(message.pageNumber, message.index, message.regions);
+    }
+    function revealChange(pageNumber, index, regions) {
+        const viewer = window.PDFViewerApplication.pdfViewer;
+        if (index < 0 || index >= regions.length || pageNumber > viewer.pagesCount) {
+            return;
+        }
+        if (viewer.currentPageNumber !== pageNumber) {
+            viewer.currentPageNumber = pageNumber;
+        }
         selectedChange = { pageNumber, index };
-        applyOverlay(pageNumber, regions);
-        const pageView = viewer.getPageView(pageNumber - 1);
-        const markers = pageView?.div.querySelectorAll(".academicPdfDiffRegion");
-        const marker = markers?.[index];
-        marker?.classList.add("academicPdfDiffRegion--selected");
-        marker?.scrollIntoView({ block: "center", inline: "center" });
-        updateStatus();
+        applyPageResult(pageNumber);
     }
     function clearSelectedChange() {
         selectedChange = null;
