@@ -11,6 +11,7 @@ note.md
 
 # Temporary files
 *.tmp
+tmp/
 assets/pdfviewer/.pdfjs-update-*/
 
 # Vendored PDF.js sourcemaps are large and not needed at runtime.
