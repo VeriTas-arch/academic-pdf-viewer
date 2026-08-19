@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.1.2",
+    "version": "1.2.0",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {

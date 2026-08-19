@@ -2,6 +2,25 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.2.0] - 2026-08-19
+
+### Added
+
+- Added bounded background scheduling and cache-aware page comparison for responsive PDF diffs across both small and long documents.
+- Added broader automated coverage for proportional text highlights, multi-rectangle selections, long-document prefetching, removed pages, missing Git revisions, and interactive citation previews.
+
+### Changed
+
+- Improved text-diff performance for mostly unchanged pages by trimming common token prefixes and suffixes before matching.
+- Standardized same-line and paired replacement highlight geometry while preserving materially different text heights.
+- Made Control-hover citation previews interactive while Control is held, including pointer movement into the popup and preview scrolling without triggering PDF zoom.
+
+### Fixed
+
+- Preserved empty-revision behavior for added and deleted Git PDFs while retaining the preflight file-size safety limit.
+- Cleared every rectangle belonging to a selected multi-region change when navigating to another page.
+- Restored citation fallback text selection before applying the four-line preview limit.
+
 ## [1.1.2] - 2026-08-19
 
 ### Added
