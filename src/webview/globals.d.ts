@@ -12,13 +12,21 @@ interface PdfJsViewport {
 }
 
 interface PdfJsTextItem {
+    fontName?: string;
     str?: string;
     transform?: number[];
     width?: number;
 }
 
+interface PdfJsTextStyle {
+    ascent?: number;
+    descent?: number;
+    fontFamily?: string;
+}
+
 interface PdfJsTextContent {
     items: PdfJsTextItem[];
+    styles?: Record<string, PdfJsTextStyle>;
 }
 
 type PdfJsDestination = string | unknown[];

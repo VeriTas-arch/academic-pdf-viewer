@@ -145,6 +145,7 @@ import {
     let remoteScrollReleaseFrame: number | null = null;
     let applyingRemoteScroll = false;
     let lastSentScrollAnchor: DiffScrollAnchor | null = null;
+    let textMetricsContext: CanvasRenderingContext2D | null | undefined;
 
     window.addEventListener("load", () => {
         config = loadConfig();
@@ -780,8 +781,8 @@ import {
             ]);
             const originalViewport = originalPage.getViewport({ scale });
             const modifiedViewport = modifiedPage.getViewport({ scale });
-            const originalTokens = collectTextTokens(originalContent.items, originalViewport);
-            const modifiedTokens = collectTextTokens(modifiedContent.items, modifiedViewport);
+            const originalTokens = collectTextTokens(originalContent, originalViewport);
+            const modifiedTokens = collectTextTokens(modifiedContent, modifiedViewport);
             return compareTextTokens(
                 originalTokens,
                 modifiedTokens,
@@ -802,9 +803,9 @@ import {
         }
     }
 
-    function collectTextTokens(items: PdfJsTextItem[], viewport: PdfJsViewport): TextToken[] {
+    function collectTextTokens(content: PdfJsTextContent, viewport: PdfJsViewport): TextToken[] {
         const tokens: TextToken[] = [];
-        for (const item of items) {
+        for (const item of content.items) {
             if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
                 continue;
             }
@@ -812,14 +813,50 @@ import {
             const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
             const itemWidth = Math.abs(Number(item.width) * viewport.scale);
             const fontHeight = Math.max(1, Math.hypot(transform[2], transform[3]));
-            const top = transform[5] - fontHeight;
-            const bottom = transform[5] + fontHeight * 0.2;
+            const style = item.fontName ? content.styles?.[item.fontName] : undefined;
+            const ascentRatio = style?.ascent
+                ?? (style?.descent !== undefined ? 1 + style.descent : 0.8);
+            const fallbackTop = -fontHeight * ascentRatio;
+            const fallbackBottom = fallbackTop + fontHeight;
+            const context = getTextMetricsContext();
+            const fontFamily = style?.fontFamily?.trim();
+            if (context && fontFamily) {
+                context.font = `${fontHeight}px ${fontFamily}`;
+            }
+            const measuredWidth = context && fontFamily
+                ? context.measureText(item.str).width
+                : 0;
             const matches = item.str.matchAll(/\S+/gu);
             for (const match of matches) {
                 const start = match.index;
                 const end = start + match[0].length;
-                const left = transform[4] + itemWidth * start / item.str.length;
-                const right = transform[4] + itemWidth * end / item.str.length;
+                let leftRatio = start / item.str.length;
+                let rightRatio = end / item.str.length;
+                let topOffset = fallbackTop;
+                let bottomOffset = fallbackBottom;
+                if (context && measuredWidth > 0) {
+                    const prefixWidth = context.measureText(item.str.slice(0, start)).width;
+                    const tokenMetrics = context.measureText(match[0]);
+                    const inkLeft = prefixWidth - tokenMetrics.actualBoundingBoxLeft;
+                    const inkRight = prefixWidth + tokenMetrics.actualBoundingBoxRight;
+                    if (Number.isFinite(inkLeft) && Number.isFinite(inkRight) && inkRight > inkLeft) {
+                        leftRatio = inkLeft / measuredWidth;
+                        rightRatio = inkRight / measuredWidth;
+                    } else if (tokenMetrics.width > 0) {
+                        leftRatio = prefixWidth / measuredWidth;
+                        rightRatio = (prefixWidth + tokenMetrics.width) / measuredWidth;
+                    }
+                    const inkTop = -tokenMetrics.actualBoundingBoxAscent;
+                    const inkBottom = tokenMetrics.actualBoundingBoxDescent;
+                    if (Number.isFinite(inkTop) && Number.isFinite(inkBottom) && inkBottom > inkTop) {
+                        topOffset = inkTop;
+                        bottomOffset = inkBottom;
+                    }
+                }
+                const left = transform[4] + itemWidth * leftRatio;
+                const right = transform[4] + itemWidth * rightRatio;
+                const top = transform[5] + topOffset;
+                const bottom = transform[5] + bottomOffset;
                 tokens.push({
                     text: match[0].normalize(),
                     left: Math.min(left, right),
@@ -831,6 +868,13 @@ import {
             }
         }
         return tokens;
+    }
+
+    function getTextMetricsContext(): CanvasRenderingContext2D | null {
+        if (textMetricsContext === undefined) {
+            textMetricsContext = document.createElement("canvas").getContext("2d");
+        }
+        return textMetricsContext;
     }
 
     function applyForwardedPage(message: DiffApplyPageMessage): void {

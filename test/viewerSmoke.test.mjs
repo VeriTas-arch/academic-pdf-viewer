@@ -164,6 +164,114 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.close();
     });
 
+    await t.test("aligns text highlights with proportional-font glyphs", async () => {
+        const diffPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const diffPageErrors = [];
+        diffPage.on("pageerror", error => diffPageErrors.push(error.message));
+        await diffPage.goto(`${origin}/__viewer_diff_test__.html`);
+        await diffPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        const originalData = createTextPdf("Median latency: 42 ms");
+        const modifiedData = createTextPdf("Median latency: 31 ms");
+        await diffPage.evaluate(async data => {
+            window.postMessage({
+                type: "document.load",
+                data: Uint8Array.from(data).buffer,
+                isEmptyRevision: false,
+                fingerprint: "text-alignment-modified",
+                preserveView: false
+            }, "*");
+        }, [...modifiedData]);
+        await diffPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+        ));
+        await diffPage.evaluate(data => {
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "modified",
+                originalData: Uint8Array.from(data).buffer,
+                originalFingerprint: "text-alignment-original",
+                originalIsEmptyRevision: false,
+                modifiedIsEmptyRevision: false
+            }, "*");
+        }, [...originalData]);
+        await diffPage.waitForFunction(() => document.querySelector(
+            '.page[data-page-number="1"] .academicPdfDiffRegion'
+        ));
+
+        const gaps = await diffPage.evaluate(() => {
+            const marker = document.querySelector(
+                '.page[data-page-number="1"] .academicPdfDiffRegion'
+            );
+            const pageCanvas = document.querySelector('.page[data-page-number="1"] canvas');
+            if (!(marker instanceof HTMLElement) || !(pageCanvas instanceof HTMLCanvasElement)) {
+                throw new Error("Could not find the changed text and its highlight.");
+            }
+            const markerRect = marker.getBoundingClientRect();
+            const pageCanvasContext = pageCanvas.getContext("2d", { willReadFrequently: true });
+            if (!pageCanvasContext) {
+                throw new Error("Could not inspect the rendered PDF page.");
+            }
+            const pageCanvasRect = pageCanvas.getBoundingClientRect();
+            const canvasScaleX = pageCanvas.width / pageCanvasRect.width;
+            const scanPadding = 8;
+            const firstColumn = Math.max(0, Math.floor(
+                (markerRect.left - pageCanvasRect.left - scanPadding) * canvasScaleX
+            ));
+            const lastColumn = Math.min(pageCanvas.width, Math.ceil(
+                (markerRect.right - pageCanvasRect.left + scanPadding) * canvasScaleX
+            ));
+            const width = lastColumn - firstColumn;
+            const canvasScaleY = pageCanvas.height / pageCanvasRect.height;
+            const firstRow = Math.max(0, Math.floor(
+                (markerRect.top - pageCanvasRect.top - scanPadding) * canvasScaleY
+            ));
+            const lastRow = Math.min(pageCanvas.height, Math.ceil(
+                (markerRect.bottom - pageCanvasRect.top + scanPadding) * canvasScaleY
+            ));
+            const height = lastRow - firstRow;
+            const pixels = pageCanvasContext.getImageData(firstColumn, firstRow, width, height).data;
+            let inkLeft = width;
+            let inkTop = height;
+            let inkRight = -1;
+            let inkBottom = -1;
+            for (let y = 0; y < height; y += 1) {
+                for (let x = 0; x < width; x += 1) {
+                    const pixel = (y * width + x) * 4;
+                    if (pixels[pixel] < 128 && pixels[pixel + 1] < 128 && pixels[pixel + 2] < 128) {
+                        inkLeft = Math.min(inkLeft, x);
+                        inkTop = Math.min(inkTop, y);
+                        inkRight = Math.max(inkRight, x + 1);
+                        inkBottom = Math.max(inkBottom, y + 1);
+                    }
+                }
+            }
+            if (inkRight < 0 || inkBottom < 0) {
+                throw new Error("Could not find changed glyph pixels near the highlight.");
+            }
+            const glyphLeft = pageCanvasRect.left + (firstColumn + inkLeft) / canvasScaleX;
+            const glyphRight = pageCanvasRect.left + (firstColumn + inkRight) / canvasScaleX;
+            const glyphTop = pageCanvasRect.top + (firstRow + inkTop) / canvasScaleY;
+            const glyphBottom = pageCanvasRect.top + (firstRow + inkBottom) / canvasScaleY;
+            return {
+                left: glyphLeft - markerRect.left,
+                right: markerRect.right - glyphRight,
+                top: glyphTop - markerRect.top,
+                bottom: markerRect.bottom - glyphBottom
+            };
+        });
+        assert(gaps.left >= 0 && gaps.left <= 8, `left highlight gap was ${gaps.left}px`);
+        assert(gaps.right >= 0 && gaps.right <= 8, `right highlight gap was ${gaps.right}px`);
+        assert(gaps.top >= 0 && gaps.top <= 8, `top highlight gap was ${gaps.top}px`);
+        assert(gaps.bottom >= 0 && gaps.bottom <= 8, `bottom highlight gap was ${gaps.bottom}px`);
+        assert.deepEqual(diffPageErrors, []);
+        await diffPage.close();
+    });
+
     await t.test("applies removed-page highlights to pre-rendered pages in a small document", async () => {
         const { viewerPage: originalPage, pageErrors: originalPageErrors } = await openPreparedDiffPage(
             browser,
@@ -357,4 +465,31 @@ function contentType(path) {
 
 function escapeHtmlAttribute(value) {
     return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function createTextPdf(text) {
+    const escapedText = text.replace(/([\\()])/g, "\\$1");
+    const stream = `BT\n/F1 24 Tf\n72 700 Td\n(${escapedText}) Tj\nET\n`;
+    const objects = [
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        `4 0 obj\n<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream\nendobj\n`,
+        "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+    ];
+    let body = "%PDF-1.4\n";
+    const offsets = [0];
+    for (const object of objects) {
+        offsets.push(Buffer.byteLength(body, "ascii"));
+        body += object;
+    }
+    const xrefOffset = Buffer.byteLength(body, "ascii");
+    body += `xref\n0 ${objects.length + 1}\n`;
+    body += "0000000000 65535 f \n";
+    for (const offset of offsets.slice(1)) {
+        body += `${String(offset).padStart(10, "0")} 00000 n \n`;
+    }
+    body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n`;
+    body += `startxref\n${xrefOffset}\n%%EOF\n`;
+    return Buffer.from(body, "ascii");
 }
