@@ -120,12 +120,25 @@ interface PdfJsLocation {
     top: number | null;
 }
 
+interface AcademicPdfJsCapabilities {
+    viewer: boolean;
+    viewerContainer: boolean;
+    toolbarHost: boolean;
+    location: boolean;
+    fingerprintOverride: boolean;
+    pageNumberInterception: boolean;
+}
+
 interface AcademicPdfJsAdapter {
     getApplication(): PdfJsApplication | null;
     getViewer(): PdfJsViewer | null;
     getViewerContainer(viewer?: PdfJsViewer | null): HTMLElement | null;
     getToolbarHost(): HTMLElement | null;
     getPageViews(viewer: PdfJsViewer): PdfJsPageView[];
+    getCapabilities(
+        document?: PdfJsDocument | null,
+        viewer?: PdfJsViewer | null
+    ): AcademicPdfJsCapabilities;
     getPdfLocation(viewer: PdfJsViewer): PdfJsLocation;
     setDocumentFingerprint(document: PdfJsDocument, fingerprint: string): boolean;
     interceptPageNumberChanges(

@@ -47,6 +47,22 @@
             return pages;
         },
 
+        getCapabilities(
+            document = adapter.getApplication()?.pdfDocument ?? null,
+            viewer = adapter.getViewer()
+        ): AcademicPdfJsCapabilities {
+            const privateDocument = document as PrivatePdfJsDocument | null;
+            const privateViewer = viewer as PrivatePdfJsViewer | null;
+            return {
+                viewer: viewer !== null,
+                viewerContainer: adapter.getViewerContainer(viewer) !== null,
+                toolbarHost: adapter.getToolbarHost() !== null,
+                location: privateViewer?._location !== undefined,
+                fingerprintOverride: privateDocument?._pdfInfo !== undefined,
+                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function"
+            };
+        },
+
         getPdfLocation(viewer: PdfJsViewer): PdfJsLocation {
             const location = (viewer as PrivatePdfJsViewer)._location;
             return {

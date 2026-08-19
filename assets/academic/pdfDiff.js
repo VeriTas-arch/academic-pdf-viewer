@@ -1,5 +1,6 @@
 /// <reference path="./globals.d.ts" />
 import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
+import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
 "use strict";
 (function () {
     const maxRenderDimension = 1200;
@@ -10,6 +11,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
     const maximumQueuedPages = eagerComparisonPageLimit;
     const comparisonPrefetchRadius = 3;
     const pdfjsAdapter = window.academicPdfJsAdapter;
+    const pageScheduler = new PageComparisonScheduler(maximumConcurrentPageComparisons, maximumQueuedPages);
     let config;
     let enabled = false;
     let currentSessionId = 0;
@@ -21,15 +23,12 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
     let originalLoadingTask = null;
     let originalDocument = null;
     let comparisonGeneration = 0;
-    let pageGeneration = 0;
     let navigationGeneration = 0;
     let scanGeneration = 0;
-    let activePageComparisons = 0;
     const pageResults = new Map();
     const counterpartPageResults = new Map();
     const pendingPages = new Map();
     const activePageTasks = new Set();
-    const queuedPages = new Map();
     let removedPageRange = null;
     let selectedChange = null;
     let statusElement = null;
@@ -132,7 +131,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         return isMessage(value, "diff.applyPage")
             && isPositiveInteger(value.sessionId)
             && typeof value.pageNumber === "number"
-            && Array.isArray(value.regions);
+            && Array.isArray(value.changes);
     }
     function isDiffRemovedPageRangeMessage(value) {
         return isMessage(value, "diff.setRemovedPageRange")
@@ -167,8 +166,8 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
             && typeof message.index === "number"
             && Number.isSafeInteger(message.index)
             && message.index >= 0
-            && Array.isArray(message.regions)
-            && message.index < message.regions.length;
+            && Array.isArray(message.changes)
+            && message.index < message.changes.length;
     }
     function isDiffApplyScrollMessage(value) {
         if (!isMessage(value, "diff.applyScroll")) {
@@ -197,7 +196,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
     }
     function handleDocumentLoad(message) {
-        pageGeneration += 1;
+        pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
         modifiedFingerprint = message.fingerprint;
@@ -220,7 +219,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         }
         currentSessionId = message.sessionId;
         const currentComparisonGeneration = ++comparisonGeneration;
-        pageGeneration += 1;
+        pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
         enabled = true;
@@ -298,7 +297,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         }
         currentSessionId = message.sessionId;
         comparisonGeneration += 1;
-        pageGeneration += 1;
+        pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
         enabled = false;
@@ -330,7 +329,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         pageResults.clear();
         counterpartPageResults.clear();
         pendingPages.clear();
-        queuedPages.clear();
+        pageScheduler.clearQueued();
         removedPageRange = null;
         clearSelectedChange();
         clearOverlays();
@@ -421,7 +420,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                     type: "diff.pageResult",
                     sessionId: currentSessionId,
                     pageNumber,
-                    originalRegions: counterpart
+                    originalChanges: counterpart
                 });
             }
             applyPageResult(pageNumber);
@@ -430,43 +429,33 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         if (pendingPages.has(pageNumber)) {
             return;
         }
-        const currentGeneration = pageGeneration;
-        queuedPages.delete(pageNumber);
-        queuedPages.set(pageNumber, currentGeneration);
+        pageScheduler.enqueue(pageNumber);
         updateStatus();
-        while (queuedPages.size > maximumQueuedPages) {
-            const oldestPage = queuedPages.keys().next().value;
-            if (oldestPage === undefined) {
-                break;
-            }
-            queuedPages.delete(oldestPage);
-        }
         drainPageQueue();
     }
     function drainPageQueue() {
-        while (activePageComparisons < maximumConcurrentPageComparisons && queuedPages.size > 0) {
-            const next = queuedPages.entries().next().value;
-            if (!next) {
+        while (!pageScheduler.atCapacity && pageScheduler.queuedCount > 0) {
+            const scheduled = pageScheduler.startNext();
+            if (!scheduled) {
                 return;
             }
-            const [pageNumber, currentGeneration] = next;
-            queuedPages.delete(pageNumber);
             if (!enabled
                 || !modifiedDocumentReady
-                || pageGeneration !== currentGeneration
+                || !pageScheduler.isCurrent(scheduled.generation)
                 || (!originalDocument && !originalIsEmptyRevision)) {
+                pageScheduler.complete();
                 continue;
             }
-            startPageComparison(pageNumber, currentGeneration);
+            startPageComparison(scheduled);
         }
     }
-    function startPageComparison(pageNumber, currentGeneration) {
-        activePageComparisons += 1;
-        const task = computeAndApplyPage(pageNumber, currentGeneration);
+    function startPageComparison(scheduled) {
+        const { pageNumber, generation } = scheduled;
+        const task = computeAndApplyPage(pageNumber, generation);
         pendingPages.set(pageNumber, task);
         activePageTasks.add(task);
         void task.finally(() => {
-            activePageComparisons -= 1;
+            pageScheduler.complete();
             activePageTasks.delete(task);
             if (pendingPages.get(pageNumber) === task) {
                 pendingPages.delete(pageNumber);
@@ -479,7 +468,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         const startedAt = performance.now();
         try {
             const result = await computePageDiff(pageNumber);
-            if (!enabled || pageGeneration !== currentGeneration) {
+            if (!enabled || !pageScheduler.isCurrent(currentGeneration)) {
                 return undefined;
             }
             rememberComputedPageResult(pageNumber, result);
@@ -488,7 +477,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                 type: "diff.pageResult",
                 sessionId: currentSessionId,
                 pageNumber,
-                originalRegions: result.originalRegions
+                originalChanges: counterpartPageResults.get(pageNumber) ?? []
             });
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
@@ -502,7 +491,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
             return result;
         }
         catch (error) {
-            if (pageGeneration !== currentGeneration) {
+            if (!pageScheduler.isCurrent(currentGeneration)) {
                 return undefined;
             }
             reportDebug("diffFailed", {
@@ -521,20 +510,10 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
             throw new Error("The modified PDF is not loaded.");
         }
         if (pageNumber > modifiedDocument.numPages) {
-            return {
-                originalRegions: [fullPageRegion()],
-                modifiedRegions: [],
-                changedPixels: -1,
-                strategy: "page"
-            };
+            return pageChangeResult("delete");
         }
         if (originalIsEmptyRevision || !originalDocument || pageNumber > originalDocument.numPages) {
-            return {
-                originalRegions: [],
-                modifiedRegions: [fullPageRegion()],
-                changedPixels: -1,
-                strategy: "page"
-            };
+            return pageChangeResult("insert");
         }
         const [originalPage, modifiedPage] = await Promise.all([
             originalDocument.getPage(pageNumber),
@@ -544,12 +523,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         const modifiedViewport = modifiedPage.getViewport({ scale: 1 });
         if (Math.abs(originalViewport.width - modifiedViewport.width) > 0.5
             || Math.abs(originalViewport.height - modifiedViewport.height) > 0.5) {
-            return {
-                originalRegions: [fullPageRegion()],
-                modifiedRegions: [fullPageRegion()],
-                changedPixels: -1,
-                strategy: "page"
-            };
+            return pageChangeResult("replace");
         }
         const largestDimension = Math.max(modifiedViewport.width, modifiedViewport.height);
         const scale = Math.min(maxRenderScale, maxRenderDimension / largestDimension);
@@ -563,9 +537,27 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         ]);
         return compareRasters(originalRaster, modifiedRaster);
     }
-    function rememberPageResult(pageNumber, regions) {
+    function pageChangeResult(kind) {
+        const region = fullPageRegion();
+        const originalRegions = kind === "insert" ? [] : [region];
+        const modifiedRegions = kind === "delete" ? [] : [region];
+        return {
+            changes: [{
+                    id: "page-1",
+                    kind,
+                    originalRegions,
+                    modifiedRegions,
+                    strategy: "page"
+                }],
+            originalRegions,
+            modifiedRegions,
+            changedPixels: -1,
+            strategy: "page"
+        };
+    }
+    function rememberPageResult(pageNumber, changes) {
         pageResults.delete(pageNumber);
-        pageResults.set(pageNumber, regions);
+        pageResults.set(pageNumber, changes);
         while (pageResults.size > maximumCachedPageResults) {
             const oldestPage = pageResults.keys().next().value;
             if (oldestPage === undefined) {
@@ -577,8 +569,8 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
     function rememberComputedPageResult(pageNumber, result) {
         pageResults.delete(pageNumber);
         counterpartPageResults.delete(pageNumber);
-        pageResults.set(pageNumber, result.modifiedRegions);
-        counterpartPageResults.set(pageNumber, result.originalRegions);
+        pageResults.set(pageNumber, sideChanges(pageNumber, result, "modified"));
+        counterpartPageResults.set(pageNumber, sideChanges(pageNumber, result, "original"));
         while (pageResults.size > maximumCachedPageResults) {
             const oldestPage = pageResults.keys().next().value;
             if (oldestPage === undefined) {
@@ -587,6 +579,16 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
             pageResults.delete(oldestPage);
             counterpartPageResults.delete(oldestPage);
         }
+    }
+    function sideChanges(pageNumber, result, side) {
+        return result.changes
+            .map(change => ({
+            id: `${pageNumber}:${change.id}`,
+            kind: change.kind,
+            regions: side === "original" ? change.originalRegions : change.modifiedRegions,
+            strategy: change.strategy
+        }))
+            .filter(change => change.regions.length > 0);
     }
     async function renderPage(page, scale) {
         const viewport = page.getViewport({ scale });
@@ -709,7 +711,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         if (config.diffRole !== "original" || message.sessionId !== currentSessionId) {
             return;
         }
-        rememberPageResult(message.pageNumber, message.regions);
+        rememberPageResult(message.pageNumber, message.changes);
         applyPageResult(message.pageNumber);
     }
     function applyRemovedPageRange(message) {
@@ -723,9 +725,9 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         applyComparisonPages();
     }
     function applyPageResult(pageNumber) {
-        const regions = regionsForPage(pageNumber);
-        if (regions !== undefined) {
-            applyOverlay(pageNumber, regions);
+        const changes = changesForPage(pageNumber);
+        if (changes !== undefined) {
+            applyOverlay(pageNumber, changes);
         }
         if (selectedChange?.pageNumber === pageNumber) {
             const selectedIndex = selectedChange.index;
@@ -735,17 +737,22 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                     return;
                 }
                 const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
-                const markers = pageView?.div.querySelectorAll(".academicPdfDiffRegion");
-                markers?.[selectedIndex]?.scrollIntoView({ block: "center", inline: "center" });
+                const marker = pageView?.div.querySelector(`.academicPdfDiffRegion[data-change-index="${selectedIndex}"]`);
+                marker?.scrollIntoView({ block: "center", inline: "center" });
             });
         }
         updateStatus();
     }
-    function regionsForPage(pageNumber) {
+    function changesForPage(pageNumber) {
         if (removedPageRange
             && pageNumber >= removedPageRange.fromPage
             && pageNumber <= removedPageRange.toPage) {
-            return [fullPageRegion()];
+            return [{
+                    id: `${pageNumber}:page-1`,
+                    kind: "delete",
+                    regions: [fullPageRegion()],
+                    strategy: "page"
+                }];
         }
         return pageResults.get(pageNumber);
     }
@@ -760,17 +767,17 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         }
         const requestId = ++navigationGeneration;
         scanGeneration += 1;
-        const regions = regionsForPage(pageNumber);
+        const changes = changesForPage(pageNumber);
         const selectedIndex = selectedChange?.pageNumber === pageNumber
             ? selectedChange.index
             : undefined;
-        const localIndex = nextDiffRegionIndex(regions?.length ?? 0, selectedIndex, message.direction);
-        if (localIndex !== undefined && regions) {
-            revealChange(pageNumber, localIndex, regions);
+        const localIndex = nextDiffRegionIndex(changes?.length ?? 0, selectedIndex, message.direction);
+        if (localIndex !== undefined && changes) {
+            revealChange(pageNumber, localIndex, changes);
             return;
         }
         const step = message.direction === "next" ? 1 : -1;
-        const startPage = regions === undefined ? pageNumber : pageNumber + step;
+        const startPage = changes === undefined ? pageNumber : pageNumber + step;
         if (config.diffRole === "original") {
             const unresolvedPage = navigateKnownOriginalPages(startPage, message.direction);
             if (unresolvedPage === undefined) {
@@ -798,12 +805,12 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         const viewer = window.PDFViewerApplication.pdfViewer;
         const step = direction === "next" ? 1 : -1;
         for (let pageNumber = startPage; pageNumber >= 1 && pageNumber <= viewer.pagesCount; pageNumber += step) {
-            const regions = regionsForPage(pageNumber);
-            if (regions === undefined) {
+            const changes = changesForPage(pageNumber);
+            if (changes === undefined) {
                 return pageNumber;
             }
-            if (regions.length > 0) {
-                revealChange(pageNumber, direction === "next" ? 0 : regions.length - 1, regions);
+            if (changes.length > 0) {
+                revealChange(pageNumber, direction === "next" ? 0 : changes.length - 1, changes);
                 return undefined;
             }
         }
@@ -829,8 +836,8 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                 return undefined;
             }
             return request.role === "original"
-                ? result.originalRegions
-                : result.modifiedRegions;
+                ? result.originalChanges
+                : result.modifiedChanges;
         });
         if (!target
             || !isCurrentScan(request.sessionId, currentScanGeneration)
@@ -845,7 +852,7 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                 role: request.role,
                 pageNumber: target.pageNumber,
                 index: target.index,
-                regions: target.regions
+                changes: target.regions
             });
         }
         else {
@@ -864,8 +871,8 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
                 ? cachedComparison(pageNumber)
                 : undefined;
         }
-        queuedPages.delete(pageNumber);
-        while (activePageComparisons >= maximumConcurrentPageComparisons) {
+        pageScheduler.removeQueued(pageNumber);
+        while (pageScheduler.atCapacity) {
             const activeTasks = [...activePageTasks];
             if (activeTasks.length === 0) {
                 return undefined;
@@ -882,19 +889,18 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
         if (!isCurrentScan(sessionId, currentScanGeneration)) {
             return undefined;
         }
-        const result = await startPageComparison(pageNumber, pageGeneration);
-        return result
-            ? {
-                originalRegions: result.originalRegions,
-                modifiedRegions: result.modifiedRegions
-            }
-            : undefined;
+        const scheduled = pageScheduler.startImmediately(pageNumber);
+        if (!scheduled) {
+            return undefined;
+        }
+        const result = await startPageComparison(scheduled);
+        return result ? cachedComparison(pageNumber) : undefined;
     }
     function cachedComparison(pageNumber) {
-        const modifiedRegions = pageResults.get(pageNumber);
-        const originalRegions = counterpartPageResults.get(pageNumber);
-        return modifiedRegions !== undefined && originalRegions !== undefined
-            ? { originalRegions, modifiedRegions }
+        const modifiedChanges = pageResults.get(pageNumber);
+        const originalChanges = counterpartPageResults.get(pageNumber);
+        return modifiedChanges !== undefined && originalChanges !== undefined
+            ? { originalChanges, modifiedChanges }
             : undefined;
     }
     function isCurrentScan(sessionId, currentScanGeneration) {
@@ -908,12 +914,12 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
             || message.requestId !== navigationGeneration) {
             return;
         }
-        rememberPageResult(message.pageNumber, message.regions);
-        revealChange(message.pageNumber, message.index, message.regions);
+        rememberPageResult(message.pageNumber, message.changes);
+        revealChange(message.pageNumber, message.index, message.changes);
     }
-    function revealChange(pageNumber, index, regions) {
+    function revealChange(pageNumber, index, changes) {
         const viewer = window.PDFViewerApplication.pdfViewer;
-        if (index < 0 || index >= regions.length || pageNumber > viewer.pagesCount) {
+        if (index < 0 || index >= changes.length || pageNumber > viewer.pagesCount) {
             return;
         }
         if (viewer.currentPageNumber !== pageNumber) {
@@ -1067,30 +1073,34 @@ import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, ne
     function clampUnit(value) {
         return Math.min(1, Math.max(0, value));
     }
-    function applyOverlay(pageNumber, regions) {
+    function applyOverlay(pageNumber, changes) {
         const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
         const pageElement = pageView?.div;
         if (!pageElement) {
             return;
         }
         pageElement.querySelector(".academicPdfDiffLayer")?.remove();
-        if (!enabled || regions.length === 0) {
+        if (!enabled || changes.length === 0) {
             return;
         }
         const layer = document.createElement("div");
         layer.className = "academicPdfDiffLayer";
         layer.setAttribute("aria-hidden", "true");
-        for (const [index, region] of regions.entries()) {
-            const marker = document.createElement("div");
-            marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
-            if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
-                marker.classList.add("academicPdfDiffRegion--selected");
+        for (const [index, change] of changes.entries()) {
+            for (const region of change.regions) {
+                const marker = document.createElement("div");
+                marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
+                marker.dataset.changeId = change.id;
+                marker.dataset.changeIndex = String(index);
+                if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
+                    marker.classList.add("academicPdfDiffRegion--selected");
+                }
+                marker.style.left = `${region.left * 100}%`;
+                marker.style.top = `${region.top * 100}%`;
+                marker.style.width = `${region.width * 100}%`;
+                marker.style.height = `${region.height * 100}%`;
+                layer.appendChild(marker);
             }
-            marker.style.left = `${region.left * 100}%`;
-            marker.style.top = `${region.top * 100}%`;
-            marker.style.width = `${region.width * 100}%`;
-            marker.style.height = `${region.height * 100}%`;
-            layer.appendChild(marker);
         }
         pageElement.appendChild(layer);
     }

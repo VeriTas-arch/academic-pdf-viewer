@@ -11,11 +11,23 @@ export interface DiffRegion {
     height: number;
 }
 
+export type DiffChangeKind = "insert" | "delete" | "replace";
+export type DiffStrategy = "page" | "raster" | "text";
+
+export interface PageDiffChange {
+    id: string;
+    kind: DiffChangeKind;
+    originalRegions: DiffRegion[];
+    modifiedRegions: DiffRegion[];
+    strategy: DiffStrategy;
+}
+
 export interface PageDiffResult {
+    changes: PageDiffChange[];
     originalRegions: DiffRegion[];
     modifiedRegions: DiffRegion[];
     changedPixels: number;
-    strategy: "page" | "raster" | "text";
+    strategy: DiffStrategy;
 }
 
 export function nextDiffRegionIndex(
@@ -74,6 +86,18 @@ export interface PixelRegion {
 
 export interface TextToken extends PixelRegion {
     text: string;
+}
+
+export interface TextDiffChangeSide {
+    regions: PixelRegion[];
+}
+
+export interface TextDiffChange {
+    id: string;
+    kind: DiffChangeKind;
+    original?: TextDiffChangeSide;
+    modified?: TextDiffChangeSide;
+    strategy: "text";
 }
 
 interface TextTokenMatch {
@@ -165,6 +189,24 @@ export function compareTextTokens(
     modifiedPageWidth: number,
     modifiedPageHeight: number
 ): PageDiffResult | null {
+    const changes = compareTextTokenChanges(original, modified);
+    if (!changes) {
+        return null;
+    }
+
+    return textResult(
+        changes,
+        originalPageWidth,
+        originalPageHeight,
+        modifiedPageWidth,
+        modifiedPageHeight
+    );
+}
+
+export function compareTextTokenChanges(
+    original: TextToken[],
+    modified: TextToken[]
+): TextDiffChange[] | null {
     if (original.length > maximumTextTokensPerPage
         || modified.length > maximumTextTokensPerPage
         || original.length === 0 && modified.length === 0
@@ -173,10 +215,10 @@ export function compareTextTokens(
     }
 
     if (original.length === 0) {
-        return textResult([], modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
+        return [createTextChange(0, [], modified)];
     }
     if (modified.length === 0) {
-        return textResult(original, [], originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
+        return [createTextChange(0, original, [])];
     }
 
     const matches = findTextTokenMatches(original, modified);
@@ -184,101 +226,134 @@ export function compareTextTokens(
         return null;
     }
 
-    const changed = collectChangedTextRegions(original, modified, matches);
-    return textResult(
-        changed.original,
-        changed.modified,
-        originalPageWidth,
-        originalPageHeight,
-        modifiedPageWidth,
-        modifiedPageHeight
-    );
+    return collectTextChanges(original, modified, matches);
 }
 
 function textResult(
-    original: PixelRegion[],
-    modified: PixelRegion[],
+    changes: TextDiffChange[],
     originalPageWidth: number,
     originalPageHeight: number,
     modifiedPageWidth: number,
     modifiedPageHeight: number
 ): PageDiffResult {
-    const originalRegions = normalizeTextRegions(
-        original,
-        originalPageWidth,
-        originalPageHeight
-    );
-    const modifiedRegions = normalizeTextRegions(
-        modified,
-        modifiedPageWidth,
-        modifiedPageHeight
-    );
-    const synchronized = synchronizePairedRegionHeights(
-        originalRegions,
-        modifiedRegions,
+    const synchronizedChanges = synchronizePairedTextChangeHeights(
+        changes,
         originalPageWidth,
         originalPageHeight,
         modifiedPageWidth,
         modifiedPageHeight
     );
+    let normalizedChanges = normalizeTextChanges(
+        synchronizedChanges,
+        originalPageWidth,
+        originalPageHeight,
+        modifiedPageWidth,
+        modifiedPageHeight
+    );
+    let originalRegions = normalizedChanges.flatMap(change => change.originalRegions);
+    let modifiedRegions = normalizedChanges.flatMap(change => change.modifiedRegions);
+    if (originalRegions.length > maximumRegionsPerPage
+        || modifiedRegions.length > maximumRegionsPerPage) {
+        originalRegions = normalizeTextRegions(
+            synchronizedChanges.flatMap(change => change.original?.regions ?? []),
+            originalPageWidth,
+            originalPageHeight
+        );
+        modifiedRegions = normalizeTextRegions(
+            synchronizedChanges.flatMap(change => change.modified?.regions ?? []),
+            modifiedPageWidth,
+            modifiedPageHeight
+        );
+        normalizedChanges = [{
+            id: "text-overflow",
+            kind: originalRegions.length === 0 ? "insert" : modifiedRegions.length === 0 ? "delete" : "replace",
+            originalRegions,
+            modifiedRegions,
+            strategy: "text"
+        }];
+    }
     return {
-        originalRegions: synchronized.original,
-        modifiedRegions: synchronized.modified,
+        changes: normalizedChanges,
+        originalRegions,
+        modifiedRegions,
         changedPixels: -1,
         strategy: "text"
     };
 }
 
-function synchronizePairedRegionHeights(
-    original: DiffRegion[],
-    modified: DiffRegion[],
+interface TaggedPixelRegion extends PixelRegion {
+    changeId: string;
+}
+
+function normalizeTextChanges(
+    changes: TextDiffChange[],
     originalPageWidth: number,
     originalPageHeight: number,
     modifiedPageWidth: number,
     modifiedPageHeight: number
-): { original: DiffRegion[]; modified: DiffRegion[] } {
-    if (original.length === 0
-        || original.length !== modified.length
+): PageDiffChange[] {
+    const original = normalizeTaggedTextRegions(changes, "original", originalPageWidth, originalPageHeight);
+    const modified = normalizeTaggedTextRegions(changes, "modified", modifiedPageWidth, modifiedPageHeight);
+    return changes.map(change => synchronizeNormalizedChangeHeights({
+        id: change.id,
+        kind: change.kind,
+        originalRegions: original.get(change.id) ?? [],
+        modifiedRegions: modified.get(change.id) ?? [],
+        strategy: "text"
+    }, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight));
+}
+
+function synchronizeNormalizedChangeHeights(
+    change: PageDiffChange,
+    originalPageWidth: number,
+    originalPageHeight: number,
+    modifiedPageWidth: number,
+    modifiedPageHeight: number
+): PageDiffChange {
+    if (change.kind !== "replace"
+        || change.originalRegions.length === 0
+        || change.originalRegions.length !== change.modifiedRegions.length
         || Math.abs(originalPageWidth - modifiedPageWidth) > 0.5
         || Math.abs(originalPageHeight - modifiedPageHeight) > 0.5) {
-        return { original, modified };
+        return change;
     }
 
-    const synchronizedOriginal = [...original];
-    const synchronizedModified = [...modified];
-    for (let index = 0; index < original.length; index += 1) {
-        const originalRegion = original[index];
-        const modifiedRegion = modified[index];
+    const originalRegions = [...change.originalRegions];
+    const modifiedRegions = [...change.modifiedRegions];
+    for (let index = 0; index < originalRegions.length; index += 1) {
+        const originalRegion = originalRegions[index];
+        const modifiedRegion = modifiedRegions[index];
         const originalHeight = originalRegion.height * originalPageHeight;
         const modifiedHeight = modifiedRegion.height * modifiedPageHeight;
         const minimumHeight = Math.min(originalHeight, modifiedHeight);
         const maximumHeight = Math.max(originalHeight, modifiedHeight);
         const originalCenter = (originalRegion.top + originalRegion.height / 2) * originalPageHeight;
         const modifiedCenter = (modifiedRegion.top + modifiedRegion.height / 2) * modifiedPageHeight;
-        if (Math.abs(originalHeight - modifiedHeight) < 0.000001) {
-            continue;
-        }
-        if (minimumHeight <= 0
+        if (Math.abs(originalHeight - modifiedHeight) < 0.000001
+            || minimumHeight <= 0
             || minimumHeight / maximumHeight < minimumPairedRegionHeightRatio
             || Math.abs(originalCenter - modifiedCenter) > maximumHeight) {
             continue;
         }
-
-        synchronizedOriginal[index] = resizeRegionHeight(
+        originalRegions[index] = resizeNormalizedRegionHeight(
             originalRegion,
             originalPageHeight,
             maximumHeight
         );
-        synchronizedModified[index] = resizeRegionHeight(
+        modifiedRegions[index] = resizeNormalizedRegionHeight(
             modifiedRegion,
             modifiedPageHeight,
             maximumHeight
         );
     }
-    return { original: synchronizedOriginal, modified: synchronizedModified };
+    return { ...change, originalRegions, modifiedRegions };
 }
 
-function resizeRegionHeight(region: DiffRegion, pageHeight: number, pixelHeight: number): DiffRegion {
+function resizeNormalizedRegionHeight(
+    region: DiffRegion,
+    pageHeight: number,
+    pixelHeight: number
+): DiffRegion {
     const height = Math.min(1, pixelHeight / pageHeight);
     const center = region.top + region.height / 2;
     return {
@@ -288,12 +363,106 @@ function resizeRegionHeight(region: DiffRegion, pageHeight: number, pixelHeight:
     };
 }
 
+function normalizeTaggedTextRegions(
+    changes: TextDiffChange[],
+    side: "original" | "modified",
+    pageWidth: number,
+    pageHeight: number
+): Map<string, DiffRegion[]> {
+    const tagged = changes.flatMap(change => prepareTextRegions(change[side]?.regions ?? [])
+        .map(region => ({ ...region, changeId: change.id })));
+    const aligned = alignSameLineRegionHeights(tagged) as TaggedPixelRegion[];
+    const result = new Map<string, DiffRegion[]>();
+    for (const region of aligned) {
+        const regions = result.get(region.changeId) ?? [];
+        regions.push(toNormalizedRegion(region, pageWidth, pageHeight));
+        result.set(region.changeId, regions);
+    }
+    return result;
+}
+
+function synchronizePairedTextChangeHeights(
+    changes: TextDiffChange[],
+    originalPageWidth: number,
+    originalPageHeight: number,
+    modifiedPageWidth: number,
+    modifiedPageHeight: number
+): TextDiffChange[] {
+    if (Math.abs(originalPageWidth - modifiedPageWidth) > 0.5
+        || Math.abs(originalPageHeight - modifiedPageHeight) > 0.5) {
+        return changes;
+    }
+
+    return changes.map(change => {
+        if (change.kind !== "replace" || !change.original || !change.modified) {
+            return change;
+        }
+        const original = prepareTextRegions(change.original.regions);
+        const modified = prepareTextRegions(change.modified.regions);
+        if (original.length !== modified.length) {
+            return change;
+        }
+
+        const synchronizedOriginal = [...original];
+        const synchronizedModified = [...modified];
+        for (let index = 0; index < original.length; index += 1) {
+            const originalRegion = original[index];
+            const modifiedRegion = modified[index];
+            const originalHeight = originalRegion.bottom - originalRegion.top;
+            const modifiedHeight = modifiedRegion.bottom - modifiedRegion.top;
+            const minimumHeight = Math.min(originalHeight, modifiedHeight);
+            const maximumHeight = Math.max(originalHeight, modifiedHeight);
+            const originalCenter = (originalRegion.top + originalRegion.bottom) / 2;
+            const modifiedCenter = (modifiedRegion.top + modifiedRegion.bottom) / 2;
+            if (Math.abs(originalHeight - modifiedHeight) < 0.000001) {
+                continue;
+            }
+            if (minimumHeight <= 0
+                || minimumHeight / maximumHeight < minimumPairedRegionHeightRatio
+                || Math.abs(originalCenter - modifiedCenter) > maximumHeight) {
+                continue;
+            }
+
+            synchronizedOriginal[index] = resizePixelRegionHeight(
+                originalRegion,
+                maximumHeight
+            );
+            synchronizedModified[index] = resizePixelRegionHeight(
+                modifiedRegion,
+                maximumHeight
+            );
+        }
+        return {
+            ...change,
+            original: { regions: synchronizedOriginal },
+            modified: { regions: synchronizedModified }
+        };
+    });
+}
+
+function resizePixelRegionHeight(region: PixelRegion, pixelHeight: number): PixelRegion {
+    const center = (region.top + region.bottom) / 2;
+    return {
+        ...region,
+        top: center - pixelHeight / 2,
+        bottom: center + pixelHeight / 2
+    };
+}
+
 function symmetricResult(
     regions: DiffRegion[],
     changedPixels: number,
     strategy: "page" | "raster"
 ): PageDiffResult {
+    const changes = regions.map((region, index) => ({
+        id: `${strategy}-${index + 1}`,
+        kind: "replace" as const,
+        originalRegions: [region],
+        modifiedRegions: [region],
+        strategy
+    }));
     return {
+        changes,
         originalRegions: regions,
         modifiedRegions: regions,
         changedPixels,
@@ -341,27 +510,47 @@ function findTextTokenMatches(original: TextToken[], modified: TextToken[]): Tex
     return matches.reverse();
 }
 
-function collectChangedTextRegions(
+function collectTextChanges(
     original: TextToken[],
     modified: TextToken[],
     matches: TextTokenMatch[]
-): { original: PixelRegion[]; modified: PixelRegion[] } {
-    const originalRegions: PixelRegion[] = [];
-    const modifiedRegions: PixelRegion[] = [];
+): TextDiffChange[] {
+    const changes: TextDiffChange[] = [];
     let originalStart = 0;
     let modifiedStart = 0;
     for (let index = 0; index <= matches.length; index += 1) {
         const match = matches[index];
         const originalEnd = match?.original ?? original.length;
         const modifiedEnd = match?.modified ?? modified.length;
-        originalRegions.push(...original.slice(originalStart, originalEnd));
-        modifiedRegions.push(...modified.slice(modifiedStart, modifiedEnd));
+        const originalRegions = original.slice(originalStart, originalEnd);
+        const modifiedRegions = modified.slice(modifiedStart, modifiedEnd);
+        if (originalRegions.length > 0 || modifiedRegions.length > 0) {
+            changes.push(createTextChange(changes.length, originalRegions, modifiedRegions));
+        }
         if (match) {
             originalStart = match.original + 1;
             modifiedStart = match.modified + 1;
         }
     }
-    return { original: originalRegions, modified: modifiedRegions };
+    return changes;
+}
+
+function createTextChange(
+    index: number,
+    originalRegions: PixelRegion[],
+    modifiedRegions: PixelRegion[]
+): TextDiffChange {
+    return {
+        id: `text-${index + 1}`,
+        kind: originalRegions.length === 0
+            ? "insert"
+            : modifiedRegions.length === 0
+                ? "delete"
+                : "replace",
+        ...(originalRegions.length > 0 ? { original: { regions: originalRegions } } : {}),
+        ...(modifiedRegions.length > 0 ? { modified: { regions: modifiedRegions } } : {}),
+        strategy: "text"
+    };
 }
 
 function normalizeTextRegions(
@@ -373,11 +562,15 @@ function normalizeTextRegions(
         return [];
     }
 
-    let merged = alignSameLineRegionHeights(mergeNearbyRegions(regions));
+    let merged = prepareTextRegions(regions);
     if (merged.length > maximumRegionsPerPage) {
         merged = [boundingPixelRegion(merged)];
     }
     return merged.map(region => toNormalizedRegion(region, pageWidth, pageHeight));
+}
+
+function prepareTextRegions(regions: PixelRegion[]): PixelRegion[] {
+    return alignSameLineRegionHeights(mergeNearbyRegions(regions));
 }
 
 function alignSameLineRegionHeights(regions: PixelRegion[]): PixelRegion[] {

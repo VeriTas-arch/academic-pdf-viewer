@@ -14,7 +14,7 @@ export type ExtensionToWebviewMessage =
         originalIsEmptyRevision: boolean;
         modifiedIsEmptyRevision: boolean;
     }
-    | { type: 'diff.applyPage'; sessionId: number; pageNumber: number; regions: PdfDiffRegion[] }
+    | { type: 'diff.applyPage'; sessionId: number; pageNumber: number; changes: PdfDiffChange[] }
     | { type: 'diff.setRemovedPageRange'; sessionId: number; fromPage: number; toPage: number }
     | { type: 'diff.applyScroll'; pageNumber: number; pageRatio: number; documentRatio: number }
     | { type: 'diff.navigate'; sessionId: number; direction: DiffNavigationDirection }
@@ -32,7 +32,7 @@ export type ExtensionToWebviewMessage =
         requestId: number;
         pageNumber: number;
         index: number;
-        regions: PdfDiffRegion[];
+        changes: PdfDiffChange[];
     }
     | {
         type: 'linkPreview.configure';
@@ -45,6 +45,16 @@ export interface PdfDiffRegion {
     top: number;
     width: number;
     height: number;
+}
+
+export type PdfDiffChangeKind = 'insert' | 'delete' | 'replace';
+export type PdfDiffStrategy = 'page' | 'raster' | 'text';
+
+export interface PdfDiffChange {
+    id: string;
+    kind: PdfDiffChangeKind;
+    regions: PdfDiffRegion[];
+    strategy: PdfDiffStrategy;
 }
 
 export type DiffNavigationDirection = 'next' | 'previous';
@@ -90,7 +100,7 @@ export type WebviewToExtensionMessage =
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
     | { type: 'workbench.showCommands' }
     | { type: 'webview.ready' }
-    | { type: 'diff.pageResult'; sessionId: number; pageNumber: number; originalRegions: PdfDiffRegion[] }
+    | { type: 'diff.pageResult'; sessionId: number; pageNumber: number; originalChanges: PdfDiffChange[] }
     | { type: 'diff.removedPageRange'; sessionId: number; fromPage: number; toPage: number }
     | {
         type: 'diff.navigationRequest';
@@ -107,7 +117,7 @@ export type WebviewToExtensionMessage =
         role: DiffRole;
         pageNumber: number;
         index: number;
-        regions: PdfDiffRegion[];
+        changes: PdfDiffChange[];
     }
     | { type: 'diff.scroll'; pageNumber: number; pageRatio: number; documentRatio: number }
     | {
@@ -147,9 +157,7 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'diff.pageResult':
             return isSessionId(value.sessionId)
                 && isPageNumber(value.pageNumber)
-                && Array.isArray(value.originalRegions)
-                && value.originalRegions.length <= 200
-                && value.originalRegions.every(isPdfDiffRegion);
+                && isPdfDiffChanges(value.originalChanges);
         case 'diff.removedPageRange':
             return isSessionId(value.sessionId)
                 && isPageNumber(value.fromPage)
@@ -169,10 +177,8 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
                 && typeof value.index === 'number'
                 && Number.isSafeInteger(value.index)
                 && value.index >= 0
-                && Array.isArray(value.regions)
-                && value.regions.length > value.index
-                && value.regions.length <= 200
-                && value.regions.every(isPdfDiffRegion);
+                && isPdfDiffChanges(value.changes)
+                && value.changes.length > value.index;
         case 'diff.scroll':
             return isPageNumber(value.pageNumber)
                 && isNormalizedNumber(value.pageRatio)
@@ -234,6 +240,25 @@ function isPdfDiffRegion(value: unknown): value is PdfDiffRegion {
         && isNormalizedNumber(value.height)
         && value.left + value.width <= 1.000001
         && value.top + value.height <= 1.000001;
+}
+
+function isPdfDiffChanges(value: unknown): value is PdfDiffChange[] {
+    return Array.isArray(value)
+        && value.length <= 200
+        && value.every(isPdfDiffChange)
+        && value.reduce((count, change) => count + change.regions.length, 0) <= 200;
+}
+
+function isPdfDiffChange(value: unknown): value is PdfDiffChange {
+    return isRecord(value)
+        && typeof value.id === 'string'
+        && value.id.length > 0
+        && value.id.length <= 128
+        && (value.kind === 'insert' || value.kind === 'delete' || value.kind === 'replace')
+        && (value.strategy === 'page' || value.strategy === 'raster' || value.strategy === 'text')
+        && Array.isArray(value.regions)
+        && value.regions.length > 0
+        && value.regions.every(isPdfDiffRegion);
 }
 
 function isNormalizedNumber(value: unknown): value is number {

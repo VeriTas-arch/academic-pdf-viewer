@@ -3,10 +3,66 @@ import test from 'node:test';
 
 import {
     compareRasters,
+    compareTextTokenChanges,
     compareTextTokens,
     findNextDiffPage,
     nextDiffRegionIndex,
 } from '../src/webview/pdfDiffAlgorithm.mts';
+
+function geometryResult(result) {
+    if (!result) {
+        return result;
+    }
+    const { changes: _changes, ...geometry } = result;
+    return geometry;
+}
+
+test('preserves semantic text change groups and stable page-local ids', () => {
+    const changes = compareTextTokenChanges(
+        [token('A', 0), token('old-1', 20), token('B', 50), token('old-2', 70), token('C', 100)],
+        [token('A', 0), token('new-1', 20), token('B', 50), token('new-2', 70), token('C', 100)],
+    );
+
+    assert(changes);
+    assert.deepEqual(changes.map(change => ({
+        id: change.id,
+        kind: change.kind,
+        original: change.original?.regions.map(region => region.text),
+        modified: change.modified?.regions.map(region => region.text),
+        strategy: change.strategy,
+    })), [
+        { id: 'text-1', kind: 'replace', original: ['old-1'], modified: ['new-1'], strategy: 'text' },
+        { id: 'text-2', kind: 'replace', original: ['old-2'], modified: ['new-2'], strategy: 'text' },
+    ]);
+});
+
+test('keeps unrelated deletion and insertion in separate change groups', () => {
+    const changes = compareTextTokenChanges(
+        [token('A', 0), token('removed', 20), token('B', 50), token('C', 100)],
+        [token('A', 0), token('B', 50), token('added', 70), token('C', 100)],
+    );
+
+    assert(changes);
+    assert.deepEqual(changes.map(change => ({ id: change.id, kind: change.kind })), [
+        { id: 'text-1', kind: 'delete' },
+        { id: 'text-2', kind: 'insert' },
+    ]);
+});
+
+test('does not synchronize heights across unrelated deletion and insertion', () => {
+    const result = compareTextTokens(
+        [token('A', 0), token('removed', 20, 10, 20), token('B', 50), token('C', 100)],
+        [token('A', 0), token('B', 50), token('added', 70, 8, 22), token('C', 100)],
+        150,
+        100,
+        150,
+        100,
+    );
+
+    assert(result);
+    assert.equal(result.originalRegions[0].height, 0.14);
+    assert.equal(result.modifiedRegions[0].height, 0.18);
+});
 
 test('selects diff regions without wrapping at page boundaries', () => {
     assert.equal(nextDiffRegionIndex(3, undefined, 'next'), 0);
@@ -83,7 +139,7 @@ function token(text, left, top = 10, bottom = 20) {
 
 test('returns no regions for identical raster pages', () => {
     const page = raster(10, 10);
-    assert.deepEqual(compareRasters(page, raster(10, 10)), {
+    assert.deepEqual(geometryResult(compareRasters(page, raster(10, 10))), {
         originalRegions: [],
         modifiedRegions: [],
         changedPixels: 0,
@@ -104,7 +160,7 @@ test('normalizes and pads a connected changed region', () => {
         [4, 3], [5, 3],
         [4, 4], [5, 4],
     ];
-    assert.deepEqual(compareRasters(raster(10, 10), raster(10, 10, changes)), {
+    assert.deepEqual(geometryResult(compareRasters(raster(10, 10), raster(10, 10, changes))), {
         originalRegions: [{ left: 0.2, top: 0.1, width: 0.6, height: 0.6 }],
         modifiedRegions: [{ left: 0.2, top: 0.1, width: 0.6, height: 0.6 }],
         changedPixels: 4,
@@ -113,7 +169,7 @@ test('normalizes and pads a connected changed region', () => {
 });
 
 test('falls back to a full-page region for different page dimensions', () => {
-    assert.deepEqual(compareRasters(raster(10, 10), raster(12, 10)), {
+    assert.deepEqual(geometryResult(compareRasters(raster(10, 10), raster(12, 10))), {
         originalRegions: [{ left: 0.01, top: 0.01, width: 0.98, height: 0.98 }],
         modifiedRegions: [{ left: 0.01, top: 0.01, width: 0.98, height: 0.98 }],
         changedPixels: -1,
@@ -130,7 +186,7 @@ test('marks inserted text only in the modified revision', () => {
         100,
         100,
     );
-    assert.deepEqual(result, {
+    assert.deepEqual(geometryResult(result), {
         originalRegions: [],
         modifiedRegions: [{ left: 0.28, top: 0.08, width: 0.14, height: 0.14 }],
         changedPixels: -1,
@@ -147,7 +203,7 @@ test('marks deleted text only in the original revision', () => {
         100,
         100,
     );
-    assert.deepEqual(result, {
+    assert.deepEqual(geometryResult(result), {
         originalRegions: [{ left: 0.28, top: 0.08, width: 0.14, height: 0.14 }],
         modifiedRegions: [],
         changedPixels: -1,
@@ -164,7 +220,7 @@ test('marks replacement text in both revisions', () => {
         100,
         100,
     );
-    assert.deepEqual(result, {
+    assert.deepEqual(geometryResult(result), {
         originalRegions: [{ left: 0.28, top: 0.08, width: 0.14, height: 0.14 }],
         modifiedRegions: [{ left: 0.33, top: 0.08, width: 0.14, height: 0.14 }],
         changedPixels: -1,
@@ -242,13 +298,13 @@ test('preserves replacement heights across different text lines', () => {
 });
 
 test('keeps all-text insertion and deletion on their semantic revision', () => {
-    assert.deepEqual(compareTextTokens([], [token('Added', 20)], 100, 100, 100, 100), {
+    assert.deepEqual(geometryResult(compareTextTokens([], [token('Added', 20)], 100, 100, 100, 100)), {
         originalRegions: [],
         modifiedRegions: [{ left: 0.18, top: 0.08, width: 0.14, height: 0.14 }],
         changedPixels: -1,
         strategy: 'text',
     });
-    assert.deepEqual(compareTextTokens([token('Removed', 20)], [], 100, 100, 100, 100), {
+    assert.deepEqual(geometryResult(compareTextTokens([token('Removed', 20)], [], 100, 100, 100, 100)), {
         originalRegions: [{ left: 0.18, top: 0.08, width: 0.14, height: 0.14 }],
         modifiedRegions: [],
         changedPixels: -1,

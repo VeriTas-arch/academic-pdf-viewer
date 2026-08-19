@@ -25,6 +25,18 @@
             }
             return pages;
         },
+        getCapabilities(document = adapter.getApplication()?.pdfDocument ?? null, viewer = adapter.getViewer()) {
+            const privateDocument = document;
+            const privateViewer = viewer;
+            return {
+                viewer: viewer !== null,
+                viewerContainer: adapter.getViewerContainer(viewer) !== null,
+                toolbarHost: adapter.getToolbarHost() !== null,
+                location: privateViewer?._location !== undefined,
+                fingerprintOverride: privateDocument?._pdfInfo !== undefined,
+                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function"
+            };
+        },
         getPdfLocation(viewer) {
             const location = viewer._location;
             return {

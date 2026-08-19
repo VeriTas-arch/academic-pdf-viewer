@@ -87,6 +87,14 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 && viewer !== null
                 && adapter.getPageViews(viewer).length === 2;
         }), true);
+        assert.deepEqual(await page.evaluate(() => window.academicPdfJsAdapter.getCapabilities()), {
+            viewer: true,
+            viewerContainer: true,
+            toolbarHost: true,
+            location: true,
+            fingerprintOverride: true,
+            pageNumberInterception: true,
+        });
         assert.equal(await page.evaluate(() => window.__academicTestDebug.some(message =>
             message.event === "viewerInitialized" && message.workerSource === "blob"
         )), true);
@@ -223,7 +231,9 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 message => message.type === "diff.pageResult" && message.pageNumber === 1
             );
             return {
-                original: resultMessage?.originalRegions.map(region => region.height) ?? [],
+                original: resultMessage?.originalChanges
+                    .flatMap(change => change.regions)
+                    .map(region => region.height) ?? [],
                 modified: [...document.querySelectorAll(
                     '.page[data-page-number="1"] .academicPdfDiffRegion'
                 )].map(marker => Number.parseFloat(marker.style.height) / 100)
@@ -300,6 +310,22 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         assert(gaps.right >= 0 && gaps.right <= 8, `right highlight gap was ${gaps.right}px`);
         assert(gaps.top >= 0 && gaps.top <= 12, `top highlight gap was ${gaps.top}px`);
         assert(gaps.bottom >= 0 && gaps.bottom <= 12, `bottom highlight gap was ${gaps.bottom}px`);
+
+        await diffPage.evaluate(() => {
+            window.postMessage({
+                type: "diff.navigate",
+                sessionId: 1,
+                direction: "next"
+            }, "*");
+        });
+        await diffPage.waitForFunction(() => document.querySelectorAll(
+            '.page[data-page-number="1"] .academicPdfDiffRegion--selected'
+        ).length > 0);
+        const selectedChangeIds = await diffPage.locator(
+            '.page[data-page-number="1"] .academicPdfDiffRegion--selected'
+        ).evaluateAll(markers => [...new Set(markers.map(marker => marker.dataset.changeId))]);
+        assert.equal(selectedChangeIds.length, 1);
+        assert.match(selectedChangeIds[0] ?? "", /^1:text-\d+$/u);
         assert.deepEqual(diffPageErrors, []);
         await diffPage.close();
     });

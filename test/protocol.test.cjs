@@ -7,6 +7,10 @@ const {
     normalizeLinkPreviewResolutionScale,
 } = require('../src/shared/protocol.ts');
 
+function diffChange(regions = [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }]) {
+    return { id: '2:text-1', kind: 'replace', regions, strategy: 'text' };
+}
+
 test('accepts supported webview messages', () => {
     assert.equal(isWebviewToExtensionMessage({ type: 'webview.ready' }), true);
     assert.equal(isWebviewToExtensionMessage({ type: 'workbench.showCommands' }), true);
@@ -18,7 +22,7 @@ test('accepts supported webview messages', () => {
         type: 'diff.pageResult',
         sessionId: 3,
         pageNumber: 2,
-        originalRegions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
+        originalChanges: [diffChange()],
     }), true);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.removedPageRange',
@@ -41,7 +45,7 @@ test('accepts supported webview messages', () => {
         role: 'original',
         pageNumber: 4,
         index: 0,
-        regions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
+        changes: [diffChange()],
     }), true);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
@@ -98,19 +102,19 @@ test('rejects malformed and unsupported webview messages', () => {
         type: 'diff.pageResult',
         sessionId: 1,
         pageNumber: 0,
-        originalRegions: [],
+        originalChanges: [],
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.pageResult',
         sessionId: 1,
         pageNumber: 1,
-        originalRegions: [{ left: 0.8, top: 0, width: 0.3, height: 0.1 }],
+        originalChanges: [diffChange([{ left: 0.8, top: 0, width: 0.3, height: 0.1 }])],
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.pageResult',
         sessionId: 0,
         pageNumber: 1,
-        originalRegions: [],
+        originalChanges: [],
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.removedPageRange',
@@ -133,7 +137,7 @@ test('rejects malformed and unsupported webview messages', () => {
         role: 'modified',
         pageNumber: 2,
         index: 1,
-        regions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
+        changes: [diffChange()],
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
