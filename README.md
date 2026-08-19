@@ -1,202 +1,209 @@
-# Academic PDF Viewer
+<p align="center">
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer">
+    <img
+      src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/icon.png"
+      alt="Academic PDF Viewer icon"
+      width="104"
+    >
+  </a>
+</p>
 
-Academic PDF Viewer brings paper reading and PDF revision review into VS Code. It opens `.pdf` files in a full PDF.js-based viewer and adds academic link previews, navigation history, and Git-aware visual comparison.
+<h1 align="center">Academic PDF Viewer</h1>
 
-> **Read, preview, and compare PDFs without leaving VS Code**
->
-> - **Read:** Search, zoom, navigate, and select text with the familiar PDF.js viewer.
-> - **Preview:** Hold `Ctrl` over a linked citation, figure, equation, or section to preview its destination.
-> - **Compare (Preview):** Open a changed or staged PDF from Source Control to view both Git revisions side by side, with semantic highlights on both revisions.
+<p align="center">
+  <strong>Read papers, inspect internal references, and review Git PDF revisions—without leaving VS Code.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases">
+    <img alt="Latest preview release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?include_prereleases&label=preview&color=7c3aed">
+  </a>
+  <img alt="VS Code 1.133 or later" src="https://img.shields.io/badge/VS%20Code-1.133%2B-007ACC?logo=visualstudiocode&logoColor=white">
+  <a href="./LICENSE">
+    <img alt="MIT License" src="https://img.shields.io/github/license/VeriTas-arch/academic-pdf-viewer?color=2563eb">
+  </a>
+</p>
+
+<p align="center">
+  <a href="#start-reading">Get started</a>
+  ·
+  <a href="#preview-internal-references">Link previews</a>
+  ·
+  <a href="#review-pdf-revisions-preview">Git PDF review</a>
+  ·
+  <a href="#settings">Settings</a>
+</p>
+
+<br>
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/snapshot.png"
-    alt="Academic PDF Viewer citation preview"
-    width="85%"
+    src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/snapshot.png"
+    alt="Previewing the destination of a figure link inside an academic PDF"
+    width="88%"
   >
+  <br>
+  <sub>Hold Control over an embedded reference, figure, equation, or section link to inspect its destination.</sub>
 </p>
 
-## Contents
+<br>
 
-- [Features](#features)
-- [Getting Started](#getting-started)
-- [Citation Preview](#citation-preview)
-- [Git Diff Preview Build](#git-diff-preview-build)
-- [Extension Settings](#extension-settings)
-- [Requirements](#requirements)
-- [Known Limitations](#known-limitations)
-- [Release Notes](#release-notes)
-- [Development](#development)
-- [License](#license)
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <h3>Read</h3>
+      <p>Search, zoom, navigate, select text, and use outlines in the familiar PDF.js viewer.</p>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>Preview</h3>
+      <p>Inspect an internal link destination without losing your current reading position.</p>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>Compare <sup>Preview</sup></h3>
+      <p>Review changed or staged PDFs side by side with semantic highlights on both revisions.</p>
+    </td>
+  </tr>
+</table>
 
-## Features
+> **Local-first reading:** PDF.js, its Worker, fonts, CMaps, and WASM assets are bundled with the extension. Opening local PDFs does not require an external service or network connection after installation.
 
-- Opens PDFs as the default custom editor in VS Code.
-- Uses the full PDF.js viewer interface for search, zoom, outline, page navigation, text selection, and annotation layers.
-- Opens changed and staged PDFs as side-by-side Git diffs, marking removed regions on the original and added or replaced regions on the modified revision while synchronizing vertical reading position (Preview).
-- Previews linked citations, figures, equations, and sections with a cropped destination image and nearby text.
-- Keeps native PDF links clickable for direct navigation.
-- Maintains an internal PDF navigation history for `Alt+Left` and `Alt+Right`.
-- Improves `Ctrl/Cmd+Wheel` zoom responsiveness inside the webview.
-- Keeps `Ctrl/Cmd+Shift+P` available for the VS Code command palette instead of PDF printing.
-- Bundles PDF.js and its Worker so local PDFs remain available offline.
+## Start reading
 
-## Getting Started
+1. Open any `.pdf` file in VS Code.
+2. If another editor opens, right-click the tab and choose **Reopen Editor With...** → **Academic PDF Viewer**.
+3. Use the standard PDF.js toolbar for search, zoom, outline, page navigation, text selection, printing, and download.
 
-Open any `.pdf` file in VS Code. The extension registers `Academic PDF Viewer` as the default PDF custom editor.
+### Shortcuts and commands
 
-If another editor is selected, right-click the PDF tab, choose `Reopen Editor With...`, and select `Academic PDF Viewer`.
-
-| Action | Default shortcut | Notes |
+| Action | Default shortcut | Availability |
 | --- | --- | --- |
-| Navigate back | `Alt+Left` | Moves through the PDF viewer's internal navigation history. |
-| Navigate forward | `Alt+Right` | Moves forward after navigating back. |
-| Zoom around the pointer | `Ctrl/Cmd+Wheel` | Preserves the reading position around the pointer. |
-| Open the VS Code command palette | `Ctrl/Cmd+Shift+P` | Overrides PDF.js printing only while the PDF editor is active. |
-| `PDF: Reload` | None | Also available from the editor title bar. In a PDF diff, it refreshes both revisions. |
-| `PDF: Toggle Link Preview` | None | Enables or disables `Ctrl`-hover previews. |
-| `PDF: Toggle Diff Highlights` | `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS) | Available while a PDF diff editor is active. |
-| `PDF Diff: Previous/Next Change` | None | Moves through highlighted regions on the active revision, scanning later pages only when needed. |
+| Navigate back / forward inside the PDF | <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd> | Any Academic PDF Viewer tab |
+| Zoom around the pointer | <kbd>Ctrl/Cmd</kbd>+<kbd>Wheel</kbd> | Any Academic PDF Viewer tab |
+| Open the VS Code Command Palette | <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | Routed to VS Code instead of PDF printing |
+| Toggle diff highlights | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> / <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Active PDF diff |
+| `PDF: Reload` | Assignable | Title bar or Command Palette; reloads both revisions in a diff |
+| `PDF: Toggle Link Preview` | Assignable | Command Palette |
+| `PDF Diff: Previous/Next Change` | Assignable | Title bar or Command Palette while highlights are enabled |
 
 Commands without a default shortcut can be assigned from VS Code's Keyboard Shortcuts editor.
 
-## Citation Preview
+## Preview internal references
 
-The current release uses citation and link annotations already embedded in the PDF. Many publisher and LaTeX-generated papers include these links for references, figures, equations, or sections. When such links are available, Academic PDF Viewer draws a lightweight overlay and shows a preview of the destination while you hold `Ctrl` and hover over the link. You can press `Ctrl` before moving onto the link or while the pointer is already over it; releasing `Ctrl` closes the preview.
+Many publisher and LaTeX-generated PDFs already contain links from citations, figures, equations, and section references to their destinations. Academic PDF Viewer uses those embedded annotations directly:
 
-The popup's displayed size is independent from its rendered image resolution.
-Increase `academicPdfViewer.linkPreview.resolutionScale` for a sharper preview
-without making the popup larger. Higher values require more rendering time and
-temporary image memory.
+1. Hold <kbd>Ctrl</kbd> while the pointer is over a linked reference.
+2. Read the cropped destination image and nearby text in the preview.
+3. Release <kbd>Ctrl</kbd> to close it, or click the original link to navigate normally.
 
-PDFs without embedded citation/link annotations are still readable as normal PDFs, but citation previews may not appear.
+The popup does not capture pointer input, so links and the document outline remain clickable. PDFs without embedded link annotations still work as normal PDFs, but they cannot provide these previews.
 
-Preview popups do not capture pointer input, so PDF links and the outline remain clickable while a preview is visible.
+For sharper preview images, increase `academicPdfViewer.linkPreview.resolutionScale`. This changes rendered resolution without enlarging the popup; higher values require more temporary memory and rendering time.
 
-## Git Diff Preview Build
+## Review PDF revisions *(Preview)*
 
-Git-aware PDF comparison is currently distributed as a Preview VSIX through [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases). It depends on VS Code's proposed `customEditorDiffs` API, so installing the VSIX alone is not enough: VS Code must also explicitly allow Proposed API access for this extension.
-
-VS Code Insiders is the officially supported environment for Proposed API extensions. A Stable build may also work when it contains the same proposal (the current preview is tested with VS Code 1.133), but this is not guaranteed across VS Code updates.
+> [!IMPORTANT]
+> Git-aware PDF comparison depends on VS Code's proposed `customEditorDiffs` API. It is distributed as a Preview VSIX through [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases) and requires Proposed API access for this extension.
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/veritas-arch/academic-pdf-viewer/main/image/git_diff.png"
-    alt="Academic PDF Viewer Git diff preview"
+    src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/git_diff.png"
+    alt="Git PDF comparison with the Index revision on the left and Working Tree revision on the right"
     width="100%"
   >
+  <br>
+  <sub>Removed regions appear on the original revision; inserted or replaced regions appear on the modified revision.</sub>
 </p>
 
-*Git-aware PDF comparison showing the tracked revision on the left, the working-tree revision on the right, and optional semantic highlights on both revisions.*
+Open a changed or staged PDF from the Source Control view. VS Code places the tracked revision on the left and the selected Git revision on the right. Revision badges distinguish `HEAD`, `Index`, and `Working Tree` when that information is available.
 
-### Install the Preview VSIX
+- Toggle highlights from the title bar or with <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> (<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> on macOS).
+- Move between semantic changes with the title-bar arrows or the previous/next commands.
+- Scroll position is synchronized by page and relative position; zoom remains independent on each side.
+- Pages are compared on demand, with bounded background work for longer documents.
+- Use `PDF: Reload` after the file or Git revision changes. Both sides reload together.
 
-1. Download the `.vsix` file from the Assets section of the corresponding [GitHub Release](https://github.com/VeriTas-arch/academic-pdf-viewer/releases).
-2. In VS Code Insiders, run `Extensions: Install from VSIX...` from the Command Palette and select the downloaded file.
-3. Fully quit VS Code Insiders before enabling the Proposed API. Make sure no existing window remains open.
+<details>
+<summary><strong>Install and enable the Git diff Preview</strong></summary>
 
-You can also install or update the VSIX from PowerShell:
+### 1. Install the VSIX
+
+Download the `.vsix` from the Assets section of the corresponding [GitHub Release](https://github.com/VeriTas-arch/academic-pdf-viewer/releases), then run **Extensions: Install from VSIX...** in VS Code Insiders.
+
+You can also install it from PowerShell:
 
 ```powershell
 code-insiders --install-extension .\academic-pdf-viewer-x.y.z.vsix --force
 ```
 
-### Enable the Proposed API
+### 2. Enable the Proposed API
 
-For a one-time launch, start VS Code Insiders from an external PowerShell window:
+For a one-time launch, fully quit VS Code Insiders and run:
 
 ```powershell
 code-insiders --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-window .
 ```
 
-The value after `--enable-proposed-api` is the extension ID, not the proposal name `customEditorDiffs`.
+The argument is the extension ID, not the proposal name. To enable it for every launch, run **Preferences: Configure Runtime Arguments** and add the extension ID to `argv.json` while preserving existing fields:
 
-To enable the Preview build on every launch:
+```json
+{
+    "enable-proposed-api": [
+        "ovolab-veritas.academic-pdf-viewer"
+    ]
+}
+```
 
-1. Run `Preferences: Configure Runtime Arguments` from the Command Palette.
-2. Add the extension ID to `argv.json`, preserving any existing fields:
+Fully restart VS Code Insiders after changing `argv.json`. A compatible Stable build may work when it contains the same proposal; Insiders is the recommended environment because Proposed APIs can change between VS Code versions.
 
-   ```json
-   {
-       "enable-proposed-api": [
-           "ovolab-veritas.academic-pdf-viewer"
-       ]
-   }
-   ```
+</details>
 
-3. Fully restart VS Code Insiders.
-
-When testing with a compatible VS Code Stable build, replace `code-insiders` with `code` in the commands above. If Git PDF diffs stop opening after a VS Code update, verify the behavior in Insiders before reporting an extension regression.
-
-### Review PDF Changes
-
-1. Open a folder containing a Git repository.
-2. Modify or stage a tracked PDF.
-3. Select the PDF entry in the Source Control view. VS Code opens the relevant Git revisions side by side with the original revision on the left and the modified revision on the right.
-4. Press `Ctrl+Alt+D` (`Cmd+Alt+D` on macOS), run `PDF: Toggle Diff Highlights`, or use the diff action in the editor title bar to show or hide changed-region markers.
-5. Removed content is marked on the original revision; added or replaced content is marked on the modified revision. Use the title-bar arrows to move between changes. After the current page is exhausted, navigation scans pages in that direction until it finds the next relevant change.
-
-Each side shows its revision role and whether highlights are on or off. When VS Code's Git resource identifies the revision, the labels distinguish `HEAD`, `Index`, and `Working Tree`. Vertical scrolling is synchronized by page and relative position; when one revision lacks the source page, synchronization falls back to whole-document progress. Zoom remains independent on each side.
-
-PDFs are not reloaded automatically. Use `PDF: Reload` when the underlying file or Git revision changes; in a PDF diff, the command refreshes both revisions and recomputes highlights when they were already enabled.
-
-The revision pair follows the Source Control entry selected by VS Code. PDFs that are not being compared continue to open as normal PDF editors.
-
-## Extension Settings
+## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding `Ctrl` over an internal PDF link. |
-| `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4`, without changing the displayed preview size. |
+| `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding <kbd>Ctrl</kbd> over an internal PDF link. |
+| `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4` without changing popup size. |
 
-The `PDF: Toggle Link Preview` command updates this setting for the current VS Code window.
+`PDF: Toggle Link Preview` changes the enabled setting for the current VS Code window.
 
-## Requirements
+## Requirements and limitations
 
-- The current Preview VSIX requires VS Code 1.133 or later.
-- Git PDF diffs require VS Code Insiders (recommended) or a compatible Stable build launched with Proposed API access enabled for this extension.
-- A PDF with embedded internal link annotations for citation and destination previews.
-- A Git repository and a compatible Proposed API-enabled VS Code build for Git PDF comparison.
-- No external service or network connection is required to open local PDFs after installation.
+- The current Preview build requires VS Code 1.133 or later.
+- Git PDF review requires Proposed API access and can need adaptation after a VS Code update.
+- Citation previews require native internal link annotations embedded in the PDF; GROBID-based extraction is not included.
+- Preview quality depends on the PDF's link destinations and text layer.
+- Moving across many unchanged or complex pages can take longer because cross-page diff navigation compares uncached pages on demand.
+- PDF JavaScript evaluation remains disabled.
 
-## Known Limitations
+If Git PDF diffs stop opening after a VS Code update, verify the same workflow in VS Code Insiders before reporting an extension regression.
 
-- Git PDF comparison depends on the unstable `customEditorDiffs` Proposed API and can require changes after a VS Code update.
-- Cross-page diff navigation compares pages on demand. Moving across many unchanged or complex pages can therefore take longer than moving between already cached changes.
-- Citation detection currently depends on native PDF link annotations.
-- Preview quality depends on the PDF's embedded link destinations and text layer.
-- GROBID-based citation extraction is not included in this release.
-
-## Release Notes
+## Release notes
 
 See [CHANGELOG.md](./CHANGELOG.md) for version history and notable changes.
 
-## Development
+<details>
+<summary><strong>Development</strong></summary>
 
-Use Node.js 24.x for local development.
+Use Node.js 24.x:
 
 ```bash
 npm install
 npm run check
-```
-
-Run the local tests explicitly when needed; they are not part of the build or
-VSIX prepublish path:
-
-```bash
 npm test
 npm run test:viewer
+npm run test:extension
 ```
 
-`test:viewer` launches the actual bundled PDF.js viewer in a local Microsoft
-Edge instance and blocks dependence on external resources. Set
-`PLAYWRIGHT_BROWSER_EXECUTABLE` when Edge is installed outside its standard
-location or when testing with another Chromium executable.
+The tests remain independent from the normal build and VSIX prepublish path. `test:viewer` launches the bundled PDF.js viewer in a local Chromium-based browser; set `PLAYWRIGHT_BROWSER_EXECUTABLE` if the browser is outside its standard location. `test:extension` launches an isolated VS Code extension host.
 
-Launch the extension host from VS Code with `F5`, then open a PDF file.
+Press <kbd>F5</kbd> in VS Code to open the manual fixtures with `customEditorDiffs` enabled. Before packaging, inspect the release contents:
 
-PDF.js maintenance is also explicit and independent from the normal build and
-packaging paths:
+```bash
+npx @vscode/vsce ls --tree
+npx @vscode/vsce package
+```
+
+PDF.js maintenance is explicit and separate from ordinary builds:
 
 ```bash
 npm run pdfjs:check
@@ -204,17 +211,9 @@ npm run pdfjs:verify
 npm run pdfjs:update -- --version x.y.z
 ```
 
-`pdfjs:check` is a read-only online release check. `pdfjs:verify` validates the
-installed bundle offline. `pdfjs:update` requires an exact version, verifies the
-official release asset checksum, stages and validates the candidate, and only
-then replaces the vendored files. Review [VENDOR.md](./assets/pdfviewer/VENDOR.md)
-and run the manual PDF smoke checks after an update.
+See [AGENTS.md](./AGENTS.md) for repository boundaries, the verification matrix, and PDF.js update requirements.
 
-Create a local VSIX package with:
-
-```bash
-npx @vscode/vsce package
-```
+</details>
 
 ## License
 
