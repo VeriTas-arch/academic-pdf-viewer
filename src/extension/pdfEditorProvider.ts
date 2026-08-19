@@ -13,6 +13,7 @@ import {
 import type { DevLogger } from './devLogger';
 import { describePdfUri, readPdfData } from './pdfDataSource';
 import { logPdfDebugMessage } from './pdfDebug';
+import { assertPdfDiffPairSize } from './pdfSizeLimits';
 import { readViewerHtml, renderViewerHtml } from './viewerHtml';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
@@ -67,12 +68,21 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.viewerHtml = readViewerHtml(context);
     }
 
-    async openCustomDocument(uri: vscode.Uri): Promise<PdfDocument> {
-        const data = await readPdfData(uri, this.logger);
+    async openCustomDocument(
+        uri: vscode.Uri,
+        _openContext: vscode.CustomDocumentOpenContext,
+        token: vscode.CancellationToken,
+    ): Promise<PdfDocument> {
+        const data = await readPdfData(uri, this.logger, token);
         return new PdfDocument(uri, data);
     }
 
-    async resolveCustomEditor(document: PdfDocument, panel: vscode.WebviewPanel): Promise<void> {
+    async resolveCustomEditor(
+        document: PdfDocument,
+        panel: vscode.WebviewPanel,
+        token: vscode.CancellationToken,
+    ): Promise<void> {
+        throwIfCancellationRequested(token);
         this.logger?.info('editor.resolve', {
             ...describePdfUri(document.uri),
             bytes: document.data.byteLength,
@@ -140,7 +150,13 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     async resolveCustomEditorSideBySideDiff(
         documents: vscode.CustomEditorDiffDocuments<PdfDocument>,
         panels: vscode.CustomEditorSideBySideDiffWebviewPanels,
+        token: vscode.CancellationToken,
     ): Promise<void> {
+        throwIfCancellationRequested(token);
+        assertPdfDiffPairSize(
+            documents.original.data.byteLength,
+            documents.modified.data.byteLength,
+        );
         this.logger?.info('diff.resolve', {
             originalUri: documents.original.uri.toString(),
             originalBytes: documents.original.data.byteLength,
@@ -164,8 +180,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.diffSessionsByPanel.set(panels.original, session);
         this.diffSessionsByPanel.set(panels.modified, session);
         await Promise.all([
-            this.resolveCustomEditor(documents.original, panels.original),
-            this.resolveCustomEditor(documents.modified, panels.modified),
+            this.resolveCustomEditor(documents.original, panels.original, token),
+            this.resolveCustomEditor(documents.modified, panels.modified, token),
         ]);
         this.refreshDiffContext();
     }
@@ -195,6 +211,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         if (!this.isCurrentDiffPair(session) || !modifiedDocument) {
             return undefined;
         }
+        assertPdfDiffPairSize(
+            originalDocument.data.byteLength,
+            modifiedDocument.data.byteLength,
+        );
 
         const sessionId = this.beginDiffSession(session);
         const modifiedMessage: ExtensionToWebviewMessage = enabled
@@ -317,6 +337,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
                     return;
                 }
+                assertPdfDiffPairSize(originalData.byteLength, modifiedData.byteLength);
                 originalDocument.data = originalData;
                 modifiedDocument.data = modifiedData;
                 this.beginDiffSession(session);
@@ -673,4 +694,10 @@ function describeDiffRevision(uri: vscode.Uri, role: 'original' | 'modified'): s
         // Fall back to the semantic role when VS Code changes its Git URI shape.
     }
     return role === 'original' ? 'Original' : 'Modified';
+}
+
+function throwIfCancellationRequested(token: vscode.CancellationToken): void {
+    if (token.isCancellationRequested) {
+        throw new vscode.CancellationError();
+    }
 }

@@ -738,6 +738,78 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await originalPage.close();
     });
 
+    await t.test("ignores malformed extension diff messages without changing the active session", async () => {
+        const { viewerPage: originalPage, pageErrors: originalPageErrors } = await openPreparedDiffPage(
+            browser,
+            origin,
+            "/__viewer_original_diff_test__.html"
+        );
+        await originalPage.evaluate(() => {
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 2,
+                role: "modified",
+                originalData: "not-an-array-buffer",
+                originalFingerprint: "invalid-original",
+                originalIsEmptyRevision: false,
+                modifiedIsEmptyRevision: false
+            }, "*");
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 3,
+                role: "original"
+            }, "*");
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "original",
+                allPagesChanged: false
+            }, "*");
+            window.postMessage({
+                type: "diff.applyPage",
+                sessionId: 1,
+                pageNumber: 1,
+                changes: [{
+                    id: "1:text-1",
+                    kind: "delete",
+                    regions: [{ left: 0.1, top: 0.1, width: 0.2, height: 0.1 }],
+                    strategy: "text"
+                }]
+            }, "*");
+        });
+        await originalPage.waitForFunction(() => document.querySelectorAll(
+            '.page[data-page-number="1"] .academicPdfDiffRegion'
+        ).length === 1, undefined, { timeout: 5_000 });
+
+        await originalPage.evaluate(() => {
+            window.postMessage({
+                type: "diff.applyPage",
+                sessionId: 1,
+                pageNumber: 1,
+                changes: [null]
+            }, "*");
+            window.postMessage({
+                type: "diff.setRemovedPageRange",
+                sessionId: 1,
+                fromPage: 1.5,
+                toPage: 2
+            }, "*");
+        });
+        await originalPage.waitForTimeout(100);
+
+        assert.equal(await originalPage.locator(
+            '.page[data-page-number="1"] .academicPdfDiffRegion'
+        ).count(), 1);
+        assert.equal(await originalPage.locator(
+            '.page[data-page-number="2"] .academicPdfDiffRegion'
+        ).count(), 0);
+        assert.deepEqual(originalPageErrors, []);
+        await originalPage.close();
+    });
+
     await t.test("keeps the latest of back-to-back document loads", async () => {
         const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const reloadPageErrors = [];

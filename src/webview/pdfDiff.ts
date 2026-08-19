@@ -5,6 +5,7 @@ import {
     compareTextTokens,
     findNextDiffPage,
     fullPageRegion,
+    maximumRegionsPerPage,
     maximumTextTokensPerPage,
     mergeTextAndRasterResults,
     nextDiffRegionIndex,
@@ -63,8 +64,10 @@ import {
     interface DocumentLoadMessage {
         type: "document.load";
         loadId: number;
+        data: ArrayBuffer;
         fingerprint: string;
         isEmptyRevision: boolean;
+        preserveView: boolean;
     }
 
     interface DiffApplyPageMessage {
@@ -132,6 +135,8 @@ import {
     const eagerComparisonPageLimit = 16;
     const maximumQueuedPages = eagerComparisonPageLimit;
     const comparisonPrefetchRadius = 3;
+    const maximumMessageStringLength = 8 * 1024;
+    const maximumPdfBytes = 512 * 1024 * 1024;
     const pdfjsAdapter = window.academicPdfJsAdapter;
     const pageScheduler = new PageComparisonScheduler(
         maximumConcurrentPageComparisons,
@@ -240,18 +245,32 @@ import {
     }
 
     function isDocumentLoadMessage(value: unknown): value is DocumentLoadMessage {
-        return isMessage(value, "document.load")
-            && isPositiveInteger((value as { loadId?: unknown }).loadId)
-            && typeof (value as { fingerprint?: unknown }).fingerprint === "string"
-            && typeof (value as { isEmptyRevision?: unknown }).isEmptyRevision === "boolean";
+        if (!isMessage(value, "document.load")) {
+            return false;
+        }
+        const message = value as Record<string, unknown>;
+        return isPositiveInteger(message.loadId)
+            && typeof message.isEmptyRevision === "boolean"
+            && isPdfData(message.data, message.isEmptyRevision)
+            && isBoundedNonEmptyString(message.fingerprint)
+            && typeof message.preserveView === "boolean";
     }
 
     function isDiffEnableMessage(value: unknown): value is DiffEnableMessage {
-        return isMessage(value, "diff.setEnabled")
-            && (value as { enabled?: unknown }).enabled === true
-            && isPositiveInteger((value as { sessionId?: unknown }).sessionId)
-            && ((value as { role?: unknown }).role === "original"
-                || (value as { role?: unknown }).role === "modified");
+        if (!isMessage(value, "diff.setEnabled")
+            || (value as { enabled?: unknown }).enabled !== true
+            || !isPositiveInteger((value as { sessionId?: unknown }).sessionId)) {
+            return false;
+        }
+        const message = value as Record<string, unknown>;
+        if (message.role === "original") {
+            return typeof message.allPagesChanged === "boolean";
+        }
+        return message.role === "modified"
+            && typeof message.originalIsEmptyRevision === "boolean"
+            && isPdfData(message.originalData, message.originalIsEmptyRevision)
+            && isBoundedNonEmptyString(message.originalFingerprint)
+            && typeof message.modifiedIsEmptyRevision === "boolean";
     }
 
     function isDiffDisableMessage(value: unknown): value is DiffDisableMessage {
@@ -263,15 +282,19 @@ import {
     function isDiffApplyPageMessage(value: unknown): value is DiffApplyPageMessage {
         return isMessage(value, "diff.applyPage")
             && isPositiveInteger((value as { sessionId?: unknown }).sessionId)
-            && typeof (value as { pageNumber?: unknown }).pageNumber === "number"
-            && Array.isArray((value as { changes?: unknown }).changes);
+            && isPositiveInteger((value as { pageNumber?: unknown }).pageNumber)
+            && isDiffSideChanges((value as { changes?: unknown }).changes);
     }
 
     function isDiffRemovedPageRangeMessage(value: unknown): value is DiffRemovedPageRangeMessage {
-        return isMessage(value, "diff.setRemovedPageRange")
-            && isPositiveInteger((value as { sessionId?: unknown }).sessionId)
-            && typeof (value as { fromPage?: unknown }).fromPage === "number"
-            && typeof (value as { toPage?: unknown }).toPage === "number";
+        if (!isMessage(value, "diff.setRemovedPageRange")) {
+            return false;
+        }
+        const message = value as Record<string, unknown>;
+        return isPositiveInteger(message.sessionId)
+            && isPositiveInteger(message.fromPage)
+            && isPositiveInteger(message.toPage)
+            && message.fromPage <= message.toPage;
     }
 
     function isDiffNavigateMessage(value: unknown): value is DiffNavigateMessage {
@@ -309,7 +332,7 @@ import {
             && typeof message.index === "number"
             && Number.isSafeInteger(message.index)
             && message.index >= 0
-            && Array.isArray(message.changes)
+            && isDiffSideChanges(message.changes)
             && message.index < message.changes.length;
     }
 
@@ -344,6 +367,70 @@ import {
 
     function isPositiveInteger(value: unknown): value is number {
         return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+    }
+
+    function isDiffSideChanges(value: unknown): value is DiffSideChange[] {
+        if (!Array.isArray(value) || value.length > maximumRegionsPerPage) {
+            return false;
+        }
+        let regionCount = 0;
+        for (const change of value) {
+            if (!isDiffSideChange(change)) {
+                return false;
+            }
+            regionCount += change.regions.length;
+            if (regionCount > maximumRegionsPerPage) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function isDiffSideChange(value: unknown): value is DiffSideChange {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const change = value as Record<string, unknown>;
+        return typeof change.id === "string"
+            && change.id.length > 0
+            && change.id.length <= 128
+            && (change.kind === "insert" || change.kind === "delete" || change.kind === "replace")
+            && (change.strategy === "page" || change.strategy === "raster" || change.strategy === "text")
+            && Array.isArray(change.regions)
+            && change.regions.length > 0
+            && change.regions.every(isDiffRegion);
+    }
+
+    function isDiffRegion(value: unknown): value is DiffRegion {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const region = value as Record<string, unknown>;
+        return isNormalizedNumber(region.left)
+            && isNormalizedNumber(region.top)
+            && isNormalizedNumber(region.width)
+            && isNormalizedNumber(region.height)
+            && region.left + region.width <= 1.000001
+            && region.top + region.height <= 1.000001;
+    }
+
+    function isNormalizedNumber(value: unknown): value is number {
+        return typeof value === "number"
+            && Number.isFinite(value)
+            && value >= 0
+            && value <= 1;
+    }
+
+    function isPdfData(value: unknown, isEmptyRevision: boolean): value is ArrayBuffer {
+        return value instanceof ArrayBuffer
+            && value.byteLength <= maximumPdfBytes
+            && (value.byteLength === 0) === isEmptyRevision;
+    }
+
+    function isBoundedNonEmptyString(value: unknown): value is string {
+        return typeof value === "string"
+            && value.length > 0
+            && value.length <= maximumMessageStringLength;
     }
 
     function handleDocumentLoad(message: DocumentLoadMessage): void {

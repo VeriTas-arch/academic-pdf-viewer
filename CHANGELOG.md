@@ -2,6 +2,18 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.2.1] - 2026-08-20
+
+### Changed
+
+- Limited each PDF diff pair to 512 MiB combined before copying revision data into the webviews, while preserving the existing per-document limit.
+- Pinned the stable VS Code type package and recorded the VS Code 1.133 source of the vendored `customEditorDiffs` proposal contract.
+
+### Fixed
+
+- Rejected malformed PDF diff messages before they could replace active sessions, corrupt forwarded highlight state, or trigger webview errors.
+- Honored editor-open and Proposed API cancellation tokens, including terminating active Git child processes without reporting cancellation as a read failure.
+
 ## [1.2.0] - 2026-08-19
 
 ### Added

@@ -57,6 +57,16 @@ async function run() {
         path: missingGitPdfPath,
         query: JSON.stringify({ path: missingGitPdfPath, ref: 'HEAD' }),
     });
+    const cancellationSource = new vscode.CancellationTokenSource();
+    const cancelledGitRead = readPdfData(missingGitPdf, undefined, cancellationSource.token);
+    cancellationSource.cancel();
+    await assert.rejects(
+        cancelledGitRead,
+        error => error instanceof vscode.CancellationError,
+        'A cancelled Git PDF read should reject with CancellationError.',
+    );
+    cancellationSource.dispose();
+
     const missingGitData = await readPdfData(missingGitPdf);
     assert.equal(missingGitData.byteLength, 0, 'A missing Git revision should be treated as an empty PDF.');
 

@@ -3,25 +3,32 @@ import { dirname, isAbsolute, relative, sep } from 'node:path';
 import * as vscode from 'vscode';
 
 import type { DevLogFields, DevLogger } from './devLogger';
+import { assertPdfSize, MAX_PDF_BYTES } from './pdfSizeLimits';
 
-const MAX_PDF_BYTES = 512 * 1024 * 1024;
-const gitRootCache = new Map<string, Promise<string>>();
+const gitRootCache = new Map<string, string>();
 
-export async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
+export async function readPdfData(
+    uri: vscode.Uri,
+    logger?: DevLogger,
+    token?: vscode.CancellationToken,
+): Promise<Uint8Array> {
     const startedAt = Date.now();
     const fields = describePdfUri(uri);
     const source = uri.scheme === 'git' ? 'gitBlob' : 'workspaceFs';
     logger?.info('pdf.read.start', { ...fields, source });
 
     try {
+        throwIfCancellationRequested(token);
         let data: Uint8Array;
         if (uri.scheme === 'git') {
-            data = await readGitBlob(uri, logger);
+            data = await readGitBlob(uri, logger, token);
         } else {
             const stat = await vscode.workspace.fs.stat(uri);
+            throwIfCancellationRequested(token);
             assertPdfSize(stat.size);
             data = await vscode.workspace.fs.readFile(uri);
         }
+        throwIfCancellationRequested(token);
         assertPdfSize(data.byteLength);
         logger?.info('pdf.read.done', {
             ...fields,
@@ -31,11 +38,16 @@ export async function readPdfData(uri: vscode.Uri, logger?: DevLogger): Promise<
         });
         return data;
     } catch (error) {
-        logger?.error('pdf.read.failed', error, {
+        const resultFields = {
             ...fields,
             source,
             durationMs: Date.now() - startedAt,
-        });
+        };
+        if (error instanceof vscode.CancellationError) {
+            logger?.info('pdf.read.cancelled', resultFields);
+        } else {
+            logger?.error('pdf.read.failed', error, resultFields);
+        }
         throw error;
     }
 }
@@ -53,14 +65,19 @@ export function describePdfUri(uri: vscode.Uri): DevLogFields {
     }
 }
 
-async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Array> {
+async function readGitBlob(
+    uri: vscode.Uri,
+    logger?: DevLogger,
+    token?: vscode.CancellationToken,
+): Promise<Uint8Array> {
     const startedAt = Date.now();
     const query = JSON.parse(uri.query) as Record<string, unknown>;
     if (typeof query.path !== 'string' || typeof query.ref !== 'string') {
         throw new Error(`Invalid Git URI: ${uri.toString()}`);
     }
 
-    const repositoryRoot = await getGitRepositoryRoot(query.path);
+    const repositoryRoot = await getGitRepositoryRoot(query.path, token);
+    throwIfCancellationRequested(token);
     const repositoryPath = relative(repositoryRoot, query.path);
     if (repositoryPath === '..' || repositoryPath.startsWith(`..${sep}`) || isAbsolute(repositoryPath)) {
         throw new Error(`PDF is outside its Git repository: ${query.path}`);
@@ -71,7 +88,7 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('git.blob.start', fields);
 
     try {
-        const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref);
+        const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref, token);
         if (!objectName) {
             logger?.warn('git.blob.missing', {
                 ...fields,
@@ -80,14 +97,14 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
             });
             return new Uint8Array();
         }
-        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot);
+        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, token);
         const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
         if (!Number.isSafeInteger(objectSize)) {
             throw new Error(`git blob size output was invalid: ${stat.toString('utf8').trim()}`);
         }
         assertPdfSize(objectSize);
 
-        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot);
+        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, token);
         assertPdfSize(data.byteLength);
         const resultFields = {
             ...fields,
@@ -98,10 +115,12 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
         logger?.info('git.blob.done', resultFields);
         return data;
     } catch (error) {
-        logger?.error('git.blob.failed', error, {
-            ...fields,
-            durationMs: Date.now() - startedAt,
-        });
+        const resultFields = { ...fields, durationMs: Date.now() - startedAt };
+        if (error instanceof vscode.CancellationError) {
+            logger?.info('git.blob.cancelled', resultFields);
+        } else {
+            logger?.error('git.blob.failed', error, resultFields);
+        }
         throw error;
     }
 }
@@ -110,9 +129,10 @@ async function resolveGitObjectName(
     repositoryRoot: string,
     gitPath: string,
     ref: string,
+    token?: vscode.CancellationToken,
 ): Promise<string | undefined> {
     if (ref === '~' || ref === '') {
-        const entry = await runGit(['ls-files', '--stage', '-z', '--', gitPath], repositoryRoot);
+        const entry = await runGit(['ls-files', '--stage', '-z', '--', gitPath], repositoryRoot, token);
         return entry.length > 0 ? `:${gitPath}` : undefined;
     }
 
@@ -121,47 +141,52 @@ async function resolveGitObjectName(
         '--verify',
         '--end-of-options',
         `${ref}^{commit}`,
-    ], repositoryRoot)).toString('utf8').trim();
+    ], repositoryRoot, token)).toString('utf8').trim();
     if (!/^[0-9a-f]{40,64}$/i.test(resolvedRef)) {
         throw new Error(`Git resolved ref output was invalid: ${resolvedRef}`);
     }
-    const entry = await runGit(['ls-tree', '-z', resolvedRef, '--', gitPath], repositoryRoot);
+    const entry = await runGit(['ls-tree', '-z', resolvedRef, '--', gitPath], repositoryRoot, token);
     return entry.length > 0 ? `${resolvedRef}:${gitPath}` : undefined;
 }
 
-async function getGitRepositoryRoot(path: string): Promise<string> {
+async function getGitRepositoryRoot(
+    path: string,
+    token?: vscode.CancellationToken,
+): Promise<string> {
     const workspacePath = dirname(path);
     const cachedRoot = gitRootCache.get(workspacePath);
     if (cachedRoot !== undefined) {
         return cachedRoot;
     }
-    const inFlight = runGit(['rev-parse', '--show-toplevel'], workspacePath)
-        .then(output => output.toString('utf8').trim())
-        .catch(error => {
-            gitRootCache.delete(workspacePath);
-            throw error;
-        });
-    gitRootCache.set(workspacePath, inFlight);
-    return inFlight;
+    const repositoryRoot = (await runGit(
+        ['rev-parse', '--show-toplevel'],
+        workspacePath,
+        token,
+    )).toString('utf8').trim();
+    throwIfCancellationRequested(token);
+    gitRootCache.set(workspacePath, repositoryRoot);
+    return repositoryRoot;
 }
 
-function assertPdfSize(size: number): void {
-    if (!Number.isSafeInteger(size) || size < 0) {
-        throw new Error('PDF has an invalid file size.');
-    }
-    if (size > MAX_PDF_BYTES) {
-        throw new Error('PDF exceeds the 512 MiB safety limit.');
-    }
-}
-
-function runGit(args: string[], cwd: string): Promise<Buffer> {
+function runGit(
+    args: string[],
+    cwd: string,
+    token?: vscode.CancellationToken,
+): Promise<Buffer> {
+    throwIfCancellationRequested(token);
     const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
     return new Promise((resolve, reject) => {
-        execFile(configuredGitPath || 'git', args, {
+        let cancellationListener: vscode.Disposable | undefined;
+        const child = execFile(configuredGitPath || 'git', args, {
             cwd,
             encoding: null,
             maxBuffer: MAX_PDF_BYTES,
         }, (error, stdout, stderr) => {
+            cancellationListener?.dispose();
+            if (token?.isCancellationRequested) {
+                reject(new vscode.CancellationError());
+                return;
+            }
             if (!error) {
                 resolve(stdout);
                 return;
@@ -169,5 +194,14 @@ function runGit(args: string[], cwd: string): Promise<Buffer> {
             const detail = stderr.toString('utf8').trim() || error.message;
             reject(new Error(`Git ${args[0]} failed: ${detail}`));
         });
+        cancellationListener = token?.onCancellationRequested(() => {
+            child.kill();
+        });
     });
+}
+
+function throwIfCancellationRequested(token?: vscode.CancellationToken): void {
+    if (token?.isCancellationRequested) {
+        throw new vscode.CancellationError();
+    }
 }

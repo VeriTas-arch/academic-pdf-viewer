@@ -1,5 +1,5 @@
 /// <reference path="./globals.d.ts" />
-import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, maximumTextTokensPerPage, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, maximumRegionsPerPage, maximumTextTokensPerPage, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
 import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
 "use strict";
 (function () {
@@ -10,6 +10,8 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const eagerComparisonPageLimit = 16;
     const maximumQueuedPages = eagerComparisonPageLimit;
     const comparisonPrefetchRadius = 3;
+    const maximumMessageStringLength = 8 * 1024;
+    const maximumPdfBytes = 512 * 1024 * 1024;
     const pdfjsAdapter = window.academicPdfJsAdapter;
     const pageScheduler = new PageComparisonScheduler(maximumConcurrentPageComparisons, maximumQueuedPages);
     let config;
@@ -121,17 +123,31 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         return JSON.parse(value);
     }
     function isDocumentLoadMessage(value) {
-        return isMessage(value, "document.load")
-            && isPositiveInteger(value.loadId)
-            && typeof value.fingerprint === "string"
-            && typeof value.isEmptyRevision === "boolean";
+        if (!isMessage(value, "document.load")) {
+            return false;
+        }
+        const message = value;
+        return isPositiveInteger(message.loadId)
+            && typeof message.isEmptyRevision === "boolean"
+            && isPdfData(message.data, message.isEmptyRevision)
+            && isBoundedNonEmptyString(message.fingerprint)
+            && typeof message.preserveView === "boolean";
     }
     function isDiffEnableMessage(value) {
-        return isMessage(value, "diff.setEnabled")
-            && value.enabled === true
-            && isPositiveInteger(value.sessionId)
-            && (value.role === "original"
-                || value.role === "modified");
+        if (!isMessage(value, "diff.setEnabled")
+            || value.enabled !== true
+            || !isPositiveInteger(value.sessionId)) {
+            return false;
+        }
+        const message = value;
+        if (message.role === "original") {
+            return typeof message.allPagesChanged === "boolean";
+        }
+        return message.role === "modified"
+            && typeof message.originalIsEmptyRevision === "boolean"
+            && isPdfData(message.originalData, message.originalIsEmptyRevision)
+            && isBoundedNonEmptyString(message.originalFingerprint)
+            && typeof message.modifiedIsEmptyRevision === "boolean";
     }
     function isDiffDisableMessage(value) {
         return isMessage(value, "diff.setEnabled")
@@ -141,14 +157,18 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     function isDiffApplyPageMessage(value) {
         return isMessage(value, "diff.applyPage")
             && isPositiveInteger(value.sessionId)
-            && typeof value.pageNumber === "number"
-            && Array.isArray(value.changes);
+            && isPositiveInteger(value.pageNumber)
+            && isDiffSideChanges(value.changes);
     }
     function isDiffRemovedPageRangeMessage(value) {
-        return isMessage(value, "diff.setRemovedPageRange")
-            && isPositiveInteger(value.sessionId)
-            && typeof value.fromPage === "number"
-            && typeof value.toPage === "number";
+        if (!isMessage(value, "diff.setRemovedPageRange")) {
+            return false;
+        }
+        const message = value;
+        return isPositiveInteger(message.sessionId)
+            && isPositiveInteger(message.fromPage)
+            && isPositiveInteger(message.toPage)
+            && message.fromPage <= message.toPage;
     }
     function isDiffNavigateMessage(value) {
         return isMessage(value, "diff.navigate")
@@ -177,7 +197,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             && typeof message.index === "number"
             && Number.isSafeInteger(message.index)
             && message.index >= 0
-            && Array.isArray(message.changes)
+            && isDiffSideChanges(message.changes)
             && message.index < message.changes.length;
     }
     function isDiffApplyScrollMessage(value) {
@@ -205,6 +225,64 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     }
     function isPositiveInteger(value) {
         return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+    }
+    function isDiffSideChanges(value) {
+        if (!Array.isArray(value) || value.length > maximumRegionsPerPage) {
+            return false;
+        }
+        let regionCount = 0;
+        for (const change of value) {
+            if (!isDiffSideChange(change)) {
+                return false;
+            }
+            regionCount += change.regions.length;
+            if (regionCount > maximumRegionsPerPage) {
+                return false;
+            }
+        }
+        return true;
+    }
+    function isDiffSideChange(value) {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const change = value;
+        return typeof change.id === "string"
+            && change.id.length > 0
+            && change.id.length <= 128
+            && (change.kind === "insert" || change.kind === "delete" || change.kind === "replace")
+            && (change.strategy === "page" || change.strategy === "raster" || change.strategy === "text")
+            && Array.isArray(change.regions)
+            && change.regions.length > 0
+            && change.regions.every(isDiffRegion);
+    }
+    function isDiffRegion(value) {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const region = value;
+        return isNormalizedNumber(region.left)
+            && isNormalizedNumber(region.top)
+            && isNormalizedNumber(region.width)
+            && isNormalizedNumber(region.height)
+            && region.left + region.width <= 1.000001
+            && region.top + region.height <= 1.000001;
+    }
+    function isNormalizedNumber(value) {
+        return typeof value === "number"
+            && Number.isFinite(value)
+            && value >= 0
+            && value <= 1;
+    }
+    function isPdfData(value, isEmptyRevision) {
+        return value instanceof ArrayBuffer
+            && value.byteLength <= maximumPdfBytes
+            && (value.byteLength === 0) === isEmptyRevision;
+    }
+    function isBoundedNonEmptyString(value) {
+        return typeof value === "string"
+            && value.length > 0
+            && value.length <= maximumMessageStringLength;
     }
     function handleDocumentLoad(message) {
         if (message.loadId <= latestDocumentLoadId) {
