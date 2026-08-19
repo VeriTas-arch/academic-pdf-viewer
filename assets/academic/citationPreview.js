@@ -1,5 +1,6 @@
 /// <reference path="./globals.d.ts" />
 "use strict";
+import { collectNearbyLinesFromRows } from "./citationPreviewLines.js";
 (function () {
     const OPEN_DELAY_MS = 200;
     const TEXT_RADIUS_PX = 90;
@@ -886,32 +887,11 @@
                 nearbyRows.push(row);
             }
         }
-        const isFallback = targetY !== null && nearbyRows.length === 0;
-        const rows = isFallback || targetY === null ? allRows : nearbyRows;
-        if (rows.length === 0) {
-            return [];
-        }
-        rows.sort((a, b) => Math.abs(a.y - (targetY ?? a.y)) - Math.abs(b.y - (targetY ?? b.y)) || a.y - b.y || a.x - b.x);
-        const selected = rows.slice(0, isFallback ? 4 : 40);
-        selected.sort((a, b) => a.y - b.y || a.x - b.x);
-        const lines = [];
-        for (const row of selected) {
-            const last = lines[lines.length - 1];
-            if (!last || Math.abs(last.y - row.y) > 4) {
-                lines.push({ y: row.y, parts: [row] });
-            }
-            else {
-                last.parts.push(row);
-            }
-        }
-        const renderedLines = lines.map(line => line.parts
-            .sort((a, b) => a.x - b.x)
-            .map(part => part.text)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim())
-            .filter(Boolean);
-        return isFallback ? renderedLines.slice(0, 4) : renderedLines;
+        return collectNearbyLinesFromRows(allRows, targetY, {
+            textRadiusPx: TEXT_RADIUS_PX,
+            maxCandidateRows: 40,
+            maxReturnedLines: 4,
+        });
     }
     function getPreviewCrop(viewport, textBounds) {
         const fallbackMargin = viewport.width * PREVIEW_MARGIN_FALLBACK_RATIO;

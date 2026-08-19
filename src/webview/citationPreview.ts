@@ -2,6 +2,8 @@
 
 "use strict";
 
+import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPreviewLines.js";
+
 (function () {
     type Timer = ReturnType<typeof setTimeout> | null;
     interface ViewportRect {
@@ -1019,8 +1021,8 @@
     }
 
     function collectNearbyLines(items: PdfJsTextItem[], viewport: PdfJsViewport, targetY: number | null): string[] {
-        const nearbyRows: Array<{ text: string; x: number; y: number }> = [];
-        const allRows: Array<{ text: string; x: number; y: number }> = [];
+        const nearbyRows: Array<PositionedTextRow> = [];
+        const allRows: Array<PositionedTextRow> = [];
         for (const item of items) {
             if (typeof item.str !== "string" || !item.str.trim() || !Array.isArray(item.transform)) {
                 continue;
@@ -1037,34 +1039,11 @@
                 nearbyRows.push(row);
             }
         }
-        const isFallback = targetY !== null && nearbyRows.length === 0;
-        const rows = isFallback || targetY === null ? allRows : nearbyRows;
-        if (rows.length === 0) {
-            return [];
-        }
-
-        rows.sort((a, b) => Math.abs(a.y - (targetY ?? a.y)) - Math.abs(b.y - (targetY ?? b.y)) || a.y - b.y || a.x - b.x);
-        const selected = rows.slice(0, isFallback ? 4 : 40);
-        selected.sort((a, b) => a.y - b.y || a.x - b.x);
-
-        const lines = [];
-        for (const row of selected) {
-            const last = lines[lines.length - 1];
-            if (!last || Math.abs(last.y - row.y) > 4) {
-                lines.push({ y: row.y, parts: [row] });
-            } else {
-                last.parts.push(row);
-            }
-        }
-
-        const renderedLines = lines.map(line => line.parts
-            .sort((a, b) => a.x - b.x)
-            .map(part => part.text)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim())
-            .filter(Boolean);
-        return isFallback ? renderedLines.slice(0, 4) : renderedLines;
+        return collectNearbyLinesFromRows(allRows, targetY, {
+            textRadiusPx: TEXT_RADIUS_PX,
+            maxCandidateRows: 40,
+            maxReturnedLines: 4,
+        });
     }
 
     function getPreviewCrop(viewport: PdfJsViewport, textBounds: TextBounds | null): PreviewCrop {

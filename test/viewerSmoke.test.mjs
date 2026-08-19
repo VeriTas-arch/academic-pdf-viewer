@@ -330,6 +330,129 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.close();
     });
 
+    await t.test("clears all selected markers when paging from a multi-rectangle change", async () => {
+        const diffPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const diffPageErrors = [];
+        diffPage.on("pageerror", error => diffPageErrors.push(error.message));
+        await diffPage.goto(`${origin}/__viewer_diff_test__.html`);
+        await diffPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        const originalData = createTextPdfWithCommands([
+            [
+                "(common ) Tj",
+                "0 -24 Td",
+                "(left) Tj",
+                "0 -24 Td",
+                "(tail) Tj"
+            ]
+        ]);
+        const modifiedData = createTextPdfWithCommands([
+            [
+                "(common ) Tj",
+                "0 -24 Td",
+                "(first) Tj",
+                "0 -24 Td",
+                "(second) Tj",
+                "0 -24 Td",
+                "(tail) Tj"
+            ]
+        ]);
+        await diffPage.evaluate(data => {
+            window.postMessage({
+                type: "document.load",
+                data: Uint8Array.from(data).buffer,
+                isEmptyRevision: false,
+                fingerprint: "multi-rect-modified",
+                preserveView: false
+            }, "*");
+        }, [...modifiedData]);
+        await diffPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+        ));
+        await diffPage.evaluate(data => {
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "modified",
+                originalData: Uint8Array.from(data).buffer,
+                originalFingerprint: "multi-rect-original",
+                originalIsEmptyRevision: false,
+                modifiedIsEmptyRevision: false
+            }, "*");
+        }, [...originalData]);
+        await diffPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "diffComputed"
+        ));
+
+        await diffPage.waitForFunction(() => [...document.querySelectorAll('.academicPdfDiffRegion')].length > 0);
+        const targetChange = await diffPage.evaluate(() => {
+            const markerCounts = [...document.querySelectorAll('.academicPdfDiffRegion')]
+                .reduce((acc, marker) => {
+                    const id = marker.dataset.changeId;
+                    if (!id) {
+                        return acc;
+                    }
+                    acc[id] = (acc[id] ?? 0) + 1;
+                    return acc;
+                }, {});
+            const multiRegionChange = Object.entries(markerCounts).find(([, count]) => count >= 2);
+            if (!multiRegionChange) {
+                return null;
+            }
+            return {
+                id: multiRegionChange[0],
+                totalMarkers: multiRegionChange[1]
+            };
+        });
+        assert.ok(targetChange);
+        assert.equal(typeof targetChange.id, "string");
+        assert.equal(typeof targetChange.totalMarkers, "number");
+        assert.ok(targetChange.totalMarkers >= 2);
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+            const selectedIds = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
+                elements => [...new Set(elements.map(marker => marker.dataset.changeId))]
+            );
+            if (selectedIds[0] === targetChange.id) {
+                break;
+            }
+            await diffPage.evaluate(() => {
+                window.postMessage({
+                    type: "diff.navigate",
+                    sessionId: 1,
+                    direction: "next"
+                }, "*");
+            });
+            await diffPage.waitForFunction(() => document.querySelectorAll(
+                '.academicPdfDiffRegion--selected'
+            ).length > 0);
+        }
+        const finalSelectedIds = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
+            elements => [...new Set(elements.map(marker => marker.dataset.changeId))]
+        );
+        assert.equal(finalSelectedIds[0], targetChange.id);
+        const selectedCount = await diffPage.evaluate((id) => {
+            const markers = [...document.querySelectorAll('.academicPdfDiffRegion')];
+            const active = [...document.querySelectorAll('.academicPdfDiffRegion--selected')];
+            return {
+                total: markers.filter(marker => marker.dataset.changeId === id).length,
+                active: active.filter(marker => marker.dataset.changeId === id).length
+            };
+        }, targetChange.id);
+        assert.equal(selectedCount.total, targetChange.totalMarkers);
+        assert.equal(selectedCount.active, targetChange.totalMarkers);
+        await diffPage.evaluate(() => {
+            const viewer = window.PDFViewerApplication.pdfViewer;
+            viewer.currentPageNumber = 2;
+        });
+        await diffPage.waitForFunction(() => window.PDFViewerApplication.pdfViewer.currentPageNumber === 2);
+        assert.equal(await diffPage.evaluate(() => document.querySelectorAll('.academicPdfDiffRegion--selected').length), 0);
+        assert.deepEqual(diffPageErrors, []);
+        await diffPage.close();
+    });
+
     await t.test("limits long-document prefetch to the nearby seven-page window", async () => {
         const diffPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const diffPageErrors = [];
@@ -526,7 +649,7 @@ async function buildViewerHtml(configOverrides = {}) {
 <script src="/assets/pdfviewer/lib/build/pdf.mjs" type="module"></script>
 <script src="/assets/pdfviewer/lib/web/viewer.mjs" type="module"></script>
 <script src="/assets/academic/reader.js"></script>
-<script src="/assets/academic/citationPreview.js"></script>
+<script src="/assets/academic/citationPreview.js" type="module"></script>
 <script src="/assets/academic/pdfDiff.js" type="module"></script>`;
     return html.replace("<title>PDF.js viewer</title>", `${head}\n<title>Academic PDF Viewer test</title>`);
 }
@@ -587,24 +710,37 @@ function createTextPdf(text) {
 
 function createTextPdfPages(pageTexts) {
     assert(pageTexts.length > 0);
+    return createPdfFromStrings(pageTexts);
+}
+
+function createTextPdfWithCommands(pages) {
     const firstPageObject = 3;
-    const fontObject = firstPageObject + pageTexts.length * 2;
-    const pageObjects = pageTexts.map((_, index) => firstPageObject + index * 2);
+    const fontObject = firstPageObject + pages.length * 2;
+    const pageObjects = Array.from({ length: pages.length }, (_, index) => firstPageObject + index * 2);
     const objects = [
         "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-        `2 0 obj\n<< /Type /Pages /Kids [${pageObjects.map(id => `${id} 0 R`).join(" ")}] /Count ${pageTexts.length} >>\nendobj\n`
+        `2 0 obj\n<< /Type /Pages /Kids [${pageObjects.map(id => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>\nendobj\n`
     ];
-    for (const [index, text] of pageTexts.entries()) {
+    for (const [index, commands] of pages.entries()) {
         const pageObject = pageObjects[index];
         const contentObject = pageObject + 1;
-        const escapedText = text.replace(/([\\()])/g, "\\$1");
-        const stream = `BT\n/F1 24 Tf\n72 700 Td\n(${escapedText}) Tj\nET\n`;
+        const stream = `BT\n/F1 24 Tf\n72 700 Td\n${commands.join("\n")}\nET\n`;
         objects.push(
             `${pageObject} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObject} 0 R >> >> /Contents ${contentObject} 0 R >>\nendobj\n`,
             `${contentObject} 0 obj\n<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream\nendobj\n`
         );
     }
     objects.push(`${fontObject} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`);
+    return createPdfFromObjects(objects);
+}
+
+function createPdfFromStrings(pageTexts) {
+    return createPdfFromObjects(pageTexts.map(text => [
+        `(${text.replace(/([\\()])/g, "\\$1")}) Tj`
+    ]));
+}
+
+function createPdfFromObjects(objects) {
     let body = "%PDF-1.4\n";
     const offsets = [0];
     for (const object of objects) {

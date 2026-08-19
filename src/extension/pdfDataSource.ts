@@ -74,6 +74,21 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     logger?.info('git.blob.start', fields);
 
     try {
+        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot);
+        if (stat.length === 0) {
+            logger?.warn('git.blob.missing', {
+                ...fields,
+                bytes: 0,
+                durationMs: Date.now() - startedAt,
+            });
+            return new Uint8Array();
+        }
+        const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
+        if (!Number.isSafeInteger(objectSize)) {
+            throw new Error(`git blob size output was invalid: ${stat.toString('utf8').trim()}`);
+        }
+        assertPdfSize(objectSize);
+
         const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, true);
         if (data.byteLength === 0) {
             logger?.warn('git.blob.missing', {

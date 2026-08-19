@@ -31,7 +31,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const activePageTasks = new Set();
     let removedPageRange = null;
     let selectedChange = null;
-    let selectedMarker = null;
+    let selectedMarkers = [];
     let statusElement = null;
     let scrollSyncFrame = null;
     let comparisonScheduleFrame = null;
@@ -799,9 +799,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                     return;
                 }
                 const selectedIndexKey = String(selectedIndex);
-                if (selectedMarker?.dataset.pageNumber === String(pageNumber)
-                    && selectedMarker.dataset.changeIndex === selectedIndexKey) {
-                    selectedMarker?.scrollIntoView({ block: "center", inline: "center" });
+                if (selectedMarkers.length > 0
+                    && selectedMarkers[0].dataset.pageNumber === String(pageNumber)
+                    && selectedMarkers[0].dataset.changeIndex === selectedIndexKey) {
+                    selectedMarkers[0].scrollIntoView({ block: "center", inline: "center" });
                     return;
                 }
                 const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
@@ -1146,6 +1147,9 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (!pageElement) {
             return;
         }
+        if (selectedChange?.pageNumber === pageNumber) {
+            clearSelectedMarker();
+        }
         const existingLayer = pageDiffLayers.get(pageNumber);
         if (existingLayer) {
             existingLayer.remove();
@@ -1169,7 +1173,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 marker.dataset.changeIndex = String(index);
                 if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
                     marker.classList.add("academicPdfDiffRegion--selected");
-                    selectedMarker = marker;
+                    selectedMarkers.push(marker);
                 }
                 marker.style.left = `${region.left * 100}%`;
                 marker.style.top = `${region.top * 100}%`;
@@ -1189,11 +1193,13 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         clearSelectedMarker();
     }
     function clearSelectedMarker() {
-        if (selectedMarker === null) {
+        if (selectedMarkers.length === 0) {
             return;
         }
-        selectedMarker.classList.remove("academicPdfDiffRegion--selected");
-        selectedMarker = null;
+        for (const marker of selectedMarkers) {
+            marker.classList.remove("academicPdfDiffRegion--selected");
+        }
+        selectedMarkers = [];
     }
     function reportDebug(event, fields) {
         if (!config.debug) {

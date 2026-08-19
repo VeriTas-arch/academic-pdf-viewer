@@ -154,7 +154,7 @@ import {
     const activePageTasks = new Set<Promise<PageDiffResult | undefined>>();
     let removedPageRange: { fromPage: number; toPage: number } | null = null;
     let selectedChange: { pageNumber: number; index: number } | null = null;
-    let selectedMarker: HTMLElement | null = null;
+    let selectedMarkers: HTMLElement[] = [];
     let statusElement: HTMLElement | null = null;
     let scrollSyncFrame: number | null = null;
     let comparisonScheduleFrame: number | null = null;
@@ -1008,14 +1008,15 @@ import {
                     return;
                 }
                 const selectedIndexKey = String(selectedIndex);
-                if (selectedMarker?.dataset.pageNumber === String(pageNumber)
-                    && selectedMarker.dataset.changeIndex === selectedIndexKey) {
-                    selectedMarker?.scrollIntoView({ block: "center", inline: "center" });
-                    return;
-                }
-                const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
-                const marker = pageView?.div.querySelector<HTMLElement>(
-                    `.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`
+            if (selectedMarkers.length > 0
+                && selectedMarkers[0].dataset.pageNumber === String(pageNumber)
+                && selectedMarkers[0].dataset.changeIndex === selectedIndexKey) {
+                selectedMarkers[0].scrollIntoView({ block: "center", inline: "center" });
+                return;
+            }
+            const pageView = window.PDFViewerApplication.pdfViewer?.getPageView(pageNumber - 1);
+            const marker = pageView?.div.querySelector<HTMLElement>(
+                `.academicPdfDiffRegion[data-change-index="${selectedIndexKey}"]`
                 );
                 marker?.scrollIntoView({ block: "center", inline: "center" });
             });
@@ -1432,6 +1433,9 @@ import {
         if (!pageElement) {
             return;
         }
+        if (selectedChange?.pageNumber === pageNumber) {
+            clearSelectedMarker();
+        }
 
         const existingLayer = pageDiffLayers.get(pageNumber);
         if (existingLayer) {
@@ -1458,7 +1462,7 @@ import {
                 marker.dataset.changeIndex = String(index);
                 if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {
                     marker.classList.add("academicPdfDiffRegion--selected");
-                    selectedMarker = marker;
+                    selectedMarkers.push(marker);
                 }
                 marker.style.left = `${region.left * 100}%`;
                 marker.style.top = `${region.top * 100}%`;
@@ -1480,11 +1484,13 @@ import {
     }
 
     function clearSelectedMarker(): void {
-        if (selectedMarker === null) {
+        if (selectedMarkers.length === 0) {
             return;
         }
-        selectedMarker.classList.remove("academicPdfDiffRegion--selected");
-        selectedMarker = null;
+        for (const marker of selectedMarkers) {
+            marker.classList.remove("academicPdfDiffRegion--selected");
+        }
+        selectedMarkers = [];
     }
 
     function reportDebug(event: string, fields: Record<string, unknown>): void {
