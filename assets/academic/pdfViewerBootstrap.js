@@ -68,6 +68,9 @@
         }
         const message = value;
         return message.type === "document.load"
+            && typeof message.loadId === "number"
+            && Number.isSafeInteger(message.loadId)
+            && message.loadId >= 1
             && message.data instanceof ArrayBuffer
             && typeof message.isEmptyRevision === "boolean"
             && typeof message.fingerprint === "string"
@@ -173,18 +176,25 @@
                 pageNumber: event.pageNumber
             });
         });
-        window.addEventListener("message", async (event) => {
-            if (!isDocumentLoadMessage(event.data)) {
-                return;
-            }
-            const message = event.data;
+        let latestDocumentLoadId = 0;
+        let pendingDocumentLoad = null;
+        let documentLoadDrain = null;
+        let documentLoadStartFrame = null;
+        const isLatestDocumentLoad = (message) => (message.loadId === latestDocumentLoadId);
+        const processDocumentLoad = async (message) => {
             const startedAt = performance.now();
             const fingerprint = message.fingerprint;
             await application.initializedPromise;
+            if (!isLatestDocumentLoad(message)) {
+                return;
+            }
             if (message.isEmptyRevision) {
                 pendingFirstPageRender = null;
                 if (application.pdfLoadingTask) {
                     await application.close();
+                }
+                if (!isLatestDocumentLoad(message)) {
+                    return;
                 }
                 showDocumentState("This file does not exist in this revision.");
                 reportDebug("emptyRevision", {
@@ -215,6 +225,12 @@
             pendingFirstPageRender = pendingRender;
             try {
                 await application.open({ data, ...loadOptions });
+                if (!isLatestDocumentLoad(message)) {
+                    if (pendingFirstPageRender === pendingRender) {
+                        pendingFirstPageRender = null;
+                    }
+                    return;
+                }
                 pendingRender.opened = true;
                 reportDebug("opened", {
                     fingerprint,
@@ -223,22 +239,70 @@
                 });
             }
             catch (error) {
-                if (restorePending) {
-                    application.eventBus.off("documentinit", restoreOnDocumentInit);
-                }
                 if (pendingFirstPageRender === pendingRender) {
                     pendingFirstPageRender = null;
                 }
-                console.error("Failed to load PDF document.", error);
-                reportDebug("failed", {
-                    fingerprint,
-                    durationMs: elapsedSince(startedAt),
-                    error: errorMessage(error)
-                });
+                throw error;
             }
             finally {
+                if (restorePending) {
+                    application.eventBus.off("documentinit", restoreOnDocumentInit);
+                }
                 application.load = oldLoad;
             }
+        };
+        const drainDocumentLoads = async () => {
+            while (pendingDocumentLoad) {
+                const message = pendingDocumentLoad;
+                pendingDocumentLoad = null;
+                try {
+                    await processDocumentLoad(message);
+                }
+                catch (error) {
+                    if (!isLatestDocumentLoad(message)) {
+                        continue;
+                    }
+                    console.error("Failed to load PDF document.", error);
+                    reportDebug("failed", {
+                        fingerprint: message.fingerprint,
+                        error: errorMessage(error)
+                    });
+                }
+            }
+        };
+        const startDocumentLoadDrain = () => {
+            if (documentLoadDrain) {
+                return;
+            }
+            const drain = drainDocumentLoads();
+            documentLoadDrain = drain;
+            void drain.finally(() => {
+                if (documentLoadDrain !== drain) {
+                    return;
+                }
+                documentLoadDrain = null;
+                if (pendingDocumentLoad) {
+                    scheduleDocumentLoadDrain();
+                }
+            });
+        };
+        const scheduleDocumentLoadDrain = () => {
+            if (documentLoadDrain || documentLoadStartFrame !== null) {
+                return;
+            }
+            documentLoadStartFrame = requestAnimationFrame(() => {
+                documentLoadStartFrame = null;
+                startDocumentLoadDrain();
+            });
+        };
+        window.addEventListener("message", (event) => {
+            if (!isDocumentLoadMessage(event.data)
+                || event.data.loadId <= latestDocumentLoadId) {
+                return;
+            }
+            latestDocumentLoadId = event.data.loadId;
+            pendingDocumentLoad = event.data;
+            scheduleDocumentLoadDrain();
         });
         window.dispatchEvent(new CustomEvent("academic-pdf-viewer-ready"));
     }, { once: true });

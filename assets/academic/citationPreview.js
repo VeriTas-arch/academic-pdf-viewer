@@ -53,6 +53,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         _annotationCache;
         _textContentCache;
         _pageRenderIds;
+        _documentGeneration;
         _overlayLinks;
         _pageOverlays;
         _pageLayers;
@@ -82,6 +83,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             this._annotationCache = new Map();
             this._textContentCache = new Map();
             this._pageRenderIds = new Map();
+            this._documentGeneration = 0;
             this._overlayLinks = new WeakMap();
             this._pageOverlays = new Map();
             this._pageLayers = new Set();
@@ -101,6 +103,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         }
         initialize() {
             this._eventBus.on("documentloaded", () => {
+                this._documentGeneration += 1;
                 this._pdfDocument = this._app.pdfDocument;
                 this._hidePopup();
                 this._clearPreviewCache();
@@ -278,14 +281,26 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 return;
             }
             const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
+            const documentGeneration = this._documentGeneration;
             rememberBoundedEntry(this._pageRenderIds, pageNumber, renderId, MAX_DOCUMENT_CACHE_ENTRIES);
             const pageView = this._app.pdfViewer.getPageView(pageNumber - 1);
             if (!pageView || !pageView.div || !pageView.viewport) {
                 return;
             }
             this._clearPageOverlays(pageView.div);
-            const annotations = await this._getPageAnnotations(pageNumber);
-            if (!this._enabled || this._pageRenderIds.get(pageNumber) !== renderId) {
+            let annotations;
+            try {
+                annotations = await this._getPageAnnotations(pageNumber);
+            }
+            catch (error) {
+                if (this._documentGeneration === documentGeneration) {
+                    console.warn("Failed to read PDF link annotations.", error);
+                }
+                return;
+            }
+            if (!this._enabled
+                || this._documentGeneration !== documentGeneration
+                || this._pageRenderIds.get(pageNumber) !== renderId) {
                 return;
             }
             for (const annotation of annotations) {

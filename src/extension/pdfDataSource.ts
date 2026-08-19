@@ -67,15 +67,12 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
     }
 
     const gitPath = repositoryPath.replace(/\\/g, '/');
-    const objectName = query.ref === '~' || query.ref === ''
-        ? `:${gitPath}`
-        : `${query.ref}:${gitPath}`;
-    const fields = { repositoryRoot, objectName };
+    const fields = { repositoryRoot, gitPath, ref: query.ref };
     logger?.info('git.blob.start', fields);
 
     try {
-        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, true);
-        if (stat.length === 0) {
+        const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref);
+        if (!objectName) {
             logger?.warn('git.blob.missing', {
                 ...fields,
                 bytes: 0,
@@ -83,24 +80,18 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
             });
             return new Uint8Array();
         }
+        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot);
         const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
         if (!Number.isSafeInteger(objectSize)) {
             throw new Error(`git blob size output was invalid: ${stat.toString('utf8').trim()}`);
         }
         assertPdfSize(objectSize);
 
-        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, true);
-        if (data.byteLength === 0) {
-            logger?.warn('git.blob.missing', {
-                ...fields,
-                bytes: 0,
-                durationMs: Date.now() - startedAt,
-            });
-            return new Uint8Array();
-        }
+        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot);
         assertPdfSize(data.byteLength);
         const resultFields = {
             ...fields,
+            objectName,
             bytes: data.byteLength,
             durationMs: Date.now() - startedAt,
         };
@@ -113,6 +104,29 @@ async function readGitBlob(uri: vscode.Uri, logger?: DevLogger): Promise<Uint8Ar
         });
         throw error;
     }
+}
+
+async function resolveGitObjectName(
+    repositoryRoot: string,
+    gitPath: string,
+    ref: string,
+): Promise<string | undefined> {
+    if (ref === '~' || ref === '') {
+        const entry = await runGit(['ls-files', '--stage', '-z', '--', gitPath], repositoryRoot);
+        return entry.length > 0 ? `:${gitPath}` : undefined;
+    }
+
+    const resolvedRef = (await runGit([
+        'rev-parse',
+        '--verify',
+        '--end-of-options',
+        `${ref}^{commit}`,
+    ], repositoryRoot)).toString('utf8').trim();
+    if (!/^[0-9a-f]{40,64}$/i.test(resolvedRef)) {
+        throw new Error(`Git resolved ref output was invalid: ${resolvedRef}`);
+    }
+    const entry = await runGit(['ls-tree', '-z', resolvedRef, '--', gitPath], repositoryRoot);
+    return entry.length > 0 ? `${resolvedRef}:${gitPath}` : undefined;
 }
 
 async function getGitRepositoryRoot(path: string): Promise<string> {
@@ -140,7 +154,7 @@ function assertPdfSize(size: number): void {
     }
 }
 
-function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Buffer> {
+function runGit(args: string[], cwd: string): Promise<Buffer> {
     const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
     return new Promise((resolve, reject) => {
         execFile(configuredGitPath || 'git', args, {
@@ -152,11 +166,6 @@ function runGit(args: string[], cwd: string, missingIsEmpty = false): Promise<Bu
                 resolve(stdout);
                 return;
             }
-            if (missingIsEmpty && error.code === 128) {
-                resolve(Buffer.alloc(0));
-                return;
-            }
-
             const detail = stderr.toString('utf8').trim() || error.message;
             reject(new Error(`Git ${args[0]} failed: ${detail}`));
         });

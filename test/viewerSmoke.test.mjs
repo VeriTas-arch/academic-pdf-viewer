@@ -64,6 +64,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         const data = await (await fetch(pdfPath)).arrayBuffer();
         window.postMessage({
             type: "document.load",
+            loadId: 1,
             data,
             isEmptyRevision: false,
             fingerprint: "viewer-smoke",
@@ -219,6 +220,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.evaluate(async data => {
             window.postMessage({
                 type: "document.load",
+                loadId: 1,
                 data: Uint8Array.from(data).buffer,
                 isEmptyRevision: false,
                 fingerprint: "text-alignment-modified",
@@ -248,7 +250,13 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
             '.page[data-page-number="1"] .academicPdfDiffRegion'
         ).evaluateAll(markers => markers.map(marker => {
             const rect = marker.getBoundingClientRect();
-            return { top: rect.top, height: rect.height };
+            return {
+                id: marker.dataset.changeId,
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height
+            };
         }));
         assert(markerRects.length >= 3,
             `expected several same-line highlights, received ${JSON.stringify(markerRects)}`);
@@ -363,6 +371,65 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.close();
     });
 
+    await t.test("keeps visual changes outside semantic text regions", async () => {
+        const diffPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const diffPageErrors = [];
+        diffPage.on("pageerror", error => diffPageErrors.push(error.message));
+        await diffPage.goto(`${origin}/__viewer_diff_test__.html`);
+        await diffPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        const originalData = createTextPdfWithCommands([["(A old C) Tj"]]);
+        const modifiedData = createTextPdfWithCommands([[
+            "(A new C) Tj",
+            "ET",
+            "0 0 0 rg",
+            "400 100 80 80 re f",
+            "BT"
+        ]]);
+        await diffPage.evaluate(data => {
+            window.postMessage({
+                type: "document.load",
+                loadId: 1,
+                data: Uint8Array.from(data).buffer,
+                isEmptyRevision: false,
+                fingerprint: "hybrid-modified",
+                preserveView: false
+            }, "*");
+        }, [...modifiedData]);
+        await diffPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+        ));
+        await diffPage.evaluate(data => {
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "modified",
+                originalData: Uint8Array.from(data).buffer,
+                originalFingerprint: "hybrid-original",
+                originalIsEmptyRevision: false,
+                modifiedIsEmptyRevision: false
+            }, "*");
+        }, [...originalData]);
+        await diffPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "diffComputed"
+        ));
+
+        const relativeMarkerTops = await diffPage.locator(
+            '.page[data-page-number="1"] .academicPdfDiffRegion'
+        ).evaluateAll(markers => {
+            const pageRect = markers[0]?.closest(".page")?.getBoundingClientRect();
+            return pageRect
+                ? markers.map(marker => (marker.getBoundingClientRect().top - pageRect.top) / pageRect.height)
+                : [];
+        });
+        assert(relativeMarkerTops.some(top => top > 0.65), "The non-text rectangle change should be highlighted.");
+        assert.deepEqual(diffPageErrors, []);
+        await diffPage.close();
+    });
+
     await t.test("clears all selected markers when paging from a multi-rectangle change", async () => {
         const diffPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const diffPageErrors = [];
@@ -397,6 +464,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.evaluate(data => {
             window.postMessage({
                 type: "document.load",
+                loadId: 1,
                 data: Uint8Array.from(data).buffer,
                 isEmptyRevision: false,
                 fingerprint: "multi-rect-modified",
@@ -504,6 +572,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.evaluate(data => {
             window.postMessage({
                 type: "document.load",
+                loadId: 1,
                 data: Uint8Array.from(data).buffer,
                 isEmptyRevision: false,
                 fingerprint: "long-document-modified",
@@ -572,6 +641,75 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         assert.deepEqual(originalPageErrors, []);
         await originalPage.close();
     });
+
+    await t.test("keeps the latest of back-to-back document loads", async () => {
+        const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const reloadPageErrors = [];
+        reloadPage.on("pageerror", error => reloadPageErrors.push(error.stack || error.message));
+        await reloadPage.goto(`${origin}/__viewer_diff_test__.html`);
+        await reloadPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        const staleData = createTextPdfPages(["stale page one", "stale page two"]);
+        const latestData = createTextPdf("latest document");
+        await reloadPage.evaluate(({ stale, latest }) => {
+            window.postMessage({
+                type: "document.load",
+                loadId: 1,
+                data: Uint8Array.from(stale).buffer,
+                isEmptyRevision: false,
+                fingerprint: "stale-load",
+                preserveView: false
+            }, "*");
+            window.postMessage({
+                type: "document.load",
+                loadId: 2,
+                data: Uint8Array.from(latest).buffer,
+                isEmptyRevision: false,
+                fingerprint: "latest-load",
+                preserveView: false
+            }, "*");
+        }, { stale: [...staleData], latest: [...latestData] });
+        await reloadPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "opened" && message.fingerprint === "latest-load"
+        ));
+        await reloadPage.evaluate(stale => {
+            window.postMessage({
+                type: "document.load",
+                loadId: 1,
+                data: Uint8Array.from(stale).buffer,
+                isEmptyRevision: false,
+                fingerprint: "stale-load-after-latest",
+                preserveView: false
+            }, "*");
+        }, [...staleData]);
+        await reloadPage.evaluate(original => {
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "modified",
+                originalData: Uint8Array.from(original).buffer,
+                originalFingerprint: "latest-load-original",
+                originalIsEmptyRevision: false,
+                modifiedIsEmptyRevision: false
+            }, "*");
+        }, [...latestData]);
+        await reloadPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "diffComputed" && message.fingerprint === "latest-load"
+        ), undefined, { timeout: 5_000 });
+
+        assert.equal(await reloadPage.evaluate(() => window.PDFViewerApplication.pdfDocument?.numPages), 1);
+        assert.equal(await reloadPage.evaluate(() => window.__academicTestDebug.filter(
+            message => message.event === "opened"
+        ).at(-1)?.fingerprint), "latest-load");
+        assert.equal(await reloadPage.evaluate(() => window.__academicTestDebug.some(
+            message => message.fingerprint === "stale-load-after-latest"
+        )), false);
+        assert.deepEqual(reloadPageErrors, []);
+        await reloadPage.close();
+    });
 });
 
 async function waitForPreview(page) {
@@ -602,6 +740,7 @@ async function openPreparedDiffPage(browser, origin, viewerPathname) {
         const data = await (await fetch(pdfPath)).arrayBuffer();
         window.postMessage({
             type: "document.load",
+            loadId: 1,
             data,
             isEmptyRevision: false,
             fingerprint: "visible-page-diff",

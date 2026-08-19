@@ -1,7 +1,7 @@
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
-    | { type: 'document.load'; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
+    | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
     | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
     | {

@@ -6,6 +6,7 @@ import {
     compareTextTokenChanges,
     compareTextTokens,
     findNextDiffPage,
+    mergeTextAndRasterResults,
     nextDiffRegionIndex,
 } from '../src/webview/pdfDiffAlgorithm.mts';
 
@@ -213,6 +214,41 @@ test('falls back to a full-page region for different page dimensions', () => {
         changedPixels: -1,
         strategy: 'page',
     });
+});
+
+test('keeps semantic text changes and adds uncovered visual changes', () => {
+    const textResult = compareTextTokens(
+        [token('A', 10), token('old', 30), token('C', 50)],
+        [token('A', 10), token('new', 30), token('C', 50)],
+        100,
+        100,
+        100,
+        100,
+    );
+    assert(textResult);
+    const coveredTextRegion = { left: 0.29, top: 0.09, width: 0.12, height: 0.12 };
+    const uncoveredVisualRegion = { left: 0.7, top: 0.65, width: 0.2, height: 0.2 };
+    const rasterResult = {
+        changes: [coveredTextRegion, uncoveredVisualRegion].map((region, index) => ({
+            id: `raster-${index + 1}`,
+            kind: 'replace',
+            originalRegions: [region],
+            modifiedRegions: [region],
+            strategy: 'raster',
+        })),
+        originalRegions: [coveredTextRegion, uncoveredVisualRegion],
+        modifiedRegions: [coveredTextRegion, uncoveredVisualRegion],
+        changedPixels: 400,
+        strategy: 'raster',
+    };
+
+    const result = mergeTextAndRasterResults(textResult, rasterResult);
+
+    assert.equal(result.changes.length, textResult.changes.length + 1);
+    assert.deepEqual(result.changes.at(-1), rasterResult.changes[1]);
+    assert.deepEqual(result.originalRegions.at(-1), uncoveredVisualRegion);
+    assert.deepEqual(result.modifiedRegions.at(-1), uncoveredVisualRegion);
+    assert.equal(result.changedPixels, 400);
 });
 
 test('marks inserted text only in the modified revision', () => {

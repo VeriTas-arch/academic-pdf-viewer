@@ -124,6 +124,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         _annotationCache: Map<number, Promise<PdfJsAnnotation[]>>;
         _textContentCache: Map<number, Promise<PdfJsTextContent>>;
         _pageRenderIds: Map<number, number>;
+        _documentGeneration: number;
         _overlayLinks: WeakMap<HTMLElement, PreviewLink>;
         _pageOverlays: Map<HTMLElement, Set<HTMLElement>>;
         _pageLayers: Set<HTMLElement>;
@@ -154,6 +155,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             this._annotationCache = new Map();
             this._textContentCache = new Map();
             this._pageRenderIds = new Map();
+            this._documentGeneration = 0;
             this._overlayLinks = new WeakMap();
             this._pageOverlays = new Map();
             this._pageLayers = new Set();
@@ -174,6 +176,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
         initialize(): void {
             this._eventBus.on("documentloaded", () => {
+                this._documentGeneration += 1;
                 this._pdfDocument = this._app.pdfDocument;
                 this._hidePopup();
                 this._clearPreviewCache();
@@ -363,6 +366,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 return;
             }
             const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
+            const documentGeneration = this._documentGeneration;
             rememberBoundedEntry(this._pageRenderIds, pageNumber, renderId, MAX_DOCUMENT_CACHE_ENTRIES);
 
             const pageView = this._app.pdfViewer.getPageView(pageNumber - 1);
@@ -372,8 +376,18 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
             this._clearPageOverlays(pageView.div);
 
-            const annotations = await this._getPageAnnotations(pageNumber);
-            if (!this._enabled || this._pageRenderIds.get(pageNumber) !== renderId) {
+            let annotations: PdfJsAnnotation[];
+            try {
+                annotations = await this._getPageAnnotations(pageNumber);
+            } catch (error) {
+                if (this._documentGeneration === documentGeneration) {
+                    console.warn("Failed to read PDF link annotations.", error);
+                }
+                return;
+            }
+            if (!this._enabled
+                || this._documentGeneration !== documentGeneration
+                || this._pageRenderIds.get(pageNumber) !== renderId) {
                 return;
             }
             for (const annotation of annotations) {

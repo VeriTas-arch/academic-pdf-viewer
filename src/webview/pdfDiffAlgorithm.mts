@@ -203,6 +203,123 @@ export function compareTextTokens(
     );
 }
 
+export function mergeTextAndRasterResults(
+    textResult: PageDiffResult,
+    rasterResult: PageDiffResult
+): PageDiffResult {
+    if (rasterResult.strategy === "page") {
+        return rasterResult;
+    }
+
+    const semanticRegions = [
+        ...textResult.originalRegions,
+        ...textResult.modifiedRegions
+    ];
+    const visualChanges = rasterResult.changes.filter(change => [
+        ...change.originalRegions,
+        ...change.modifiedRegions
+    ].some(region => !isRegionCovered(region, semanticRegions))).map(change => ({
+        ...change,
+        originalRegions: alignVisualRegionsToTextLines(
+            change.originalRegions,
+            textResult.originalRegions
+        ),
+        modifiedRegions: alignVisualRegionsToTextLines(
+            change.modifiedRegions,
+            textResult.modifiedRegions
+        )
+    }));
+    if (visualChanges.length === 0) {
+        return { ...textResult, changedPixels: rasterResult.changedPixels };
+    }
+
+    const visualOriginalRegions = visualChanges.flatMap(change => change.originalRegions);
+    const visualModifiedRegions = visualChanges.flatMap(change => change.modifiedRegions);
+    if (textResult.originalRegions.length + visualOriginalRegions.length > maximumRegionsPerPage
+        || textResult.modifiedRegions.length + visualModifiedRegions.length > maximumRegionsPerPage) {
+        return rasterResult;
+    }
+    return {
+        changes: [...textResult.changes, ...visualChanges],
+        originalRegions: [...textResult.originalRegions, ...visualOriginalRegions],
+        modifiedRegions: [...textResult.modifiedRegions, ...visualModifiedRegions],
+        changedPixels: rasterResult.changedPixels,
+        strategy: "text"
+    };
+}
+
+function isRegionCovered(region: DiffRegion, coverage: DiffRegion[]): boolean {
+    const tolerance = 0.005;
+    const regionRight = region.left + region.width;
+    const regionBottom = region.top + region.height;
+    const clippedCoverage = coverage.map(candidate => ({
+        left: Math.max(region.left, candidate.left - tolerance),
+        top: Math.max(region.top, candidate.top - tolerance),
+        right: Math.min(regionRight, candidate.left + candidate.width + tolerance),
+        bottom: Math.min(regionBottom, candidate.top + candidate.height + tolerance)
+    })).filter(candidate => candidate.right > candidate.left && candidate.bottom > candidate.top);
+    if (clippedCoverage.length === 0) {
+        return false;
+    }
+
+    const xCoordinates = [...new Set(clippedCoverage.flatMap(candidate => [candidate.left, candidate.right]))]
+        .sort((first, second) => first - second);
+    let coveredArea = 0;
+    for (let index = 0; index < xCoordinates.length - 1; index += 1) {
+        const left = xCoordinates[index];
+        const right = xCoordinates[index + 1];
+        const intervals = clippedCoverage
+            .filter(candidate => candidate.left < right && candidate.right > left)
+            .map(candidate => ({ top: candidate.top, bottom: candidate.bottom }))
+            .sort((first, second) => first.top - second.top);
+        let coveredHeight = 0;
+        let intervalTop = 0;
+        let intervalBottom = 0;
+        for (const interval of intervals) {
+            if (interval.top > intervalBottom) {
+                coveredHeight += Math.max(0, intervalBottom - intervalTop);
+                intervalTop = interval.top;
+                intervalBottom = interval.bottom;
+            } else {
+                intervalBottom = Math.max(intervalBottom, interval.bottom);
+            }
+        }
+        coveredHeight += Math.max(0, intervalBottom - intervalTop);
+        coveredArea += (right - left) * coveredHeight;
+    }
+    const regionArea = region.width * region.height;
+    return regionArea > 0 && coveredArea / regionArea >= 0.75;
+}
+
+function alignVisualRegionsToTextLines(
+    regions: DiffRegion[],
+    textRegions: DiffRegion[]
+): DiffRegion[] {
+    return regions.map(region => {
+        const sameLine = textRegions.filter(textRegion => normalizedRegionsShareTextLine(
+            region,
+            textRegion
+        ));
+        if (sameLine.length === 0) {
+            return region;
+        }
+        const top = Math.min(...sameLine.map(textRegion => textRegion.top));
+        const bottom = Math.max(...sameLine.map(textRegion => textRegion.top + textRegion.height));
+        return { ...region, top, height: bottom - top };
+    });
+}
+
+function normalizedRegionsShareTextLine(first: DiffRegion, second: DiffRegion): boolean {
+    const firstBottom = first.top + first.height;
+    const secondBottom = second.top + second.height;
+    const minimumHeight = Math.min(first.height, second.height);
+    const maximumHeight = Math.max(first.height, second.height);
+    return minimumHeight > 0
+        && minimumHeight / maximumHeight >= 0.75
+        && intervalOverlap(first.top, firstBottom, second.top, secondBottom)
+            >= minimumHeight * minimumSameLineHeightRatio;
+}
+
 export function compareTextTokenChanges(
     original: TextToken[],
     modified: TextToken[]

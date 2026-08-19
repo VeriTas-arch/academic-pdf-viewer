@@ -28,6 +28,7 @@
 
     interface DocumentLoadMessage {
         type: "document.load";
+        loadId: number;
         data: ArrayBuffer;
         isEmptyRevision: boolean;
         fingerprint: string;
@@ -114,6 +115,9 @@
         }
         const message = value as Record<string, unknown>;
         return message.type === "document.load"
+            && typeof message.loadId === "number"
+            && Number.isSafeInteger(message.loadId)
+            && message.loadId >= 1
             && message.data instanceof ArrayBuffer
             && typeof message.isEmptyRevision === "boolean"
             && typeof message.fingerprint === "string"
@@ -225,19 +229,28 @@
             });
         });
 
-        window.addEventListener("message", async (event: MessageEvent<unknown>) => {
-            if (!isDocumentLoadMessage(event.data)) {
-                return;
-            }
+        let latestDocumentLoadId = 0;
+        let pendingDocumentLoad: DocumentLoadMessage | null = null;
+        let documentLoadDrain: Promise<void> | null = null;
+        let documentLoadStartFrame: number | null = null;
 
-            const message = event.data;
+        const isLatestDocumentLoad = (message: DocumentLoadMessage): boolean => (
+            message.loadId === latestDocumentLoadId
+        );
+        const processDocumentLoad = async (message: DocumentLoadMessage): Promise<void> => {
             const startedAt = performance.now();
             const fingerprint = message.fingerprint;
             await application.initializedPromise;
+            if (!isLatestDocumentLoad(message)) {
+                return;
+            }
             if (message.isEmptyRevision) {
                 pendingFirstPageRender = null;
                 if (application.pdfLoadingTask) {
                     await application.close();
+                }
+                if (!isLatestDocumentLoad(message)) {
+                    return;
                 }
                 showDocumentState("This file does not exist in this revision.");
                 reportDebug("emptyRevision", {
@@ -271,6 +284,12 @@
             pendingFirstPageRender = pendingRender;
             try {
                 await application.open({ data, ...loadOptions });
+                if (!isLatestDocumentLoad(message)) {
+                    if (pendingFirstPageRender === pendingRender) {
+                        pendingFirstPageRender = null;
+                    }
+                    return;
+                }
                 pendingRender.opened = true;
                 reportDebug("opened", {
                     fingerprint,
@@ -278,21 +297,68 @@
                     pages: application.pdfDocument?.numPages
                 });
             } catch (error) {
-                if (restorePending) {
-                    application.eventBus.off("documentinit", restoreOnDocumentInit);
-                }
                 if (pendingFirstPageRender === pendingRender) {
                     pendingFirstPageRender = null;
                 }
-                console.error("Failed to load PDF document.", error);
-                reportDebug("failed", {
-                    fingerprint,
-                    durationMs: elapsedSince(startedAt),
-                    error: errorMessage(error)
-                });
+                throw error;
             } finally {
+                if (restorePending) {
+                    application.eventBus.off("documentinit", restoreOnDocumentInit);
+                }
                 application.load = oldLoad;
             }
+        };
+        const drainDocumentLoads = async (): Promise<void> => {
+            while (pendingDocumentLoad) {
+                const message = pendingDocumentLoad;
+                pendingDocumentLoad = null;
+                try {
+                    await processDocumentLoad(message);
+                } catch (error) {
+                    if (!isLatestDocumentLoad(message)) {
+                        continue;
+                    }
+                    console.error("Failed to load PDF document.", error);
+                    reportDebug("failed", {
+                        fingerprint: message.fingerprint,
+                        error: errorMessage(error)
+                    });
+                }
+            }
+        };
+        const startDocumentLoadDrain = (): void => {
+            if (documentLoadDrain) {
+                return;
+            }
+            const drain = drainDocumentLoads();
+            documentLoadDrain = drain;
+            void drain.finally(() => {
+                if (documentLoadDrain !== drain) {
+                    return;
+                }
+                documentLoadDrain = null;
+                if (pendingDocumentLoad) {
+                    scheduleDocumentLoadDrain();
+                }
+            });
+        };
+        const scheduleDocumentLoadDrain = (): void => {
+            if (documentLoadDrain || documentLoadStartFrame !== null) {
+                return;
+            }
+            documentLoadStartFrame = requestAnimationFrame(() => {
+                documentLoadStartFrame = null;
+                startDocumentLoadDrain();
+            });
+        };
+        window.addEventListener("message", (event: MessageEvent<unknown>) => {
+            if (!isDocumentLoadMessage(event.data)
+                || event.data.loadId <= latestDocumentLoadId) {
+                return;
+            }
+            latestDocumentLoadId = event.data.loadId;
+            pendingDocumentLoad = event.data;
+            scheduleDocumentLoadDrain();
         });
 
         window.dispatchEvent(new CustomEvent("academic-pdf-viewer-ready"));

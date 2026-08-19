@@ -5,6 +5,7 @@ import {
     compareTextTokens,
     findNextDiffPage,
     fullPageRegion,
+    mergeTextAndRasterResults,
     nextDiffRegionIndex,
     type DiffRegion,
     type DiffChangeKind,
@@ -60,6 +61,7 @@ import {
 
     interface DocumentLoadMessage {
         type: "document.load";
+        loadId: number;
         fingerprint: string;
         isEmptyRevision: boolean;
     }
@@ -137,6 +139,7 @@ import {
 
     let config: ViewerConfig;
     let enabled = false;
+    let latestDocumentLoadId = 0;
     let currentSessionId = 0;
     let modifiedDocumentReady = false;
     let modifiedFingerprint = "";
@@ -236,7 +239,10 @@ import {
     }
 
     function isDocumentLoadMessage(value: unknown): value is DocumentLoadMessage {
-        return isMessage(value, "document.load");
+        return isMessage(value, "document.load")
+            && isPositiveInteger((value as { loadId?: unknown }).loadId)
+            && typeof (value as { fingerprint?: unknown }).fingerprint === "string"
+            && typeof (value as { isEmptyRevision?: unknown }).isEmptyRevision === "boolean";
     }
 
     function isDiffEnableMessage(value: unknown): value is DiffEnableMessage {
@@ -340,6 +346,10 @@ import {
     }
 
     function handleDocumentLoad(message: DocumentLoadMessage): void {
+        if (message.loadId <= latestDocumentLoadId) {
+            return;
+        }
+        latestDocumentLoadId = message.loadId;
         pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
@@ -752,14 +762,14 @@ import {
         const largestDimension = Math.max(modifiedViewport.width, modifiedViewport.height);
         const scale = Math.min(maxRenderScale, maxRenderDimension / largestDimension);
         const textResult = await comparePageText(originalPage, modifiedPage, scale, pageNumber);
-        if (textResult) {
-            return textResult;
-        }
         const [originalRaster, modifiedRaster] = await Promise.all([
             renderPage(originalPage, scale),
             renderPage(modifiedPage, scale)
         ]);
-        return compareRasters(originalRaster, modifiedRaster);
+        const rasterResult = compareRasters(originalRaster, modifiedRaster);
+        return textResult
+            ? mergeTextAndRasterResults(textResult, rasterResult)
+            : rasterResult;
     }
 
     function pageChangeResult(kind: DiffChangeKind): PageDiffResult {

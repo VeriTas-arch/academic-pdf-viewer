@@ -1,5 +1,5 @@
 /// <reference path="./globals.d.ts" />
-import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
 import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
 "use strict";
 (function () {
@@ -14,6 +14,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const pageScheduler = new PageComparisonScheduler(maximumConcurrentPageComparisons, maximumQueuedPages);
     let config;
     let enabled = false;
+    let latestDocumentLoadId = 0;
     let currentSessionId = 0;
     let modifiedDocumentReady = false;
     let modifiedFingerprint = "";
@@ -120,7 +121,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         return JSON.parse(value);
     }
     function isDocumentLoadMessage(value) {
-        return isMessage(value, "document.load");
+        return isMessage(value, "document.load")
+            && isPositiveInteger(value.loadId)
+            && typeof value.fingerprint === "string"
+            && typeof value.isEmptyRevision === "boolean";
     }
     function isDiffEnableMessage(value) {
         return isMessage(value, "diff.setEnabled")
@@ -203,6 +207,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
     }
     function handleDocumentLoad(message) {
+        if (message.loadId <= latestDocumentLoadId) {
+            return;
+        }
+        latestDocumentLoadId = message.loadId;
         pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
@@ -584,14 +592,14 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         const largestDimension = Math.max(modifiedViewport.width, modifiedViewport.height);
         const scale = Math.min(maxRenderScale, maxRenderDimension / largestDimension);
         const textResult = await comparePageText(originalPage, modifiedPage, scale, pageNumber);
-        if (textResult) {
-            return textResult;
-        }
         const [originalRaster, modifiedRaster] = await Promise.all([
             renderPage(originalPage, scale),
             renderPage(modifiedPage, scale)
         ]);
-        return compareRasters(originalRaster, modifiedRaster);
+        const rasterResult = compareRasters(originalRaster, modifiedRaster);
+        return textResult
+            ? mergeTextAndRasterResults(textResult, rasterResult)
+            : rasterResult;
     }
     function pageChangeResult(kind) {
         const region = fullPageRegion();

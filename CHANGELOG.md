@@ -17,6 +17,9 @@ All notable changes to the Academic PDF Viewer extension are documented in this 
 
 ### Fixed
 
+- Preserved non-text visual changes on pages that also contain semantic text differences.
+- Made rapid consecutive reloads latest-wins across both extension-host reads and serialized PDF.js document loading.
+- Distinguished missing Git paths from invalid refs and repository errors instead of treating every Git failure as an empty revision.
 - Preserved empty-revision behavior for added and deleted Git PDFs while retaining the preflight file-size safety limit.
 - Cleared every rectangle belonging to a selected multi-region change when navigating to another page.
 - Restored citation fallback text selection before applying the four-line preview limit.

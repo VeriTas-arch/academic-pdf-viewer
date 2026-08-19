@@ -53,8 +53,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private readonly panels = new Set<vscode.WebviewPanel>();
     private readonly panelDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
     private readonly diffSessionsByPanel = new Map<vscode.WebviewPanel, DiffPairSession>();
+    private readonly latestDocumentLoadByPanel = new Map<vscode.WebviewPanel, number>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
     private nextDiffSessionId = 1;
+    private nextDocumentLoadId = 1;
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
 
@@ -103,6 +105,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             }
             this.panels.delete(panel);
             this.panelDocuments.delete(panel);
+            this.latestDocumentLoadByPanel.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
                 this.activePanel = this.panels.values().next().value;
@@ -297,31 +300,49 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             return;
         }
 
+        const session = this.diffSessionsByPanel.get(panel);
+        const modifiedDocument = session && this.panelDocuments.get(session.modifiedPanel);
+        const reloadPanels = session && modifiedDocument
+            ? [session.originalPanel, session.modifiedPanel]
+            : [panel];
+        const loadId = this.beginDocumentLoad(reloadPanels);
+
         try {
-            const session = this.diffSessionsByPanel.get(panel);
-            const modifiedDocument = session && this.panelDocuments.get(session.modifiedPanel);
             if (session && modifiedDocument) {
                 const { originalDocument, originalPanel, modifiedPanel } = session;
                 const [originalData, modifiedData] = await Promise.all([
                     readPdfData(originalDocument.uri, this.logger),
                     readPdfData(modifiedDocument.uri, this.logger),
                 ]);
+                if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
+                    return;
+                }
                 originalDocument.data = originalData;
                 modifiedDocument.data = modifiedData;
                 this.beginDiffSession(session);
                 await Promise.all([
-                    this.postDocument(originalPanel, originalDocument, true),
-                    this.postDocument(modifiedPanel, modifiedDocument, true),
+                    this.postDocument(originalPanel, originalDocument, true, loadId),
+                    this.postDocument(modifiedPanel, modifiedDocument, true, loadId),
                 ]);
+                if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
+                    return;
+                }
                 if (session.highlightsEnabled) {
                     await this.setDiffHighlightsForSession(session, true);
                 }
                 return;
             }
 
-            document.data = await readPdfData(document.uri, this.logger);
-            await this.postDocument(panel, document, true);
+            const data = await readPdfData(document.uri, this.logger);
+            if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
+                return;
+            }
+            document.data = data;
+            await this.postDocument(panel, document, true, loadId);
         } catch (error) {
+            if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
+                return;
+            }
             const detail = error instanceof Error ? error.message : String(error);
             void vscode.window.showErrorMessage(`Unable to reload PDF: ${detail}`);
         }
@@ -456,9 +477,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         panel: vscode.WebviewPanel,
         document: PdfDocument,
         preserveView: boolean,
+        reservedLoadId?: number,
     ): Promise<void> {
         const startedAt = Date.now();
         const data = copyToArrayBuffer(document.data);
+        const loadId = reservedLoadId ?? this.beginDocumentLoad([panel]);
 
         const fields = {
             ...describePdfUri(document.uri),
@@ -469,6 +492,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         try {
             const delivered = await panel.webview.postMessage({
                 type: 'document.load',
+                loadId,
                 data,
                 isEmptyRevision: document.data.byteLength === 0,
                 fingerprint: document.uri.toString(),
@@ -520,6 +544,19 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         const sessionId = this.nextDiffSessionId++;
         session.sessionId = sessionId;
         return sessionId;
+    }
+
+    private beginDocumentLoad(panels: vscode.WebviewPanel[]): number {
+        const loadId = this.nextDocumentLoadId++;
+        for (const panel of panels) {
+            this.latestDocumentLoadByPanel.set(panel, loadId);
+        }
+        return loadId;
+    }
+
+    private isCurrentDocumentLoad(panels: vscode.WebviewPanel[], loadId: number): boolean {
+        return panels.every(panel => this.panels.has(panel)
+            && this.latestDocumentLoadByPanel.get(panel) === loadId);
     }
 
     private currentDiffSession(

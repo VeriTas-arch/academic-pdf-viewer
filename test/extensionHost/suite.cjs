@@ -60,6 +60,17 @@ async function run() {
     const missingGitData = await readPdfData(missingGitPdf);
     assert.equal(missingGitData.byteLength, 0, 'A missing Git revision should be treated as an empty PDF.');
 
+    const invalidGitRef = vscode.Uri.from({
+        scheme: 'git',
+        path: missingGitPdfPath,
+        query: JSON.stringify({ path: missingGitPdfPath, ref: 'refs/heads/__academic_pdf_viewer_missing_ref__' }),
+    });
+    await assert.rejects(
+        readPdfData(invalidGitRef),
+        /Git rev-parse failed/,
+        'An invalid Git ref should not be treated as an empty PDF revision.',
+    );
+
     const ordinaryPdf = vscode.Uri.file(path.join(fixtureRoot, 'lewm.pdf'));
     await vscode.commands.executeCommand('vscode.openWith', ordinaryPdf, viewType);
     await waitFor(activeCustomEditor, 'the ordinary PDF custom editor');

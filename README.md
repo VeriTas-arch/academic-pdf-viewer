@@ -116,7 +116,7 @@ Many publisher and LaTeX-generated PDFs already contain links from citations, fi
 2. Read the cropped destination image and nearby text in the preview.
 3. Release <kbd>Ctrl</kbd> to close it, or click the original link to navigate normally.
 
-The popup does not capture pointer input, so links and the document outline remain clickable. PDFs without embedded link annotations still work as normal PDFs, but they cannot provide these previews.
+While Control is held, you can move into the popup and scroll its preview. Release Control to close it; the original PDF links and document outline remain clickable during normal reading. PDFs without embedded link annotations still work as normal PDFs, but they cannot provide these previews.
 
 For sharper preview images, increase `academicPdfViewer.linkPreview.resolutionScale`. This changes rendered resolution without enlarging the popup; higher values require more temporary memory and rendering time.
 

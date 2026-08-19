@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
             provider.navigate('forward');
         }),
         vscode.commands.registerCommand('academicPdfViewer.reload', () => {
-            provider.reloadActive();
+            return provider.reloadActive();
         }),
         vscode.commands.registerCommand('academicPdfViewer.toggleLinkPreview', async () => {
             const enabled = await provider.toggleLinkPreviewActive();
