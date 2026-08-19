@@ -35,6 +35,8 @@ const verticalMergeDistance = 3;
 const regionPadding = 2;
 const minimumTextMatchRatio = 0.5;
 const maximumTextTokensPerPage = 1500;
+const minimumSameLineHeightRatio = 0.6;
+const minimumPairedRegionHeightRatio = 0.6;
 export function compareRasters(original, modified) {
     if (original.width !== modified.width || original.height !== modified.height) {
         return symmetricResult([fullPageRegion()], -1, "page");
@@ -99,11 +101,54 @@ export function compareTextTokens(original, modified, originalPageWidth, origina
     return textResult(changed.original, changed.modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
 }
 function textResult(original, modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight) {
+    const originalRegions = normalizeTextRegions(original, originalPageWidth, originalPageHeight);
+    const modifiedRegions = normalizeTextRegions(modified, modifiedPageWidth, modifiedPageHeight);
+    const synchronized = synchronizePairedRegionHeights(originalRegions, modifiedRegions, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight);
     return {
-        originalRegions: normalizeTextRegions(original, originalPageWidth, originalPageHeight),
-        modifiedRegions: normalizeTextRegions(modified, modifiedPageWidth, modifiedPageHeight),
+        originalRegions: synchronized.original,
+        modifiedRegions: synchronized.modified,
         changedPixels: -1,
         strategy: "text"
+    };
+}
+function synchronizePairedRegionHeights(original, modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight) {
+    if (original.length === 0
+        || original.length !== modified.length
+        || Math.abs(originalPageWidth - modifiedPageWidth) > 0.5
+        || Math.abs(originalPageHeight - modifiedPageHeight) > 0.5) {
+        return { original, modified };
+    }
+    const synchronizedOriginal = [...original];
+    const synchronizedModified = [...modified];
+    for (let index = 0; index < original.length; index += 1) {
+        const originalRegion = original[index];
+        const modifiedRegion = modified[index];
+        const originalHeight = originalRegion.height * originalPageHeight;
+        const modifiedHeight = modifiedRegion.height * modifiedPageHeight;
+        const minimumHeight = Math.min(originalHeight, modifiedHeight);
+        const maximumHeight = Math.max(originalHeight, modifiedHeight);
+        const originalCenter = (originalRegion.top + originalRegion.height / 2) * originalPageHeight;
+        const modifiedCenter = (modifiedRegion.top + modifiedRegion.height / 2) * modifiedPageHeight;
+        if (Math.abs(originalHeight - modifiedHeight) < 0.000001) {
+            continue;
+        }
+        if (minimumHeight <= 0
+            || minimumHeight / maximumHeight < minimumPairedRegionHeightRatio
+            || Math.abs(originalCenter - modifiedCenter) > maximumHeight) {
+            continue;
+        }
+        synchronizedOriginal[index] = resizeRegionHeight(originalRegion, originalPageHeight, maximumHeight);
+        synchronizedModified[index] = resizeRegionHeight(modifiedRegion, modifiedPageHeight, maximumHeight);
+    }
+    return { original: synchronizedOriginal, modified: synchronizedModified };
+}
+function resizeRegionHeight(region, pageHeight, pixelHeight) {
+    const height = Math.min(1, pixelHeight / pageHeight);
+    const center = region.top + region.height / 2;
+    return {
+        ...region,
+        top: Math.max(0, Math.min(1 - height, center - height / 2)),
+        height
     };
 }
 function symmetricResult(regions, changedPixels, strategy) {
@@ -169,11 +214,38 @@ function normalizeTextRegions(regions, pageWidth, pageHeight) {
     if (regions.length === 0) {
         return [];
     }
-    let merged = mergeNearbyRegions(regions);
+    let merged = alignSameLineRegionHeights(mergeNearbyRegions(regions));
     if (merged.length > maximumRegionsPerPage) {
         merged = [boundingPixelRegion(merged)];
     }
     return merged.map(region => toNormalizedRegion(region, pageWidth, pageHeight));
+}
+function alignSameLineRegionHeights(regions) {
+    const groups = [];
+    for (const region of regions) {
+        const group = groups.find(candidate => candidate.some(member => regionsShareTextLine(member, region)));
+        if (group) {
+            group.push(region);
+        }
+        else {
+            groups.push([region]);
+        }
+    }
+    return groups.flatMap(group => {
+        const top = Math.min(...group.map(region => region.top));
+        const bottom = Math.max(...group.map(region => region.bottom));
+        return group.map(region => ({ ...region, top, bottom }));
+    }).sort((first, second) => first.top - second.top || first.left - second.left);
+}
+function regionsShareTextLine(first, second) {
+    const firstHeight = first.bottom - first.top;
+    const secondHeight = second.bottom - second.top;
+    const minimumHeight = Math.min(firstHeight, secondHeight);
+    const maximumHeight = Math.max(firstHeight, secondHeight);
+    return minimumHeight > 0
+        && minimumHeight / maximumHeight >= minimumSameLineHeightRatio
+        && intervalOverlap(first.top, first.bottom, second.top, second.bottom)
+            >= minimumHeight * minimumSameLineHeightRatio;
 }
 export function mergeNearbyRegions(regions) {
     const merged = [];

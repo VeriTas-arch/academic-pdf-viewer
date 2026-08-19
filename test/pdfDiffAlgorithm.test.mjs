@@ -70,13 +70,13 @@ function raster(width, height, changes = []) {
     return { width, height, pixels };
 }
 
-function token(text, left) {
+function token(text, left, top = 10, bottom = 20) {
     return {
         text,
         left,
-        top: 10,
+        top,
         right: left + 10,
-        bottom: 20,
+        bottom,
         changedPixels: 1,
     };
 }
@@ -170,6 +170,75 @@ test('marks replacement text in both revisions', () => {
         changedPixels: -1,
         strategy: 'text',
     });
+});
+
+test('uses consistent heights for changed regions on the same text line', () => {
+    const result = compareTextTokens(
+        [
+            token('A', 0), token('old-1', 20), token('B', 50), token('old-2', 70),
+            token('C', 100), token('old-3', 120), token('D', 150),
+        ],
+        [
+            token('A', 0), token('new-1', 20, 8, 20), token('B', 50),
+            token('new-2', 70, 10, 22), token('C', 100),
+            token('new-3', 120, 9, 21), token('D', 150),
+        ],
+        200,
+        100,
+        200,
+        100,
+    );
+
+    assert(result);
+    assert.equal(result.modifiedRegions.length, 3);
+    assert.deepEqual(result.modifiedRegions.map(region => region.top), [0.06, 0.06, 0.06]);
+    assert.deepEqual(result.modifiedRegions.map(region => region.height), [0.18, 0.18, 0.18]);
+});
+
+test('uses consistent heights across paired replacement regions', () => {
+    const result = compareTextTokens(
+        [token('A', 0), token('Needs-review', 20, 10, 20), token('B', 50)],
+        [token('A', 0), token('Approved', 20, 8, 22), token('B', 50)],
+        100,
+        100,
+        100,
+        100,
+    );
+
+    assert(result);
+    assert.equal(result.originalRegions.length, 1);
+    assert.equal(result.modifiedRegions.length, 1);
+    assert.equal(result.originalRegions[0].height, result.modifiedRegions[0].height);
+});
+
+test('preserves materially different replacement heights', () => {
+    const result = compareTextTokens(
+        [token('A', 0), token('body', 20, 10, 20), token('B', 50)],
+        [token('A', 0), token('heading', 20, 0, 30), token('B', 50)],
+        100,
+        100,
+        100,
+        100,
+    );
+
+    assert(result);
+    assert.equal(result.originalRegions[0].height, 0.14);
+    assert.equal(result.modifiedRegions[0].height, 0.32);
+});
+
+test('preserves replacement heights across different text lines', () => {
+    const result = compareTextTokens(
+        [token('A', 0), token('upper', 20, 10, 20), token('B', 50)],
+        [token('A', 0), token('lower', 20, 40, 54), token('B', 50)],
+        100,
+        100,
+        100,
+        100,
+    );
+
+    assert(result);
+    assert.equal(result.originalRegions[0].height, 0.14);
+    assert.equal(result.modifiedRegions[0].height, 0.18);
 });
 
 test('keeps all-text insertion and deletion on their semantic revision', () => {
