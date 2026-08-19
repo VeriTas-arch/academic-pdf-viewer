@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -177,12 +177,14 @@
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs"
+        "test": "node --test test/protocol.test.cjs test/pdfDiffAlgorithm.test.mjs",
+        "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },
     "devDependencies": {
         "@types/node": "24.x",
         "@types/vscode": "^1.125.0",
         "eslint": "^10.8.1",
+        "playwright-core": "^1.62.1",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.67.0"
     }

@@ -185,7 +185,13 @@ VSIX prepublish path:
 
 ```bash
 npm test
+npm run test:viewer
 ```
+
+`test:viewer` launches the actual bundled PDF.js viewer in a local Microsoft
+Edge instance and blocks dependence on external resources. Set
+`PLAYWRIGHT_BROWSER_EXECUTABLE` when Edge is installed outside its standard
+location or when testing with another Chromium executable.
 
 Launch the extension host from VS Code with `F5`, then open a PDF file.
 
