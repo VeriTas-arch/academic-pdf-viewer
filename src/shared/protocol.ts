@@ -4,6 +4,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
     | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
+    | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'modified'; modifiedIsEmptyRevision: true }
     | {
         type: 'diff.setEnabled';
         enabled: true;
@@ -12,7 +13,7 @@ export type ExtensionToWebviewMessage =
         originalData: ArrayBuffer;
         originalFingerprint: string;
         originalIsEmptyRevision: boolean;
-        modifiedIsEmptyRevision: boolean;
+        modifiedIsEmptyRevision: false;
     }
     | { type: 'diff.applyPage'; sessionId: number; pageNumber: number; changes: PdfDiffChange[] }
     | { type: 'diff.setRemovedPageRange'; sessionId: number; fromPage: number; toPage: number }
@@ -49,6 +50,17 @@ export interface PdfDiffRegion {
 
 export interface PdfDiffChange {
     regions: PdfDiffRegion[];
+}
+
+export function sanitizePdfDiffChanges(changes: readonly PdfDiffChange[]): PdfDiffChange[] {
+    return changes.map(change => ({
+        regions: change.regions.map(region => ({
+            left: region.left,
+            top: region.top,
+            width: region.width,
+            height: region.height,
+        })),
+    }));
 }
 
 export type DiffNavigationDirection = 'next' | 'previous';

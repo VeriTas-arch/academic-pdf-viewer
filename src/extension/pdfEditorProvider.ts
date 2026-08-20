@@ -4,6 +4,7 @@ import {
     DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
     isWebviewToExtensionMessage,
     normalizeLinkPreviewResolutionScale,
+    sanitizePdfDiffChanges,
     type DiffNavigationDirection,
     type DiffRole,
     type ExtensionToWebviewMessage,
@@ -206,16 +207,24 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
         const sessionId = this.beginDiffSession(session);
         const modifiedMessage: ExtensionToWebviewMessage = enabled
-            ? {
-                type: 'diff.setEnabled',
-                enabled: true,
-                sessionId,
-                role: 'modified',
-                originalData: copyToArrayBuffer(originalDocument.data),
-                originalFingerprint: originalDocument.uri.toString(),
-                originalIsEmptyRevision: originalDocument.data.byteLength === 0,
-                modifiedIsEmptyRevision: modifiedDocument.data.byteLength === 0,
-            }
+            ? modifiedDocument.data.byteLength === 0
+                ? {
+                    type: 'diff.setEnabled',
+                    enabled: true,
+                    sessionId,
+                    role: 'modified',
+                    modifiedIsEmptyRevision: true,
+                }
+                : {
+                    type: 'diff.setEnabled',
+                    enabled: true,
+                    sessionId,
+                    role: 'modified',
+                    originalData: copyToArrayBuffer(originalDocument.data),
+                    originalFingerprint: originalDocument.uri.toString(),
+                    originalIsEmptyRevision: originalDocument.data.byteLength === 0,
+                    modifiedIsEmptyRevision: false,
+                }
             : { type: 'diff.setEnabled', enabled: false, sessionId };
         const originalMessage: ExtensionToWebviewMessage = enabled
             ? {
@@ -402,7 +411,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 type: 'diff.applyPage',
                 sessionId: message.sessionId,
                 pageNumber: message.pageNumber,
-                changes: message.originalChanges,
+                changes: sanitizePdfDiffChanges(message.originalChanges),
             });
         } else if (message.type === 'diff.removedPageRange') {
             if (!this.isCurrentModifiedSession(panel, message.sessionId)) {
@@ -439,7 +448,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 requestId: message.requestId,
                 pageNumber: message.pageNumber,
                 index: message.index,
-                changes: message.changes,
+                changes: sanitizePdfDiffChanges(message.changes),
             } satisfies ExtensionToWebviewMessage);
         } else if (message.type === 'diff.scroll') {
             const session = this.diffSessionsByPanel.get(panel);

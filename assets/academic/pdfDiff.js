@@ -22,7 +22,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     let modifiedFingerprint = "";
     let originalFingerprint = "";
     let originalIsEmptyRevision = false;
-    let modifiedIsEmptyRevision = false;
     let originalLoadingTask = null;
     let originalDocument = null;
     let comparisonGeneration = 0;
@@ -142,11 +141,12 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (message.role === "original") {
             return typeof message.allPagesChanged === "boolean";
         }
-        return message.role === "modified"
-            && typeof message.originalIsEmptyRevision === "boolean"
+        if (message.role !== "modified" || typeof message.modifiedIsEmptyRevision !== "boolean") {
+            return false;
+        }
+        return message.modifiedIsEmptyRevision || (typeof message.originalIsEmptyRevision === "boolean"
             && isPdfData(message.originalData, message.originalIsEmptyRevision)
-            && isBoundedNonEmptyString(message.originalFingerprint)
-            && typeof message.modifiedIsEmptyRevision === "boolean";
+            && isBoundedNonEmptyString(message.originalFingerprint));
     }
     function isDiffDisableMessage(value) {
         return isMessage(value, "diff.setEnabled")
@@ -317,14 +317,19 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             }
             return;
         }
-        originalFingerprint = message.originalFingerprint;
-        originalIsEmptyRevision = message.originalIsEmptyRevision;
-        modifiedIsEmptyRevision = message.modifiedIsEmptyRevision;
+        if (message.modifiedIsEmptyRevision) {
+            originalFingerprint = "";
+            originalIsEmptyRevision = false;
+        }
+        else {
+            originalFingerprint = message.originalFingerprint;
+            originalIsEmptyRevision = message.originalIsEmptyRevision;
+        }
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
             return;
         }
-        if (modifiedIsEmptyRevision) {
+        if (message.modifiedIsEmptyRevision) {
             return;
         }
         if (originalIsEmptyRevision) {
@@ -385,7 +390,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         navigationGeneration += 1;
         scanGeneration += 1;
         enabled = false;
-        modifiedIsEmptyRevision = false;
         resetPageResults();
         void disposeOriginalDocument();
     }

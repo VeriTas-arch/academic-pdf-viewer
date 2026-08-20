@@ -708,6 +708,34 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.close();
     });
 
+    await t.test("accepts a minimal empty-modified diff control message", async () => {
+        const { viewerPage: modifiedPage, pageErrors: modifiedPageErrors } = await openPreparedDiffPage(
+            browser,
+            origin,
+            "/__viewer_diff_test__.html"
+        );
+        await modifiedPage.evaluate(() => {
+            window.__academicTestDebug.length = 0;
+            window.postMessage({
+                type: "diff.setEnabled",
+                enabled: true,
+                sessionId: 1,
+                role: "modified",
+                modifiedIsEmptyRevision: true
+            }, "*");
+        });
+        await modifiedPage.waitForFunction(() => document.querySelector(
+            ".academicPdfDiffStatus"
+        )?.classList.contains("academicPdfDiffStatus--enabled"));
+        await modifiedPage.waitForTimeout(100);
+
+        assert.equal(await modifiedPage.evaluate(() => window.__academicTestDebug.some(
+            message => message.event === "diffComputed"
+        )), false);
+        assert.deepEqual(modifiedPageErrors, []);
+        await modifiedPage.close();
+    });
+
     await t.test("applies removed-page highlights to pre-rendered pages in a small document", async () => {
         const { viewerPage: originalPage, pageErrors: originalPageErrors } = await openPreparedDiffPage(
             browser,

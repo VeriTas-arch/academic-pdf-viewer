@@ -5,6 +5,7 @@ const {
     DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
     isWebviewToExtensionMessage,
     normalizeLinkPreviewResolutionScale,
+    sanitizePdfDiffChanges,
 } = require('../src/shared/protocol.ts');
 
 function diffChange(regions = [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }]) {
@@ -165,4 +166,31 @@ test('normalizes link preview resolution scale', () => {
     assert.equal(normalizeLinkPreviewResolutionScale(0.5), 1);
     assert.equal(normalizeLinkPreviewResolutionScale(2.5), 2.5);
     assert.equal(normalizeLinkPreviewResolutionScale(8), 4);
+});
+
+test('sanitizes validated PDF diff changes before forwarding', () => {
+    const changes = [{
+        id: 'legacy-id',
+        kind: 'replace',
+        strategy: 'text',
+        ignored: { nested: true },
+        regions: [{
+            left: 0.1,
+            top: 0.2,
+            width: 0.3,
+            height: 0.4,
+            ignored: 'region metadata',
+        }],
+    }];
+    const message = {
+        type: 'diff.pageResult',
+        sessionId: 1,
+        pageNumber: 1,
+        originalChanges: changes,
+    };
+
+    assert.equal(isWebviewToExtensionMessage(message), true);
+    assert.deepEqual(sanitizePdfDiffChanges(message.originalChanges), [{
+        regions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
+    }]);
 });

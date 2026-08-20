@@ -41,7 +41,15 @@ import {
         allPagesChanged: boolean;
     }
 
-    interface ModifiedDiffEnableMessage {
+    interface EmptyModifiedDiffEnableMessage {
+        type: "diff.setEnabled";
+        enabled: true;
+        sessionId: number;
+        role: "modified";
+        modifiedIsEmptyRevision: true;
+    }
+
+    interface ComparableModifiedDiffEnableMessage {
         type: "diff.setEnabled";
         enabled: true;
         sessionId: number;
@@ -49,9 +57,10 @@ import {
         originalData: ArrayBuffer;
         originalFingerprint: string;
         originalIsEmptyRevision: boolean;
-        modifiedIsEmptyRevision: boolean;
+        modifiedIsEmptyRevision: false;
     }
 
+    type ModifiedDiffEnableMessage = EmptyModifiedDiffEnableMessage | ComparableModifiedDiffEnableMessage;
     type DiffEnableMessage = OriginalDiffEnableMessage | ModifiedDiffEnableMessage;
 
     interface DiffDisableMessage {
@@ -147,7 +156,6 @@ import {
     let modifiedFingerprint = "";
     let originalFingerprint = "";
     let originalIsEmptyRevision = false;
-    let modifiedIsEmptyRevision = false;
     let originalLoadingTask: PdfJsLoadingTask | null = null;
     let originalDocument: PdfJsDocument | null = null;
     let comparisonGeneration = 0;
@@ -261,11 +269,14 @@ import {
         if (message.role === "original") {
             return typeof message.allPagesChanged === "boolean";
         }
-        return message.role === "modified"
-            && typeof message.originalIsEmptyRevision === "boolean"
+        if (message.role !== "modified" || typeof message.modifiedIsEmptyRevision !== "boolean") {
+            return false;
+        }
+        return message.modifiedIsEmptyRevision || (
+            typeof message.originalIsEmptyRevision === "boolean"
             && isPdfData(message.originalData, message.originalIsEmptyRevision)
             && isBoundedNonEmptyString(message.originalFingerprint)
-            && typeof message.modifiedIsEmptyRevision === "boolean";
+        );
     }
 
     function isDiffDisableMessage(value: unknown): value is DiffDisableMessage {
@@ -463,15 +474,19 @@ import {
             return;
         }
 
-        originalFingerprint = message.originalFingerprint;
-        originalIsEmptyRevision = message.originalIsEmptyRevision;
-        modifiedIsEmptyRevision = message.modifiedIsEmptyRevision;
+        if (message.modifiedIsEmptyRevision) {
+            originalFingerprint = "";
+            originalIsEmptyRevision = false;
+        } else {
+            originalFingerprint = message.originalFingerprint;
+            originalIsEmptyRevision = message.originalIsEmptyRevision;
+        }
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
             return;
         }
 
-        if (modifiedIsEmptyRevision) {
+        if (message.modifiedIsEmptyRevision) {
             return;
         }
         if (originalIsEmptyRevision) {
@@ -533,7 +548,6 @@ import {
         navigationGeneration += 1;
         scanGeneration += 1;
         enabled = false;
-        modifiedIsEmptyRevision = false;
         resetPageResults();
         void disposeOriginalDocument();
     }
