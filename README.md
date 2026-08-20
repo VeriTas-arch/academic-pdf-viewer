@@ -60,12 +60,12 @@
 The current build is distributed as a Preview VSIX through [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases). Because it declares VS Code's proposed `customEditorDiffs` API, Proposed API access must be enabled for this extension even when using it as a regular PDF reader.
 
 1. Download the `.vsix` from the Assets section of the corresponding GitHub Release.
-2. In VS Code Insiders, run **Extensions: Install from VSIX...** and select the downloaded file.
-3. Fully quit VS Code Insiders so no existing window remains open.
+2. In the latest stable version of VS Code, run **Extensions: Install from VSIX...** and select the downloaded file.
+3. Fully quit VS Code so no existing window remains open.
 4. Launch it from an external PowerShell window:
 
 ```powershell
-code-insiders --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-window .
+code --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-window .
 ```
 
 <details>
@@ -74,7 +74,7 @@ code-insiders --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-win
 Install or update the VSIX from PowerShell:
 
 ```powershell
-code-insiders --install-extension .\academic-pdf-viewer-x.y.z.vsix --force
+code --install-extension .\academic-pdf-viewer-x.y.z.vsix --force
 ```
 
 To enable the Preview build on every launch, run **Preferences: Configure Runtime Arguments** and add the extension ID to `argv.json` while preserving existing fields:
@@ -87,7 +87,7 @@ To enable the Preview build on every launch, run **Preferences: Configure Runtim
 }
 ```
 
-Fully restart VS Code Insiders after changing `argv.json`. A compatible Stable build may work when it contains the same proposal; replace `code-insiders` with `code` when testing it. Insiders remains the recommended environment because Proposed APIs can change between VS Code versions.
+Fully restart VS Code after changing `argv.json`. VS Code Insiders is not required; the latest stable version supports the proposal used by this build. Proposed APIs can still change between VS Code versions, so keep VS Code and the extension version aligned.
 
 </details>
 
@@ -161,7 +161,7 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 - Moving across many unchanged or complex pages can take longer because cross-page diff navigation compares uncached pages on demand.
 - PDF JavaScript evaluation remains disabled.
 
-If Git PDF diffs stop opening after a VS Code update, verify the same workflow in VS Code Insiders before reporting an extension regression.
+If Git PDF diffs stop opening after a VS Code update, verify that Proposed API access remains enabled for `ovolab-veritas.academic-pdf-viewer`, then fully restart VS Code before reporting an extension regression.
 
 ## Release notes
 
