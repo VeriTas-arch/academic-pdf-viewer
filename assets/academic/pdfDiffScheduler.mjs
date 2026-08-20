@@ -8,9 +8,6 @@ export class PageComparisonScheduler {
         this.maximumConcurrentComparisons = maximumConcurrentComparisons;
         this.maximumQueuedPages = maximumQueuedPages;
     }
-    get currentGeneration() {
-        return this.generation;
-    }
     get activeCount() {
         return this.activeComparisons;
     }
@@ -22,9 +19,6 @@ export class PageComparisonScheduler {
     }
     invalidate() {
         this.generation += 1;
-        this.queuedPages.clear();
-    }
-    clearQueued() {
         this.queuedPages.clear();
     }
     enqueue(pageNumber) {

@@ -51,7 +51,6 @@ interface DiffPairSession {
 export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<PdfDocument> {
     private static readonly navigationKeyFallbackReleaseMs = 800;
 
-    private readonly panels = new Set<vscode.WebviewPanel>();
     private readonly panelDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
     private readonly diffSessionsByPanel = new Map<vscode.WebviewPanel, DiffPairSession>();
     private readonly latestDocumentLoadByPanel = new Map<vscode.WebviewPanel, number>();
@@ -87,7 +86,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             ...describePdfUri(document.uri),
             bytes: document.data.byteLength,
         });
-        this.panels.add(panel);
         this.panelDocuments.set(panel, document);
         if (panel.active || !this.activePanel) {
             this.setActivePanel(panel);
@@ -113,12 +111,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             for (const disposable of panelDisposables) {
                 disposable.dispose();
             }
-            this.panels.delete(panel);
             this.panelDocuments.delete(panel);
             this.latestDocumentLoadByPanel.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
-                this.activePanel = this.panels.values().next().value;
+                this.activePanel = this.panelDocuments.keys().next().value;
                 this.refreshDiffContext();
             }
         });
@@ -186,20 +183,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         this.refreshDiffContext();
     }
 
-    async toggleDiffHighlights(): Promise<boolean | undefined> {
+    async setDiffHighlights(enabled?: boolean): Promise<boolean | undefined> {
         const session = this.activePanel && this.diffSessionsByPanel.get(this.activePanel);
         if (!session) {
             return undefined;
         }
-        return this.setDiffHighlightsForSession(session, !session.highlightsEnabled);
-    }
-
-    async setDiffHighlights(enabled: boolean): Promise<boolean | undefined> {
-        const session = this.activePanel && this.diffSessionsByPanel.get(this.activePanel);
-        if (!session) {
-            return undefined;
-        }
-        return this.setDiffHighlightsForSession(session, enabled);
+        return this.setDiffHighlightsForSession(
+            session,
+            enabled ?? !session.highlightsEnabled,
+        );
     }
 
     private async setDiffHighlightsForSession(
@@ -211,10 +203,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         if (!this.isCurrentDiffPair(session) || !modifiedDocument) {
             return undefined;
         }
-        assertPdfDiffPairSize(
-            originalDocument.data.byteLength,
-            modifiedDocument.data.byteLength,
-        );
 
         const sessionId = this.beginDiffSession(session);
         const modifiedMessage: ExtensionToWebviewMessage = enabled
@@ -264,11 +252,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             return undefined;
         }
 
-        if (enabled) {
-            session.highlightsEnabled = true;
-        } else {
-            session.highlightsEnabled = false;
-        }
+        session.highlightsEnabled = enabled;
         this.refreshDiffContext();
         this.logger?.info('visualDiff.toggled', {
             enabled,
@@ -390,11 +374,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     refreshLinkPreviewConfiguration(): void {
-        for (const panel of this.panels) {
-            const document = this.panelDocuments.get(panel);
-            if (!document) {
-                continue;
-            }
+        for (const [panel, document] of this.panelDocuments) {
             void panel.webview.postMessage({
                 type: 'linkPreview.configure',
                 enabled: this.isLinkPreviewEnabled(document.uri),
@@ -576,7 +556,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     private isCurrentDocumentLoad(panels: vscode.WebviewPanel[], loadId: number): boolean {
-        return panels.every(panel => this.panels.has(panel)
+        return panels.every(panel => this.panelDocuments.has(panel)
             && this.latestDocumentLoadByPanel.get(panel) === loadId);
     }
 

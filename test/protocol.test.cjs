@@ -8,7 +8,7 @@ const {
 } = require('../src/shared/protocol.ts');
 
 function diffChange(regions = [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }]) {
-    return { id: '2:text-1', kind: 'replace', regions, strategy: 'text' };
+    return { regions };
 }
 
 test('accepts supported webview messages', () => {

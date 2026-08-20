@@ -321,7 +321,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 if (!isInternalLinkAnnotation(annotation)) {
                     continue;
                 }
-                this._appendOverlay(pageView, annotation, pageNumber);
+                this._appendOverlay(pageView, annotation);
             }
             this._syncHoveredPreviewAtPointer();
             this._openHoveredPreview(true);
@@ -341,7 +341,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             });
             return promise;
         }
-        _appendOverlay(pageView, annotation, pageNumber) {
+        _appendOverlay(pageView, annotation) {
             const rect = viewportRect(pageView.viewport, annotation.rect);
             if (!rect || rect.width <= 0 || rect.height <= 0) {
                 return;
@@ -356,8 +356,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             overlay.style.height = `${rect.height}px`;
             overlay.setAttribute("aria-label", "PDF link. Hold Control to preview destination.");
             const link = {
-                id: `${pageNumber}:${annotation.id || JSON.stringify(annotation.rect)}`,
-                sourcePageNumber: pageNumber,
                 rect,
                 dest: annotation.dest
             };
@@ -620,7 +618,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             const position = getDestinationPosition(explicitDest);
             return {
                 pageNumber,
-                destArray: explicitDest,
                 pdfX: position.x,
                 pdfY: position.y
             };

@@ -47,14 +47,8 @@ export interface PdfDiffRegion {
     height: number;
 }
 
-export type PdfDiffChangeKind = 'insert' | 'delete' | 'replace';
-export type PdfDiffStrategy = 'page' | 'raster' | 'text';
-
 export interface PdfDiffChange {
-    id: string;
-    kind: PdfDiffChangeKind;
     regions: PdfDiffRegion[];
-    strategy: PdfDiffStrategy;
 }
 
 export type DiffNavigationDirection = 'next' | 'previous';
@@ -262,11 +256,6 @@ function isPdfDiffChanges(value: unknown): value is PdfDiffChange[] {
 
 function isPdfDiffChange(value: unknown): value is PdfDiffChange {
     return isRecord(value)
-        && typeof value.id === 'string'
-        && value.id.length > 0
-        && value.id.length <= 128
-        && (value.kind === 'insert' || value.kind === 'delete' || value.kind === 'replace')
-        && (value.strategy === 'page' || value.strategy === 'raster' || value.strategy === 'text')
         && Array.isArray(value.regions)
         && value.regions.length > 0
         && value.regions.every(isPdfDiffRegion);

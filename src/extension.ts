@@ -12,9 +12,7 @@ export function activate(context: vscode.ExtensionContext) {
     const provider = new PdfEditorProvider(context, logger);
     const setDiffHighlights = async (enabled?: boolean): Promise<void> => {
         try {
-            const result = enabled === undefined
-                ? await provider.toggleDiffHighlights()
-                : await provider.setDiffHighlights(enabled);
+            const result = await provider.setDiffHighlights(enabled);
             if (result === undefined) {
                 void vscode.window.showInformationMessage('PDF diff highlights are only available in a PDF diff editor.');
             } else {

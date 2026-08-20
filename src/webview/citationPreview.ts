@@ -14,8 +14,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
     }
 
     interface PreviewLink {
-        id: string;
-        sourcePageNumber: number;
         rect: ViewportRect;
         dest: PdfJsDestination;
     }
@@ -32,7 +30,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
     interface ResolvedDestination {
         pageNumber: number;
-        destArray: unknown[];
         pdfX: number | null;
         pdfY: number | null;
     }
@@ -413,7 +410,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 if (!isInternalLinkAnnotation(annotation)) {
                     continue;
                 }
-                this._appendOverlay(pageView, annotation, pageNumber);
+                this._appendOverlay(pageView, annotation);
             }
             this._syncHoveredPreviewAtPointer();
             this._openHoveredPreview(true);
@@ -435,7 +432,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             return promise;
         }
 
-        _appendOverlay(pageView: PdfJsPageView, annotation: InternalLinkAnnotation, pageNumber: number): void {
+        _appendOverlay(pageView: PdfJsPageView, annotation: InternalLinkAnnotation): void {
             const rect = viewportRect(pageView.viewport, annotation.rect);
             if (!rect || rect.width <= 0 || rect.height <= 0) {
                 return;
@@ -452,8 +449,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             overlay.setAttribute("aria-label", "PDF link. Hold Control to preview destination.");
 
             const link = {
-                id: `${pageNumber}:${annotation.id || JSON.stringify(annotation.rect)}`,
-                sourcePageNumber: pageNumber,
                 rect,
                 dest: annotation.dest
             };
@@ -743,7 +738,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             const position = getDestinationPosition(explicitDest);
             return {
                 pageNumber,
-                destArray: explicitDest,
                 pdfX: position.x,
                 pdfY: position.y
             };

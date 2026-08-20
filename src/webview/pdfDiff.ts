@@ -11,7 +11,6 @@ import {
     nextDiffRegionIndex,
     type DiffRegion,
     type DiffChangeKind,
-    type DiffStrategy,
     type PageDiffResult,
     type RasterPage,
     type TextToken,
@@ -122,10 +121,7 @@ import {
     }
 
     interface DiffSideChange {
-        id: string;
-        kind: DiffChangeKind;
         regions: DiffRegion[];
-        strategy: DiffStrategy;
     }
 
     const maxRenderDimension = 1200;
@@ -230,7 +226,6 @@ import {
                 } else {
                     applyPageResult(event.pageNumber);
                 }
-                updateStatus();
             });
         });
     }, { once: true });
@@ -391,12 +386,7 @@ import {
             return false;
         }
         const change = value as Record<string, unknown>;
-        return typeof change.id === "string"
-            && change.id.length > 0
-            && change.id.length <= 128
-            && (change.kind === "insert" || change.kind === "delete" || change.kind === "replace")
-            && (change.strategy === "page" || change.strategy === "raster" || change.strategy === "text")
-            && Array.isArray(change.regions)
+        return Array.isArray(change.regions)
             && change.regions.length > 0
             && change.regions.every(isDiffRegion);
     }
@@ -452,7 +442,6 @@ import {
         if (message.isEmptyRevision) {
             clearOverlays();
         }
-        updateStatus();
     }
 
     async function enableDiff(message: DiffEnableMessage): Promise<void> {
@@ -471,7 +460,6 @@ import {
                 removedPageRange = { fromPage: 1, toPage: Number.MAX_SAFE_INTEGER };
                 requestApplyComparisonPages(false);
             }
-            updateStatus();
             return;
         }
 
@@ -484,7 +472,6 @@ import {
         }
 
         if (modifiedIsEmptyRevision) {
-            updateStatus();
             return;
         }
         if (originalIsEmptyRevision) {
@@ -549,7 +536,6 @@ import {
         modifiedIsEmptyRevision = false;
         resetPageResults();
         void disposeOriginalDocument();
-        updateStatus();
     }
 
     async function disposeOriginalDocument(): Promise<void> {
@@ -575,7 +561,6 @@ import {
         pageResults.clear();
         counterpartPageResults.clear();
         pendingPages.clear();
-        pageScheduler.clearQueued();
         removedPageRange = null;
         clearSelectedChange();
         clearOverlays();
@@ -733,7 +718,6 @@ import {
         }
 
         pageScheduler.enqueue(pageNumber);
-        updateStatus();
         requestDrainPageQueue();
     }
 
@@ -888,8 +872,8 @@ import {
             pageResults,
             counterpartPageResults,
             pageNumber,
-            sideChanges(pageNumber, result, "modified"),
-            sideChanges(pageNumber, result, "original")
+            sideChanges(result, "modified"),
+            sideChanges(result, "original")
         );
     }
 
@@ -927,16 +911,12 @@ import {
     }
 
     function sideChanges(
-        pageNumber: number,
         result: PageDiffResult,
         side: "original" | "modified"
     ): DiffSideChange[] {
         return result.changes
             .map(change => ({
-                id: `${pageNumber}:${change.id}`,
-                kind: change.kind,
-                regions: side === "original" ? change.originalRegions : change.modifiedRegions,
-                strategy: change.strategy
+                regions: side === "original" ? change.originalRegions : change.modifiedRegions
             }))
             .filter(change => change.regions.length > 0);
     }
@@ -1128,7 +1108,6 @@ import {
                 marker?.scrollIntoView({ block: "center", inline: "center" });
             });
         }
-        updateStatus();
     }
 
     function changesForPage(pageNumber: number): DiffSideChange[] | undefined {
@@ -1136,10 +1115,7 @@ import {
             && pageNumber >= removedPageRange.fromPage
             && pageNumber <= removedPageRange.toPage) {
             return [{
-                id: `${pageNumber}:page-1`,
-                kind: "delete",
-                regions: [fullPageRegion()],
-                strategy: "page"
+                regions: [fullPageRegion()]
             }];
         }
         return pageResults.get(pageNumber);
@@ -1564,7 +1540,6 @@ import {
             for (const region of change.regions) {
                 const marker = document.createElement("div");
                 marker.className = `academicPdfDiffRegion academicPdfDiffRegion--${config.diffRole ?? "modified"}`;
-                marker.dataset.changeId = change.id;
                 marker.dataset.pageNumber = String(pageNumber);
                 marker.dataset.changeIndex = String(index);
                 if (selectedChange?.pageNumber === pageNumber && selectedChange.index === index) {

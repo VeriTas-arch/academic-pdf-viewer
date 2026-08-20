@@ -347,7 +347,6 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         ).evaluateAll(markers => markers.map(marker => {
             const rect = marker.getBoundingClientRect();
             return {
-                id: marker.dataset.changeId,
                 left: rect.left,
                 top: rect.top,
                 width: rect.width,
@@ -458,11 +457,11 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await diffPage.waitForFunction(() => document.querySelectorAll(
             '.page[data-page-number="1"] .academicPdfDiffRegion--selected'
         ).length > 0);
-        const selectedChangeIds = await diffPage.locator(
+        const selectedChangeIndices = await diffPage.locator(
             '.page[data-page-number="1"] .academicPdfDiffRegion--selected'
-        ).evaluateAll(markers => [...new Set(markers.map(marker => marker.dataset.changeId))]);
-        assert.equal(selectedChangeIds.length, 1);
-        assert.match(selectedChangeIds[0] ?? "", /^1:text-\d+$/u);
+        ).evaluateAll(markers => [...new Set(markers.map(marker => marker.dataset.changeIndex))]);
+        assert.equal(selectedChangeIndices.length, 1);
+        assert.match(selectedChangeIndices[0] ?? "", /^\d+$/u);
         assert.deepEqual(diffPageErrors, []);
         await diffPage.close();
     });
@@ -590,11 +589,11 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         const targetChange = await diffPage.evaluate(() => {
             const markerCounts = [...document.querySelectorAll('.academicPdfDiffRegion')]
                 .reduce((acc, marker) => {
-                    const id = marker.dataset.changeId;
-                    if (!id) {
+                    const index = marker.dataset.changeIndex;
+                    if (index === undefined) {
                         return acc;
                     }
-                    acc[id] = (acc[id] ?? 0) + 1;
+                    acc[index] = (acc[index] ?? 0) + 1;
                     return acc;
                 }, {});
             const multiRegionChange = Object.entries(markerCounts).find(([, count]) => count >= 2);
@@ -602,19 +601,19 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 return null;
             }
             return {
-                id: multiRegionChange[0],
+                index: multiRegionChange[0],
                 totalMarkers: multiRegionChange[1]
             };
         });
         assert.ok(targetChange);
-        assert.equal(typeof targetChange.id, "string");
+        assert.equal(typeof targetChange.index, "string");
         assert.equal(typeof targetChange.totalMarkers, "number");
         assert.ok(targetChange.totalMarkers >= 2);
         for (let attempt = 0; attempt < 8; attempt += 1) {
-            const selectedIds = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
-                elements => [...new Set(elements.map(marker => marker.dataset.changeId))]
+            const selectedIndices = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
+                elements => [...new Set(elements.map(marker => marker.dataset.changeIndex))]
             );
-            if (selectedIds[0] === targetChange.id) {
+            if (selectedIndices[0] === targetChange.index) {
                 break;
             }
             await diffPage.evaluate(() => {
@@ -628,18 +627,18 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 '.academicPdfDiffRegion--selected'
             ).length > 0);
         }
-        const finalSelectedIds = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
-            elements => [...new Set(elements.map(marker => marker.dataset.changeId))]
+        const finalSelectedIndices = await diffPage.locator('.academicPdfDiffRegion--selected').evaluateAll(
+            elements => [...new Set(elements.map(marker => marker.dataset.changeIndex))]
         );
-        assert.equal(finalSelectedIds[0], targetChange.id);
-        const selectedCount = await diffPage.evaluate((id) => {
+        assert.equal(finalSelectedIndices[0], targetChange.index);
+        const selectedCount = await diffPage.evaluate((index) => {
             const markers = [...document.querySelectorAll('.academicPdfDiffRegion')];
             const active = [...document.querySelectorAll('.academicPdfDiffRegion--selected')];
             return {
-                total: markers.filter(marker => marker.dataset.changeId === id).length,
-                active: active.filter(marker => marker.dataset.changeId === id).length
+                total: markers.filter(marker => marker.dataset.changeIndex === index).length,
+                active: active.filter(marker => marker.dataset.changeIndex === index).length
             };
-        }, targetChange.id);
+        }, targetChange.index);
         assert.equal(selectedCount.total, targetChange.totalMarkers);
         assert.equal(selectedCount.active, targetChange.totalMarkers);
         await diffPage.evaluate(() => {

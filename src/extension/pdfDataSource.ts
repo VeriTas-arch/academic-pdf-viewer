@@ -21,7 +21,7 @@ export async function readPdfData(
         throwIfCancellationRequested(token);
         let data: Uint8Array;
         if (uri.scheme === 'git') {
-            data = await readGitBlob(uri, logger, token);
+            data = await readGitBlob(uri, token);
         } else {
             const stat = await vscode.workspace.fs.stat(uri);
             throwIfCancellationRequested(token);
@@ -67,10 +67,8 @@ export function describePdfUri(uri: vscode.Uri): DevLogFields {
 
 async function readGitBlob(
     uri: vscode.Uri,
-    logger?: DevLogger,
     token?: vscode.CancellationToken,
 ): Promise<Uint8Array> {
-    const startedAt = Date.now();
     const query = JSON.parse(uri.query) as Record<string, unknown>;
     if (typeof query.path !== 'string' || typeof query.ref !== 'string') {
         throw new Error(`Invalid Git URI: ${uri.toString()}`);
@@ -84,45 +82,18 @@ async function readGitBlob(
     }
 
     const gitPath = repositoryPath.replace(/\\/g, '/');
-    const fields = { repositoryRoot, gitPath, ref: query.ref };
-    logger?.info('git.blob.start', fields);
-
-    try {
-        const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref, token);
-        if (!objectName) {
-            logger?.warn('git.blob.missing', {
-                ...fields,
-                bytes: 0,
-                durationMs: Date.now() - startedAt,
-            });
-            return new Uint8Array();
-        }
-        const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, token);
-        const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
-        if (!Number.isSafeInteger(objectSize)) {
-            throw new Error(`git blob size output was invalid: ${stat.toString('utf8').trim()}`);
-        }
-        assertPdfSize(objectSize);
-
-        const data = await runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, token);
-        assertPdfSize(data.byteLength);
-        const resultFields = {
-            ...fields,
-            objectName,
-            bytes: data.byteLength,
-            durationMs: Date.now() - startedAt,
-        };
-        logger?.info('git.blob.done', resultFields);
-        return data;
-    } catch (error) {
-        const resultFields = { ...fields, durationMs: Date.now() - startedAt };
-        if (error instanceof vscode.CancellationError) {
-            logger?.info('git.blob.cancelled', resultFields);
-        } else {
-            logger?.error('git.blob.failed', error, resultFields);
-        }
-        throw error;
+    const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref, token);
+    if (!objectName) {
+        return new Uint8Array();
     }
+    const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, token);
+    const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
+    if (!Number.isSafeInteger(objectSize)) {
+        throw new Error(`git blob size output was invalid: ${stat.toString('utf8').trim()}`);
+    }
+    assertPdfSize(objectSize);
+
+    return runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, token);
 }
 
 async function resolveGitObjectName(
