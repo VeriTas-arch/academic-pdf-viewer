@@ -104,6 +104,8 @@ type PdfDebugEvent = typeof pdfDebugEventValues[number];
 
 export type WebviewToExtensionMessage =
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
+    | { type: 'workbench.openFile' }
+    | { type: 'workbench.quickOpen' }
     | { type: 'workbench.showCommands' }
     | { type: 'webview.ready' }
     | { type: 'diff.pageResult'; sessionId: number; pageNumber: number; originalChanges: PdfDiffChange[] }
@@ -157,6 +159,8 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
     switch (value.type) {
         case 'navigation.keyUp':
             return value.direction === 'back' || value.direction === 'forward';
+        case 'workbench.openFile':
+        case 'workbench.quickOpen':
         case 'workbench.showCommands':
         case 'webview.ready':
             return true;

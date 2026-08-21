@@ -101,10 +101,31 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         )), true);
     });
 
-    await t.test("routes Ctrl+Shift+P to the workbench", async () => {
-        await page.keyboard.press("Control+Shift+P");
-        await page.waitForFunction(() => window.__academicTestMessages.some(message => message.type === "workbench.showCommands"));
+    await t.test("routes VS Code-owned shortcuts to the workbench", async () => {
+        for (const [shortcut, messageType] of [
+            ["Control+P", "workbench.quickOpen"],
+            ["Control+Shift+P", "workbench.showCommands"],
+            ["Control+O", "workbench.openFile"]
+        ]) {
+            await page.keyboard.press(shortcut);
+            await page.waitForFunction(type => window.__academicTestMessages.some(
+                message => message.type === type
+            ), messageType);
+        }
         assert.equal(await page.evaluate(() => window.__academicPrintCalls), 0);
+    });
+
+    await t.test("blocks bare rotation shortcuts while keeping toolbar rotation", async () => {
+        assert.equal(await page.evaluate(() => window.PDFViewerApplication.pdfViewer.pagesRotation), 0);
+        await page.keyboard.press("r");
+        await page.keyboard.press("Shift+r");
+        assert.equal(await page.evaluate(() => window.PDFViewerApplication.pdfViewer.pagesRotation), 0);
+
+        await page.locator("#secondaryToolbarToggleButton").click();
+        await page.locator("#pageRotateCw").click();
+        await page.waitForFunction(() => window.PDFViewerApplication.pdfViewer.pagesRotation === 90);
+        await page.locator("#pageRotateCcw").click();
+        await page.waitForFunction(() => window.PDFViewerApplication.pdfViewer.pagesRotation === 0);
     });
 
     const link = page.locator(".academic-citation-link").first();

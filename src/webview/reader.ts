@@ -29,7 +29,7 @@
     window.addEventListener("academic-pdf-message", event => {
         vscode.postMessage((event as CustomEvent<unknown>).detail);
     });
-    window.addEventListener("keydown", handleWorkbenchShortcut, true);
+    window.addEventListener("keydown", handleViewerShortcutBoundary, true);
     const pressedNavigationKeys = {
         back: false,
         forward: false
@@ -285,14 +285,41 @@
                 || (data as { type: unknown }).type === "navigation.forward");
     }
 
-    function handleWorkbenchShortcut(event: KeyboardEvent): void {
-        if (event.key.toLowerCase() === "p" && (event.ctrlKey || event.metaKey) && !event.altKey) {
-            if (event.shiftKey && !event.repeat) {
-                vscode.postMessage({ type: "workbench.showCommands" });
+    function handleViewerShortcutBoundary(event: KeyboardEvent): void {
+        const key = event.key.toLowerCase();
+        const primaryModifier = event.ctrlKey || event.metaKey;
+        if (primaryModifier && !event.altKey && key === "p") {
+            if (!event.repeat) {
+                vscode.postMessage({
+                    type: event.shiftKey ? "workbench.showCommands" : "workbench.quickOpen"
+                });
             }
-            event.preventDefault();
-            event.stopImmediatePropagation();
+            consumeShortcut(event);
+            return;
         }
+        if (primaryModifier && !event.altKey && !event.shiftKey && key === "o") {
+            if (!event.repeat) {
+                vscode.postMessage({ type: "workbench.openFile" });
+            }
+            consumeShortcut(event);
+            return;
+        }
+        if (!primaryModifier && !event.altKey && key === "r" && !isEditableKeyboardTarget(event.target)) {
+            consumeShortcut(event);
+        }
+    }
+
+    function consumeShortcut(event: KeyboardEvent): void {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }
+
+    function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+        return target instanceof HTMLElement
+            && (target instanceof HTMLInputElement
+                || target instanceof HTMLTextAreaElement
+                || target instanceof HTMLSelectElement
+                || target.isContentEditable);
     }
 
     function handleKeyDown(event: KeyboardEvent): void {

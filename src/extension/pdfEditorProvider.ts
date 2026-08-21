@@ -467,6 +467,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             logPdfDebugMessage(this.logger, document.uri, message);
         } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
+        } else if (message.type === 'workbench.openFile') {
+            void vscode.commands.executeCommand('workbench.action.files.openFile');
+        } else if (message.type === 'workbench.quickOpen') {
+            void vscode.commands.executeCommand('workbench.action.quickOpen');
         } else if (message.type === 'workbench.showCommands') {
             void vscode.commands.executeCommand('workbench.action.showCommands');
         }

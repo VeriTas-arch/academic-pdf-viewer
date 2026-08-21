@@ -14,6 +14,8 @@ function diffChange(regions = [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }]
 
 test('accepts supported webview messages', () => {
     assert.equal(isWebviewToExtensionMessage({ type: 'webview.ready' }), true);
+    assert.equal(isWebviewToExtensionMessage({ type: 'workbench.openFile' }), true);
+    assert.equal(isWebviewToExtensionMessage({ type: 'workbench.quickOpen' }), true);
     assert.equal(isWebviewToExtensionMessage({ type: 'workbench.showCommands' }), true);
     assert.equal(isWebviewToExtensionMessage({
         type: 'navigation.keyUp',
