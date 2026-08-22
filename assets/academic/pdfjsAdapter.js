@@ -1,6 +1,33 @@
 /// <reference path="./globals.d.ts" />
 "use strict";
 (function () {
+    const sidebarViews = {
+        pages: 1,
+        outline: 2,
+        attachments: 3,
+        layers: 4
+    };
+    function getViewsManager() {
+        const manager = window.PDFViewerApplication?.viewsManager;
+        return manager && typeof manager.switchView === "function" ? manager : null;
+    }
+    function getSidebarView(value) {
+        for (const [view, id] of Object.entries(sidebarViews)) {
+            if (id === value) {
+                return view;
+            }
+        }
+        return null;
+    }
+    function selectSidebarView(manager, view) {
+        const selectedView = sidebarViews[view];
+        manager.switchView(selectedView, false);
+        if (manager.active === selectedView) {
+            return true;
+        }
+        manager.switchView(sidebarViews.pages, false);
+        return false;
+    }
     const patchedPageViewers = new WeakSet();
     const adapter = {
         getApplication() {
@@ -34,7 +61,8 @@
                 toolbarHost: adapter.getToolbarHost() !== null,
                 location: privateViewer?._location !== undefined,
                 fingerprintOverride: privateDocument?._pdfInfo !== undefined,
-                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function"
+                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function",
+                sidebarView: getViewsManager() !== null
             };
         },
         getPdfLocation(viewer) {
@@ -51,6 +79,32 @@
             }
             info.fingerprints = [fingerprint];
             return true;
+        },
+        getSidebarState() {
+            const manager = getViewsManager();
+            const view = manager && getSidebarView(manager.active);
+            return manager && view ? { view, isOpen: manager.isOpen } : null;
+        },
+        setSidebarView(view) {
+            const manager = getViewsManager();
+            if (!manager) {
+                return false;
+            }
+            return selectSidebarView(manager, view);
+        },
+        restoreSidebarState(state) {
+            const manager = getViewsManager();
+            if (!manager) {
+                return false;
+            }
+            const selected = selectSidebarView(manager, state.view);
+            if (state.isOpen) {
+                manager.switchView(manager.active, true);
+            }
+            else if (manager.isOpen) {
+                manager.close();
+            }
+            return selected;
         },
         interceptPageNumberChanges(viewer, beforeChange) {
             if (patchedPageViewers.has(viewer)) {

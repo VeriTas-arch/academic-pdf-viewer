@@ -120,6 +120,13 @@ interface PdfJsLocation {
     top: number | null;
 }
 
+type AcademicSidebarView = "pages" | "outline" | "attachments" | "layers";
+
+interface AcademicSidebarState {
+    view: AcademicSidebarView;
+    isOpen: boolean;
+}
+
 interface AcademicPdfJsCapabilities {
     viewer: boolean;
     viewerContainer: boolean;
@@ -127,6 +134,7 @@ interface AcademicPdfJsCapabilities {
     location: boolean;
     fingerprintOverride: boolean;
     pageNumberInterception: boolean;
+    sidebarView: boolean;
 }
 
 interface AcademicPdfJsAdapter {
@@ -141,6 +149,9 @@ interface AcademicPdfJsAdapter {
     ): AcademicPdfJsCapabilities;
     getPdfLocation(viewer: PdfJsViewer): PdfJsLocation;
     setDocumentFingerprint(document: PdfJsDocument, fingerprint: string): boolean;
+    getSidebarState(): AcademicSidebarState | null;
+    setSidebarView(view: AcademicSidebarView): boolean;
+    restoreSidebarState(state: AcademicSidebarState): boolean;
     interceptPageNumberChanges(
         viewer: PdfJsViewer,
         beforeChange: (pageNumber: number, resetCurrentPageView: boolean) => void

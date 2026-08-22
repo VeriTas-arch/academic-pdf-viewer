@@ -108,6 +108,8 @@ After installation:
 
 The built-in Alt shortcuts and mouse side buttons can be enabled independently under **Academic PDF Viewer › Navigation** in Settings. The mouse-button mapping defaults to **Standard** (Back → back, Forward → forward) and can be changed to **Swapped** (Back → forward, Forward → back). `PDF: Navigate Back` and `PDF: Navigate Forward` remain available in VS Code's Keyboard Shortcuts editor, so disabling the default Alt shortcuts does not prevent custom keyboard bindings.
 
+The sidebar defaults to **Pages**. Set **Academic PDF Viewer › Navigation: Default Sidebar** to **Outline**, **Attachments**, or **Layers** to select that view when the sidebar opens. The sidebar remains closed until opened; `PDF: Reload` preserves its current view and open or closed state, and PDFs without the selected view fall back to Pages.
+
 `PDF: Reload`, `PDF: Toggle Link Preview`, and the previous/next diff commands are available from the title bar or Command Palette when applicable. They can also be assigned from VS Code's Keyboard Shortcuts editor.
 
 ## Preview internal references

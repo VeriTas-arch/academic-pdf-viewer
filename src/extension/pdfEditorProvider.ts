@@ -10,6 +10,7 @@ import {
     type ExtensionToWebviewMessage,
     type MouseButtonMapping,
     type NavigationDirection,
+    type SidebarView,
     type WebviewToExtensionMessage,
 } from '../shared/protocol';
 import type { DevLogger } from './devLogger';
@@ -144,6 +145,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 linkPreviewResolutionScale: this.getLinkPreviewResolutionScale(document.uri),
                 mouseNavigationEnabled: this.isMouseNavigationEnabled(),
                 mouseButtonMapping: this.getMouseButtonMapping(),
+                defaultSidebar: this.getDefaultSidebar(),
             },
         );
     }
@@ -401,6 +403,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 type: 'navigation.configure',
                 mouseButtonsEnabled: this.isMouseNavigationEnabled(),
                 mouseButtonMapping: this.getMouseButtonMapping(),
+            } satisfies ExtensionToWebviewMessage);
+        }
+    }
+
+    refreshSidebarConfiguration(): void {
+        for (const panel of this.panelDocuments.keys()) {
+            void panel.webview.postMessage({
+                type: 'sidebar.configure',
+                defaultSidebar: this.getDefaultSidebar(),
             } satisfies ExtensionToWebviewMessage);
         }
     }
@@ -692,6 +703,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             .getConfiguration('academicPdfViewer')
             .get<string>('navigation.mouseButtonMapping', 'standard');
         return value === 'swapped' ? 'swapped' : 'standard';
+    }
+
+    private getDefaultSidebar(): SidebarView {
+        const value = vscode.workspace
+            .getConfiguration('academicPdfViewer')
+            .get<string>('navigation.defaultSidebar', 'pages');
+        return value === 'outline' || value === 'attachments' || value === 'layers'
+            ? value
+            : 'pages';
     }
 
     private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {

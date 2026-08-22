@@ -41,14 +41,18 @@
             scale: viewer.currentScale,
             scaleValue: viewer.currentScaleValue,
             scrollLeft: container.scrollLeft,
-            scrollTop: container.scrollTop
+            scrollTop: container.scrollTop,
+            sidebar: window.academicPdfJsAdapter.getSidebarState()
         };
     }
     function restoreViewerState(application, state, isCurrentLoad) {
         const viewer = application.pdfViewer;
         const container = viewer?.container;
-        if (!viewer || !container || !state) {
+        if (!viewer || !container || !state || !isCurrentLoad()) {
             return;
+        }
+        if (state.sidebar) {
+            window.academicPdfJsAdapter.restoreSidebarState(state.sidebar);
         }
         requestAnimationFrame(() => {
             if (!isCurrentLoad()) {
@@ -85,6 +89,20 @@
             && typeof message.isEmptyRevision === "boolean"
             && typeof message.fingerprint === "string"
             && typeof message.preserveView === "boolean";
+    }
+    function isSidebarConfigureMessage(value) {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const message = value;
+        return message.type === "sidebar.configure"
+            && isSidebarView(message.defaultSidebar);
+    }
+    function isSidebarView(value) {
+        return value === "pages"
+            || value === "outline"
+            || value === "attachments"
+            || value === "layers";
     }
     const config = loadConfig();
     const pdfjsAdapter = window.academicPdfJsAdapter;
@@ -165,6 +183,9 @@
             wasmUrl: config.wasmUrl
         };
         let pendingFirstPageRender = null;
+        let defaultSidebar = isSidebarView(config.defaultSidebar)
+            ? config.defaultSidebar
+            : "pages";
         reportDebug("viewerInitializing", {
             workerSource: workerBlobUrl ? "blob" : "mainThreadFallback"
         });
@@ -185,6 +206,9 @@
                 pages: application.pdfDocument?.numPages,
                 pageNumber: event.pageNumber
             });
+        });
+        application.eventBus.on("documentinit", () => {
+            pdfjsAdapter.setSidebarView(defaultSidebar);
         });
         let latestDocumentLoadId = 0;
         let pendingDocumentLoad = null;
@@ -312,6 +336,13 @@
             });
         };
         window.addEventListener("message", (event) => {
+            if (isSidebarConfigureMessage(event.data)) {
+                defaultSidebar = event.data.defaultSidebar;
+                if (application.pdfDocument) {
+                    pdfjsAdapter.setSidebarView(defaultSidebar);
+                }
+                return;
+            }
             if (!isDocumentLoadMessage(event.data)
                 || event.data.loadId <= latestDocumentLoadId) {
                 return;

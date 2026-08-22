@@ -21,6 +21,13 @@ test('PDF navigation has scoped, user-rebindable defaults', () => {
         'standard',
         'swapped',
     ]);
+    assert.equal(properties['academicPdfViewer.navigation.defaultSidebar']?.default, 'pages');
+    assert.deepEqual(properties['academicPdfViewer.navigation.defaultSidebar']?.enum, [
+        'pages',
+        'outline',
+        'attachments',
+        'layers',
+    ]);
 
     for (const command of [
         'academicPdfViewer.navigateBack',

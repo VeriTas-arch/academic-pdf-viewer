@@ -21,8 +21,18 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         diffRole: "original",
         diffLabel: "Index"
     });
+    const outlineSidebarHtml = await buildViewerHtml({
+        defaultSidebar: "outline"
+    });
     const server = createServer((request, response) => {
-        void serveRequest(request.url || "/", html, diffHtml, originalDiffHtml, response);
+        void serveRequest(
+            request.url || "/",
+            html,
+            diffHtml,
+            originalDiffHtml,
+            outlineSidebarHtml,
+            response
+        );
     });
     await new Promise((resolvePromise, reject) => {
         server.once("error", reject);
@@ -95,6 +105,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
             location: true,
             fingerprintOverride: true,
             pageNumberInterception: true,
+            sidebarView: true,
         });
         assert.equal(await page.evaluate(() => window.__academicTestDebug.some(message =>
             message.event === "viewerInitialized" && message.workerSource === "blob"
@@ -957,6 +968,130 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await originalPage.close();
     });
 
+    await t.test("applies the preferred sidebar and preserves the current view on reload", async () => {
+        const sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const sidebarPageErrors = [];
+        sidebarPage.on("pageerror", error => sidebarPageErrors.push(error.stack || error.message));
+        await sidebarPage.goto(`${origin}/__viewer_outline_test__.html`);
+        await sidebarPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        await sidebarPage.evaluate(async pdfPath => {
+            const data = await (await fetch(pdfPath)).arrayBuffer();
+            window.postMessage({
+                type: "document.load",
+                loadId: 1,
+                data,
+                isEmptyRevision: false,
+                fingerprint: "sidebar-initial",
+                preserveView: false
+            }, "*");
+        }, fixturePath);
+        await sidebarPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+                && message.fingerprint === "sidebar-initial"
+        ));
+
+        assert.deepEqual(await sidebarPage.evaluate(() => ({
+            active: window.PDFViewerApplication.viewsManager.active,
+            isOpen: window.PDFViewerApplication.viewsManager.isOpen,
+            visible: window.PDFViewerApplication.viewsManager.visibleView
+        })), {
+            active: 2,
+            isOpen: false,
+            visible: 0
+        });
+
+        await sidebarPage.locator("#viewsManagerToggleButton").click();
+        await sidebarPage.waitForFunction(() => window.PDFViewerApplication.viewsManager.isOpen);
+        assert.equal(await sidebarPage.evaluate(
+            () => window.PDFViewerApplication.viewsManager.visibleView
+        ), 2);
+        await sidebarPage.locator("#viewsManagerToggleButton").click();
+        await sidebarPage.waitForFunction(() => !window.PDFViewerApplication.viewsManager.isOpen);
+
+        await sidebarPage.waitForFunction(() => document.querySelector("#attachmentsViewMenu")?.disabled);
+        await sidebarPage.evaluate(() => window.postMessage({
+            type: "sidebar.configure",
+            defaultSidebar: "attachments"
+        }, "*"));
+        await sidebarPage.waitForFunction(() => window.PDFViewerApplication.viewsManager.active === 1);
+
+        await sidebarPage.evaluate(() => {
+            window.postMessage({
+                type: "sidebar.configure",
+                defaultSidebar: "pages"
+            }, "*");
+        });
+        await sidebarPage.waitForFunction(() => window.PDFViewerApplication.viewsManager.active === 1);
+        await sidebarPage.locator("#viewsManagerToggleButton").click();
+        await sidebarPage.locator("#viewsManagerSelectorButton").click();
+        await sidebarPage.locator("#outlinesViewMenu").click();
+        await sidebarPage.waitForFunction(() => (
+            window.PDFViewerApplication.viewsManager.active === 2
+                && window.PDFViewerApplication.viewsManager.isOpen
+        ));
+        await sidebarPage.evaluate(() => {
+            window.__academicTestDebug.length = 0;
+        });
+        await sidebarPage.evaluate(async pdfPath => {
+            const data = await (await fetch(pdfPath)).arrayBuffer();
+            window.postMessage({
+                type: "document.load",
+                loadId: 2,
+                data,
+                isEmptyRevision: false,
+                fingerprint: "sidebar-reloaded",
+                preserveView: true
+            }, "*");
+        }, fixturePath);
+        await sidebarPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+                && message.fingerprint === "sidebar-reloaded"
+        ));
+
+        assert.deepEqual(await sidebarPage.evaluate(() => ({
+            active: window.PDFViewerApplication.viewsManager.active,
+            isOpen: window.PDFViewerApplication.viewsManager.isOpen,
+            visible: window.PDFViewerApplication.viewsManager.visibleView
+        })), {
+            active: 2,
+            isOpen: true,
+            visible: 2
+        });
+
+        await sidebarPage.locator("#viewsManagerToggleButton").click();
+        await sidebarPage.waitForFunction(() => !window.PDFViewerApplication.viewsManager.isOpen);
+        await sidebarPage.evaluate(() => {
+            window.__academicTestDebug.length = 0;
+        });
+        await sidebarPage.evaluate(async pdfPath => {
+            const data = await (await fetch(pdfPath)).arrayBuffer();
+            window.postMessage({
+                type: "document.load",
+                loadId: 3,
+                data,
+                isEmptyRevision: false,
+                fingerprint: "sidebar-reloaded-closed",
+                preserveView: true
+            }, "*");
+        }, fixturePath);
+        await sidebarPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+                && message.fingerprint === "sidebar-reloaded-closed"
+        ));
+        assert.deepEqual(await sidebarPage.evaluate(() => ({
+            active: window.PDFViewerApplication.viewsManager.active,
+            isOpen: window.PDFViewerApplication.viewsManager.isOpen
+        })), {
+            active: 2,
+            isOpen: false
+        });
+        assert.deepEqual(sidebarPageErrors, []);
+        await sidebarPage.close();
+    });
+
     await t.test("preserves a non-preset zoom across document reload", async () => {
         const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const reloadPageErrors = [];
@@ -1182,6 +1317,7 @@ async function buildViewerHtml(configOverrides = {}) {
         linkPreviewResolutionScale: 1,
         mouseNavigationEnabled: true,
         mouseButtonMapping: "standard",
+        defaultSidebar: "pages",
         ...configOverrides
     }));
     const head = `
@@ -1203,18 +1339,28 @@ async function buildViewerHtml(configOverrides = {}) {
     return html.replace("<title>PDF.js viewer</title>", `${head}\n<title>Academic PDF Viewer test</title>`);
 }
 
-async function serveRequest(requestUrl, viewerHtml, diffViewerHtml, originalDiffViewerHtml, response) {
+async function serveRequest(
+    requestUrl,
+    viewerHtml,
+    diffViewerHtml,
+    originalDiffViewerHtml,
+    outlineSidebarHtml,
+    response
+) {
     try {
         const pathname = decodeURIComponent(new URL(requestUrl, "http://127.0.0.1").pathname);
         if (pathname === "/__viewer_test__.html"
             || pathname === "/__viewer_diff_test__.html"
-            || pathname === "/__viewer_original_diff_test__.html") {
+            || pathname === "/__viewer_original_diff_test__.html"
+            || pathname === "/__viewer_outline_test__.html") {
             response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
             response.end(pathname === "/__viewer_diff_test__.html"
                 ? diffViewerHtml
                 : pathname === "/__viewer_original_diff_test__.html"
                     ? originalDiffViewerHtml
-                    : viewerHtml);
+                    : pathname === "/__viewer_outline_test__.html"
+                        ? outlineSidebarHtml
+                        : viewerHtml);
             return;
         }
         const path = resolve(projectRoot, pathname.replace(/^\/+/, ""));

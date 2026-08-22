@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -139,6 +139,24 @@
                     "default": "standard",
                     "scope": "window",
                     "description": "Choose how the two mouse side buttons map to PDF navigation."
+                },
+                "academicPdfViewer.navigation.defaultSidebar": {
+                    "type": "string",
+                    "enum": [
+                        "pages",
+                        "outline",
+                        "attachments",
+                        "layers"
+                    ],
+                    "enumDescriptions": [
+                        "Show page thumbnails when the sidebar opens.",
+                        "Show the document outline when available.",
+                        "Show file attachments when available.",
+                        "Show optional-content layers when available."
+                    ],
+                    "default": "pages",
+                    "scope": "window",
+                    "description": "Choose the view selected when the PDF sidebar opens. Unavailable views fall back to Pages."
                 }
             }
         },

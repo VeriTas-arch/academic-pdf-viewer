@@ -9,6 +9,7 @@
         standardFontDataUrl: string;
         wasmUrl: string;
         workerSrc: string;
+        defaultSidebar?: unknown;
     }
 
     interface ViewerOptions {
@@ -25,6 +26,7 @@
         scaleValue: string;
         scrollLeft: number;
         scrollTop: number;
+        sidebar: AcademicSidebarState | null;
     }
 
     interface DocumentLoadMessage {
@@ -34,6 +36,11 @@
         isEmptyRevision: boolean;
         fingerprint: string;
         preserveView: boolean;
+    }
+
+    interface SidebarConfigureMessage {
+        type: "sidebar.configure";
+        defaultSidebar: AcademicSidebarView;
     }
 
     interface PendingFirstPageRender {
@@ -86,7 +93,8 @@
             scale: viewer.currentScale,
             scaleValue: viewer.currentScaleValue,
             scrollLeft: container.scrollLeft,
-            scrollTop: container.scrollTop
+            scrollTop: container.scrollTop,
+            sidebar: window.academicPdfJsAdapter.getSidebarState()
         };
     }
 
@@ -97,8 +105,12 @@
     ): void {
         const viewer = application.pdfViewer;
         const container = viewer?.container;
-        if (!viewer || !container || !state) {
+        if (!viewer || !container || !state || !isCurrentLoad()) {
             return;
+        }
+
+        if (state.sidebar) {
+            window.academicPdfJsAdapter.restoreSidebarState(state.sidebar);
         }
 
         requestAnimationFrame(() => {
@@ -136,6 +148,22 @@
             && typeof message.isEmptyRevision === "boolean"
             && typeof message.fingerprint === "string"
             && typeof message.preserveView === "boolean";
+    }
+
+    function isSidebarConfigureMessage(value: unknown): value is SidebarConfigureMessage {
+        if (typeof value !== "object" || value === null) {
+            return false;
+        }
+        const message = value as Record<string, unknown>;
+        return message.type === "sidebar.configure"
+            && isSidebarView(message.defaultSidebar);
+    }
+
+    function isSidebarView(value: unknown): value is AcademicSidebarView {
+        return value === "pages"
+            || value === "outline"
+            || value === "attachments"
+            || value === "layers";
     }
 
     const config = loadConfig();
@@ -218,6 +246,9 @@
             wasmUrl: config.wasmUrl
         } as const;
         let pendingFirstPageRender: PendingFirstPageRender | null = null;
+        let defaultSidebar: AcademicSidebarView = isSidebarView(config.defaultSidebar)
+            ? config.defaultSidebar
+            : "pages";
 
         reportDebug("viewerInitializing", {
             workerSource: workerBlobUrl ? "blob" : "mainThreadFallback"
@@ -241,6 +272,9 @@
                 pages: application.pdfDocument?.numPages,
                 pageNumber: event.pageNumber
             });
+        });
+        application.eventBus.on("documentinit", () => {
+            pdfjsAdapter.setSidebarView(defaultSidebar);
         });
 
         let latestDocumentLoadId = 0;
@@ -376,6 +410,13 @@
             });
         };
         window.addEventListener("message", (event: MessageEvent<unknown>) => {
+            if (isSidebarConfigureMessage(event.data)) {
+                defaultSidebar = event.data.defaultSidebar;
+                if (application.pdfDocument) {
+                    pdfjsAdapter.setSidebarView(defaultSidebar);
+                }
+                return;
+            }
             if (!isDocumentLoadMessage(event.data)
                 || event.data.loadId <= latestDocumentLoadId) {
                 return;

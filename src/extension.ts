@@ -64,6 +64,9 @@ export function activate(context: vscode.ExtensionContext) {
                 || event.affectsConfiguration('academicPdfViewer.navigation.mouseButtonMapping')) {
                 provider.refreshMouseNavigationConfiguration();
             }
+            if (event.affectsConfiguration('academicPdfViewer.navigation.defaultSidebar')) {
+                provider.refreshSidebarConfiguration();
+            }
         }),
     );
 }

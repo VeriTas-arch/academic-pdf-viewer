@@ -2,6 +2,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
     | { type: 'navigation.configure'; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping }
+    | { type: 'sidebar.configure'; defaultSidebar: SidebarView }
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
     | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
@@ -83,6 +84,7 @@ export function normalizeLinkPreviewResolutionScale(value: unknown): number {
 
 export type NavigationDirection = 'back' | 'forward';
 export type MouseButtonMapping = 'standard' | 'swapped';
+export type SidebarView = 'pages' | 'outline' | 'attachments' | 'layers';
 
 const pdfDebugEventValues = [
     'viewerInitializing',

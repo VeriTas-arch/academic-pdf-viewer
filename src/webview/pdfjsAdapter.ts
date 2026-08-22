@@ -17,6 +17,48 @@
         _setCurrentPageNumber?(pageNumber: number, resetCurrentPageView: boolean): unknown;
     }
 
+    interface PrivateViewsManager {
+        active: number;
+        isOpen: boolean;
+        close(): void;
+        switchView(view: number, forceOpen?: boolean): void;
+    }
+
+    interface PrivatePdfJsApplication extends PdfJsApplication {
+        viewsManager?: PrivateViewsManager;
+    }
+
+    const sidebarViews: Readonly<Record<AcademicSidebarView, number>> = {
+        pages: 1,
+        outline: 2,
+        attachments: 3,
+        layers: 4
+    };
+
+    function getViewsManager(): PrivateViewsManager | null {
+        const manager = (window.PDFViewerApplication as PrivatePdfJsApplication | undefined)?.viewsManager;
+        return manager && typeof manager.switchView === "function" ? manager : null;
+    }
+
+    function getSidebarView(value: number): AcademicSidebarView | null {
+        for (const [view, id] of Object.entries(sidebarViews)) {
+            if (id === value) {
+                return view as AcademicSidebarView;
+            }
+        }
+        return null;
+    }
+
+    function selectSidebarView(manager: PrivateViewsManager, view: AcademicSidebarView): boolean {
+        const selectedView = sidebarViews[view];
+        manager.switchView(selectedView, false);
+        if (manager.active === selectedView) {
+            return true;
+        }
+        manager.switchView(sidebarViews.pages, false);
+        return false;
+    }
+
     const patchedPageViewers = new WeakSet<PdfJsViewer>();
 
     const adapter: AcademicPdfJsAdapter = {
@@ -59,7 +101,8 @@
                 toolbarHost: adapter.getToolbarHost() !== null,
                 location: privateViewer?._location !== undefined,
                 fingerprintOverride: privateDocument?._pdfInfo !== undefined,
-                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function"
+                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function",
+                sidebarView: getViewsManager() !== null
             };
         },
 
@@ -78,6 +121,34 @@
             }
             info.fingerprints = [fingerprint];
             return true;
+        },
+
+        getSidebarState(): AcademicSidebarState | null {
+            const manager = getViewsManager();
+            const view = manager && getSidebarView(manager.active);
+            return manager && view ? { view, isOpen: manager.isOpen } : null;
+        },
+
+        setSidebarView(view: AcademicSidebarView): boolean {
+            const manager = getViewsManager();
+            if (!manager) {
+                return false;
+            }
+            return selectSidebarView(manager, view);
+        },
+
+        restoreSidebarState(state: AcademicSidebarState): boolean {
+            const manager = getViewsManager();
+            if (!manager) {
+                return false;
+            }
+            const selected = selectSidebarView(manager, state.view);
+            if (state.isOpen) {
+                manager.switchView(manager.active, true);
+            } else if (manager.isOpen) {
+                manager.close();
+            }
+            return selected;
         },
 
         interceptPageNumberChanges(

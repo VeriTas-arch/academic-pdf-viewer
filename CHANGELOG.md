@@ -2,6 +2,16 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.2.3] - 2026-08-22
+
+### Added
+
+- Added a configurable default sidebar view for Pages, Outline, Attachments, or Layers without forcing the sidebar open.
+
+### Fixed
+
+- Preserved the active sidebar view and its open or closed state when reloading a PDF, with unavailable views falling back to Pages.
+
 ## [1.2.2] - 2026-08-22
 
 ### Added
