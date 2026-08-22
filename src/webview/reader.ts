@@ -4,6 +4,7 @@
 
 (function () {
     type NavigationDirection = "back" | "forward";
+    type MouseButtonMapping = "standard" | "swapped";
 
     interface NavigationPoint {
         pageNumber: number;
@@ -16,10 +17,14 @@
 
     type NavigationMessage =
         | { type: "navigation.back" }
-        | { type: "navigation.forward" };
+        | { type: "navigation.forward" }
+        | { type: "navigation.configure"; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping };
 
     const vscode = acquireVsCodeApi();
     const pdfjsAdapter = window.academicPdfJsAdapter;
+    const initialMouseNavigation = readMouseNavigationConfig();
+    let mouseNavigationEnabled = initialMouseNavigation.enabled;
+    let mouseButtonMapping = initialMouseNavigation.mapping;
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
@@ -30,6 +35,9 @@
         vscode.postMessage((event as CustomEvent<unknown>).detail);
     });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
+    window.addEventListener("mousedown", handleMouseNavigation, true);
+    window.addEventListener("mouseup", consumeMouseNavigation, true);
+    window.addEventListener("auxclick", consumeMouseNavigation, true);
     const pressedNavigationKeys = {
         back: false,
         forward: false
@@ -258,13 +266,15 @@
     }
 
     function handleNavigationMessage(data: NavigationMessage | unknown, allowPressedKey = false): void {
-        if (!history) {
-            return;
-        }
         if (!isNavigationMessage(data)) {
             return;
         }
-        if (data.type === "navigation.back") {
+        if (data.type === "navigation.configure") {
+            mouseNavigationEnabled = data.mouseButtonsEnabled;
+            mouseButtonMapping = data.mouseButtonMapping;
+        } else if (!history) {
+            return;
+        } else if (data.type === "navigation.back") {
             if (!allowPressedKey && pressedNavigationKeys.back) {
                 return;
             }
@@ -282,7 +292,13 @@
             && data !== null
             && "type" in data
             && ((data as { type: unknown }).type === "navigation.back"
-                || (data as { type: unknown }).type === "navigation.forward");
+                || (data as { type: unknown }).type === "navigation.forward"
+                || ((data as { type: unknown }).type === "navigation.configure"
+                    && "mouseButtonsEnabled" in data
+                    && typeof (data as { mouseButtonsEnabled: unknown }).mouseButtonsEnabled === "boolean"
+                    && "mouseButtonMapping" in data
+                    && ((data as { mouseButtonMapping: unknown }).mouseButtonMapping === "standard"
+                        || (data as { mouseButtonMapping: unknown }).mouseButtonMapping === "swapped")));
     }
 
     function handleViewerShortcutBoundary(event: KeyboardEvent): void {
@@ -307,6 +323,58 @@
         if (!primaryModifier && !event.altKey && key === "r" && !isEditableKeyboardTarget(event.target)) {
             consumeShortcut(event);
         }
+    }
+
+    function handleMouseNavigation(event: MouseEvent): void {
+        if (!mouseNavigationEnabled) {
+            return;
+        }
+        const direction = mouseNavigationDirection(event);
+        if (!direction) {
+            return;
+        }
+        consumeMouseEvent(event);
+        vscode.postMessage({ type: "navigation.request", direction });
+    }
+
+    function consumeMouseNavigation(event: MouseEvent): void {
+        if (mouseNavigationEnabled && mouseNavigationDirection(event)) {
+            consumeMouseEvent(event);
+        }
+    }
+
+    function readMouseNavigationConfig(): { enabled: boolean; mapping: MouseButtonMapping } {
+        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
+        if (!value) {
+            return { enabled: true, mapping: "standard" };
+        }
+        try {
+            const settings = JSON.parse(value) as {
+                mouseNavigationEnabled?: unknown;
+                mouseButtonMapping?: unknown;
+            };
+            return {
+                enabled: settings.mouseNavigationEnabled !== false,
+                mapping: settings.mouseButtonMapping === "swapped" ? "swapped" : "standard"
+            };
+        } catch {
+            return { enabled: true, mapping: "standard" };
+        }
+    }
+
+    function mouseNavigationDirection(event: MouseEvent): NavigationDirection | undefined {
+        if (event.button === 3) {
+            return mouseButtonMapping === "standard" ? "forward" : "back";
+        }
+        if (event.button === 4) {
+            return mouseButtonMapping === "standard" ? "back" : "forward";
+        }
+        return undefined;
+    }
+
+    function consumeMouseEvent(event: MouseEvent): void {
+        event.preventDefault();
+        event.stopImmediatePropagation();
     }
 
     function consumeShortcut(event: KeyboardEvent): void {

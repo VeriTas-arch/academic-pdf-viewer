@@ -3,6 +3,9 @@
 (function () {
     const vscode = acquireVsCodeApi();
     const pdfjsAdapter = window.academicPdfJsAdapter;
+    const initialMouseNavigation = readMouseNavigationConfig();
+    let mouseNavigationEnabled = initialMouseNavigation.enabled;
+    let mouseButtonMapping = initialMouseNavigation.mapping;
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
@@ -13,6 +16,9 @@
         vscode.postMessage(event.detail);
     });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
+    window.addEventListener("mousedown", handleMouseNavigation, true);
+    window.addEventListener("mouseup", consumeMouseNavigation, true);
+    window.addEventListener("auxclick", consumeMouseNavigation, true);
     const pressedNavigationKeys = {
         back: false,
         forward: false
@@ -211,13 +217,17 @@
         });
     }
     function handleNavigationMessage(data, allowPressedKey = false) {
-        if (!history) {
-            return;
-        }
         if (!isNavigationMessage(data)) {
             return;
         }
-        if (data.type === "navigation.back") {
+        if (data.type === "navigation.configure") {
+            mouseNavigationEnabled = data.mouseButtonsEnabled;
+            mouseButtonMapping = data.mouseButtonMapping;
+        }
+        else if (!history) {
+            return;
+        }
+        else if (data.type === "navigation.back") {
             if (!allowPressedKey && pressedNavigationKeys.back) {
                 return;
             }
@@ -235,7 +245,13 @@
             && data !== null
             && "type" in data
             && (data.type === "navigation.back"
-                || data.type === "navigation.forward");
+                || data.type === "navigation.forward"
+                || (data.type === "navigation.configure"
+                    && "mouseButtonsEnabled" in data
+                    && typeof data.mouseButtonsEnabled === "boolean"
+                    && "mouseButtonMapping" in data
+                    && (data.mouseButtonMapping === "standard"
+                        || data.mouseButtonMapping === "swapped")));
     }
     function handleViewerShortcutBoundary(event) {
         const key = event.key.toLowerCase();
@@ -259,6 +275,51 @@
         if (!primaryModifier && !event.altKey && key === "r" && !isEditableKeyboardTarget(event.target)) {
             consumeShortcut(event);
         }
+    }
+    function handleMouseNavigation(event) {
+        if (!mouseNavigationEnabled) {
+            return;
+        }
+        const direction = mouseNavigationDirection(event);
+        if (!direction) {
+            return;
+        }
+        consumeMouseEvent(event);
+        vscode.postMessage({ type: "navigation.request", direction });
+    }
+    function consumeMouseNavigation(event) {
+        if (mouseNavigationEnabled && mouseNavigationDirection(event)) {
+            consumeMouseEvent(event);
+        }
+    }
+    function readMouseNavigationConfig() {
+        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
+        if (!value) {
+            return { enabled: true, mapping: "standard" };
+        }
+        try {
+            const settings = JSON.parse(value);
+            return {
+                enabled: settings.mouseNavigationEnabled !== false,
+                mapping: settings.mouseButtonMapping === "swapped" ? "swapped" : "standard"
+            };
+        }
+        catch {
+            return { enabled: true, mapping: "standard" };
+        }
+    }
+    function mouseNavigationDirection(event) {
+        if (event.button === 3) {
+            return mouseButtonMapping === "standard" ? "forward" : "back";
+        }
+        if (event.button === 4) {
+            return mouseButtonMapping === "standard" ? "back" : "forward";
+        }
+        return undefined;
+    }
+    function consumeMouseEvent(event) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
     }
     function consumeShortcut(event) {
         event.preventDefault();

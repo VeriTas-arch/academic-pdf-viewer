@@ -8,6 +8,7 @@ import {
     type DiffNavigationDirection,
     type DiffRole,
     type ExtensionToWebviewMessage,
+    type MouseButtonMapping,
     type NavigationDirection,
     type WebviewToExtensionMessage,
 } from '../shared/protocol';
@@ -141,6 +142,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 diffLabel: this.diffPanelInfo(panel)?.label,
                 linkPreviewEnabled: this.isLinkPreviewEnabled(document.uri),
                 linkPreviewResolutionScale: this.getLinkPreviewResolutionScale(document.uri),
+                mouseNavigationEnabled: this.isMouseNavigationEnabled(),
+                mouseButtonMapping: this.getMouseButtonMapping(),
             },
         );
     }
@@ -392,6 +395,16 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
     }
 
+    refreshMouseNavigationConfiguration(): void {
+        for (const panel of this.panelDocuments.keys()) {
+            void panel.webview.postMessage({
+                type: 'navigation.configure',
+                mouseButtonsEnabled: this.isMouseNavigationEnabled(),
+                mouseButtonMapping: this.getMouseButtonMapping(),
+            } satisfies ExtensionToWebviewMessage);
+        }
+    }
+
     private handleWebviewMessage(
         message: WebviewToExtensionMessage,
         panel: vscode.WebviewPanel,
@@ -465,6 +478,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             }
         } else if (message.type === 'pdf.debug') {
             logPdfDebugMessage(this.logger, document.uri, message);
+        } else if (message.type === 'navigation.request') {
+            if (!this.isMouseNavigationEnabled()) {
+                return;
+            }
+            void panel.webview.postMessage({
+                type: message.direction === 'back'
+                    ? 'navigation.back'
+                    : 'navigation.forward',
+            } satisfies ExtensionToWebviewMessage);
         } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
         } else if (message.type === 'workbench.openFile') {
@@ -657,6 +679,19 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         return vscode.workspace
             .getConfiguration('academicPdfViewer', documentUri)
             .get<boolean>('linkPreview.enabled', true);
+    }
+
+    private isMouseNavigationEnabled(): boolean {
+        return vscode.workspace
+            .getConfiguration('academicPdfViewer')
+            .get<boolean>('navigation.mouseButtons', true);
+    }
+
+    private getMouseButtonMapping(): MouseButtonMapping {
+        const value = vscode.workspace
+            .getConfiguration('academicPdfViewer')
+            .get<string>('navigation.mouseButtonMapping', 'standard');
+        return value === 'swapped' ? 'swapped' : 'standard';
     }
 
     private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {

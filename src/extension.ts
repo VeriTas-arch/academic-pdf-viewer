@@ -60,6 +60,10 @@ export function activate(context: vscode.ExtensionContext) {
             if (event.affectsConfiguration('academicPdfViewer.linkPreview')) {
                 provider.refreshLinkPreviewConfiguration();
             }
+            if (event.affectsConfiguration('academicPdfViewer.navigation.mouseButtons')
+                || event.affectsConfiguration('academicPdfViewer.navigation.mouseButtonMapping')) {
+                provider.refreshMouseNavigationConfiguration();
+            }
         }),
     );
 }

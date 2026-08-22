@@ -39,24 +39,34 @@
         return {
             pageNumber: viewer.currentPageNumber,
             scale: viewer.currentScale,
+            scaleValue: viewer.currentScaleValue,
             scrollLeft: container.scrollLeft,
             scrollTop: container.scrollTop
         };
     }
-    function restoreViewerState(application, state) {
+    function restoreViewerState(application, state, isCurrentLoad) {
         const viewer = application.pdfViewer;
         const container = viewer?.container;
         if (!viewer || !container || !state) {
             return;
         }
-        if (Number.isFinite(state.scale) && state.scale > 0) {
-            viewer.currentScaleValue = String(state.scale);
-        }
-        if (Number.isInteger(state.pageNumber)) {
-            viewer.currentPageNumber = Math.min(state.pageNumber, viewer.pagesCount);
-        }
         requestAnimationFrame(() => {
+            if (!isCurrentLoad()) {
+                return;
+            }
+            if (typeof state.scaleValue === "string" && state.scaleValue.length > 0) {
+                viewer.currentScaleValue = state.scaleValue;
+            }
+            else if (Number.isFinite(state.scale) && state.scale > 0) {
+                viewer.currentScaleValue = String(state.scale);
+            }
+            if (Number.isInteger(state.pageNumber)) {
+                viewer.currentPageNumber = Math.min(state.pageNumber, viewer.pagesCount);
+            }
             requestAnimationFrame(() => {
+                if (!isCurrentLoad()) {
+                    return;
+                }
                 container.scrollLeft = state.scrollLeft;
                 container.scrollTop = state.scrollTop;
             });
@@ -215,17 +225,25 @@
             const restoreOnDocumentInit = () => {
                 application.eventBus.off("documentinit", restoreOnDocumentInit);
                 restorePending = false;
-                restoreViewerState(application, preservedState);
+                restoreViewerState(application, preservedState, () => isLatestDocumentLoad(message));
             };
             if (preservedState) {
                 restorePending = true;
                 application.eventBus.on("documentinit", restoreOnDocumentInit);
             }
+            const cancelPendingRestore = () => {
+                if (!restorePending) {
+                    return;
+                }
+                application.eventBus.off("documentinit", restoreOnDocumentInit);
+                restorePending = false;
+            };
             const pendingRender = { fingerprint, startedAt, opened: false };
             pendingFirstPageRender = pendingRender;
             try {
                 await application.open({ data, ...loadOptions });
                 if (!isLatestDocumentLoad(message)) {
+                    cancelPendingRestore();
                     if (pendingFirstPageRender === pendingRender) {
                         pendingFirstPageRender = null;
                     }
@@ -239,15 +257,13 @@
                 });
             }
             catch (error) {
+                cancelPendingRestore();
                 if (pendingFirstPageRender === pendingRender) {
                     pendingFirstPageRender = null;
                 }
                 throw error;
             }
             finally {
-                if (restorePending) {
-                    application.eventBus.off("documentinit", restoreOnDocumentInit);
-                }
                 application.load = oldLoad;
             }
         };

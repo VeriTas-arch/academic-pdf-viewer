@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -113,6 +113,32 @@
                     "maximum": 4,
                     "scope": "window",
                     "markdownDescription": "Controls link-preview image clarity without changing its displayed size. The value is the number of rendered image pixels per CSS pixel; higher values use more memory and rendering time."
+                },
+                "academicPdfViewer.navigation.defaultAltShortcuts": {
+                    "type": "boolean",
+                    "default": true,
+                    "scope": "window",
+                    "description": "Enable the extension's default Alt+Left and Alt+Right PDF navigation shortcuts. The navigation commands remain available for custom keyboard bindings."
+                },
+                "academicPdfViewer.navigation.mouseButtons": {
+                    "type": "boolean",
+                    "default": true,
+                    "scope": "window",
+                    "description": "Navigate PDF history with the Mouse Back and Mouse Forward buttons while the pointer is over the PDF."
+                },
+                "academicPdfViewer.navigation.mouseButtonMapping": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "swapped"
+                    ],
+                    "enumDescriptions": [
+                        "Mouse Back navigates forward; Mouse Forward navigates back.",
+                        "Mouse Back navigates back; Mouse Forward navigates forward."
+                    ],
+                    "default": "standard",
+                    "scope": "window",
+                    "description": "Choose how the two mouse side buttons map to PDF navigation."
                 }
             }
         },
@@ -149,12 +175,12 @@
             {
                 "command": "academicPdfViewer.navigateBack",
                 "key": "alt+left",
-                "when": "activeCustomEditorId == academicPdfViewer.pdf"
+                "when": "activeCustomEditorId == academicPdfViewer.pdf && config.academicPdfViewer.navigation.defaultAltShortcuts"
             },
             {
                 "command": "academicPdfViewer.navigateForward",
                 "key": "alt+right",
-                "when": "activeCustomEditorId == academicPdfViewer.pdf"
+                "when": "activeCustomEditorId == academicPdfViewer.pdf && config.academicPdfViewer.navigation.defaultAltShortcuts"
             },
             {
                 "command": "academicPdfViewer.toggleDiffHighlights",
@@ -177,7 +203,7 @@
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs",
+        "test": "node --test test/protocol.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/keybindings.test.cjs",
         "test:extension": "node test/extensionHost/run.mjs",
         "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },

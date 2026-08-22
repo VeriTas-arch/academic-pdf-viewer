@@ -1,6 +1,7 @@
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
+    | { type: 'navigation.configure'; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping }
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
     | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
@@ -81,6 +82,7 @@ export function normalizeLinkPreviewResolutionScale(value: unknown): number {
 }
 
 export type NavigationDirection = 'back' | 'forward';
+export type MouseButtonMapping = 'standard' | 'swapped';
 
 const pdfDebugEventValues = [
     'viewerInitializing',
@@ -103,6 +105,7 @@ const pdfDebugEventValues = [
 type PdfDebugEvent = typeof pdfDebugEventValues[number];
 
 export type WebviewToExtensionMessage =
+    | { type: 'navigation.request'; direction: NavigationDirection }
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
     | { type: 'workbench.openFile' }
     | { type: 'workbench.quickOpen' }
@@ -157,6 +160,7 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
     }
 
     switch (value.type) {
+        case 'navigation.request':
         case 'navigation.keyUp':
             return value.direction === 'back' || value.direction === 'forward';
         case 'workbench.openFile':

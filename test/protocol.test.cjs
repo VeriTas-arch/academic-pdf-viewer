@@ -18,6 +18,10 @@ test('accepts supported webview messages', () => {
     assert.equal(isWebviewToExtensionMessage({ type: 'workbench.quickOpen' }), true);
     assert.equal(isWebviewToExtensionMessage({ type: 'workbench.showCommands' }), true);
     assert.equal(isWebviewToExtensionMessage({
+        type: 'navigation.request',
+        direction: 'forward',
+    }), true);
+    assert.equal(isWebviewToExtensionMessage({
         type: 'navigation.keyUp',
         direction: 'back',
     }), true);
@@ -83,6 +87,10 @@ test('accepts supported webview messages', () => {
 test('rejects malformed and unsupported webview messages', () => {
     assert.equal(isWebviewToExtensionMessage(null), false);
     assert.equal(isWebviewToExtensionMessage({ type: 'unknown' }), false);
+    assert.equal(isWebviewToExtensionMessage({
+        type: 'navigation.request',
+        direction: 'sideways',
+    }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'navigation.keyUp',
         direction: 'sideways',

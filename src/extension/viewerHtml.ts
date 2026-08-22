@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import * as vscode from 'vscode';
 
+import type { MouseButtonMapping } from '../shared/protocol';
+
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
 
 interface ViewerHtmlOptions {
@@ -9,6 +11,8 @@ interface ViewerHtmlOptions {
     diffLabel?: string;
     linkPreviewEnabled: boolean;
     linkPreviewResolutionScale: number;
+    mouseNavigationEnabled: boolean;
+    mouseButtonMapping: MouseButtonMapping;
 }
 
 export function readViewerHtml(context: vscode.ExtensionContext): string {
@@ -62,6 +66,8 @@ export function renderViewerHtml(
         diffLabel: options.diffLabel,
         linkPreviewEnabled: options.linkPreviewEnabled,
         linkPreviewResolutionScale: options.linkPreviewResolutionScale,
+        mouseNavigationEnabled: options.mouseNavigationEnabled,
+        mouseButtonMapping: options.mouseButtonMapping,
     };
     const config = escapeHtmlAttribute(JSON.stringify(settings));
 

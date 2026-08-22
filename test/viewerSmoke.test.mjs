@@ -115,6 +115,105 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         assert.equal(await page.evaluate(() => window.__academicPrintCalls), 0);
     });
 
+    await t.test("routes mouse side buttons through PDF navigation", async () => {
+        const defaultPrevented = await page.evaluate(() => {
+            const results = [];
+            for (const button of [3, 4]) {
+                for (const type of ["mouseup", "auxclick"]) {
+                    const event = new MouseEvent(type, {
+                        bubbles: true,
+                        button,
+                        cancelable: true
+                    });
+                    document.body.dispatchEvent(event);
+                    results.push(event.defaultPrevented);
+                }
+            }
+            return results;
+        });
+        assert.deepEqual(defaultPrevented, [true, true, true, true]);
+
+        const cdp = await page.context().newCDPSession(page);
+        const clickSideButton = async (button, buttons) => {
+            const event = { x: 900, y: 360, button, clickCount: 1 };
+            await cdp.send("Input.dispatchMouseEvent", {
+                ...event,
+                type: "mousePressed",
+                buttons
+            });
+            await cdp.send("Input.dispatchMouseEvent", {
+                ...event,
+                type: "mouseReleased",
+                buttons: 0
+            });
+        };
+
+        const start = await page.evaluate(() => window.__academicTestMessages.length);
+        await clickSideButton("back", 8);
+        await clickSideButton("forward", 16);
+        await page.waitForFunction(offset => window.__academicTestMessages.length >= offset + 2, start);
+        assert.deepEqual(await page.evaluate(offset => window.__academicTestMessages
+            .slice(offset)
+            .filter(message => message.type === "navigation.request"), start), [
+            { type: "navigation.request", direction: "forward" },
+            { type: "navigation.request", direction: "back" }
+        ]);
+
+        const disabled = await page.evaluate(() => {
+            window.dispatchEvent(new MessageEvent("message", {
+                data: {
+                    type: "navigation.configure",
+                    mouseButtonsEnabled: false,
+                    mouseButtonMapping: "standard"
+                }
+            }));
+            const messageCount = window.__academicTestMessages.length;
+            const event = new MouseEvent("mousedown", {
+                bubbles: true,
+                button: 3,
+                cancelable: true
+            });
+            document.body.dispatchEvent(event);
+            window.dispatchEvent(new MessageEvent("message", {
+                data: {
+                    type: "navigation.configure",
+                    mouseButtonsEnabled: true,
+                    mouseButtonMapping: "swapped"
+                }
+            }));
+            return {
+                defaultPrevented: event.defaultPrevented,
+                navigationRequests: window.__academicTestMessages
+                    .slice(messageCount)
+                    .filter(message => message.type === "navigation.request")
+            };
+        });
+        assert.deepEqual(disabled, {
+            defaultPrevented: false,
+            navigationRequests: []
+        });
+
+        const swappedStart = await page.evaluate(() => window.__academicTestMessages.length);
+        await clickSideButton("back", 8);
+        await clickSideButton("forward", 16);
+        await page.waitForFunction(offset => window.__academicTestMessages.length >= offset + 2, swappedStart);
+        assert.deepEqual(await page.evaluate(offset => window.__academicTestMessages
+            .slice(offset)
+            .filter(message => message.type === "navigation.request"), swappedStart), [
+            { type: "navigation.request", direction: "back" },
+            { type: "navigation.request", direction: "forward" }
+        ]);
+
+        await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", {
+            data: {
+                type: "navigation.configure",
+                mouseButtonsEnabled: true,
+                mouseButtonMapping: "standard"
+            }
+        })));
+        await cdp.detach();
+    });
+
     await t.test("blocks bare rotation shortcuts while keeping toolbar rotation", async () => {
         assert.equal(await page.evaluate(() => window.PDFViewerApplication.pdfViewer.pagesRotation), 0);
         await page.keyboard.press("r");
@@ -858,6 +957,64 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await originalPage.close();
     });
 
+    await t.test("preserves a non-preset zoom across document reload", async () => {
+        const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        const reloadPageErrors = [];
+        reloadPage.on("pageerror", error => reloadPageErrors.push(error.stack || error.message));
+        await reloadPage.goto(`${origin}/__viewer_test__.html`);
+        await reloadPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        await reloadPage.evaluate(async pdfPath => {
+            const data = await (await fetch(pdfPath)).arrayBuffer();
+            window.postMessage({
+                type: "document.load",
+                loadId: 1,
+                data,
+                isEmptyRevision: false,
+                fingerprint: "custom-zoom-initial",
+                preserveView: false
+            }, "*");
+        }, fixturePath);
+        await reloadPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+                && message.fingerprint === "custom-zoom-initial"
+        ));
+
+        await reloadPage.evaluate(() => {
+            window.PDFViewerApplication.pdfViewer.currentScaleValue = "1.2904";
+            window.__academicTestDebug.length = 0;
+        });
+        await reloadPage.evaluate(async pdfPath => {
+            const data = await (await fetch(pdfPath)).arrayBuffer();
+            window.postMessage({
+                type: "document.load",
+                loadId: 2,
+                data,
+                isEmptyRevision: false,
+                fingerprint: "custom-zoom-reloaded",
+                preserveView: true
+            }, "*");
+        }, fixturePath);
+        await reloadPage.waitForFunction(() => window.__academicTestDebug.some(
+            message => message.event === "firstPageRendered"
+                && message.fingerprint === "custom-zoom-reloaded"
+        ));
+        await reloadPage.evaluate(() => new Promise(resolve => requestAnimationFrame(
+            () => requestAnimationFrame(resolve)
+        )));
+
+        const scale = await reloadPage.evaluate(() => ({
+            current: window.PDFViewerApplication.pdfViewer.currentScale,
+            value: window.PDFViewerApplication.pdfViewer.currentScaleValue
+        }));
+        assert(Math.abs(scale.current - 1.2904) < 0.000001, JSON.stringify(scale));
+        assert.equal(scale.value, "1.2904");
+        assert.deepEqual(reloadPageErrors, []);
+        await reloadPage.close();
+    });
+
     await t.test("keeps the latest of back-to-back document loads", async () => {
         const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const reloadPageErrors = [];
@@ -1023,6 +1180,8 @@ async function buildViewerHtml(configOverrides = {}) {
         workerSrc: "/assets/pdfviewer/lib/build/pdf.worker.mjs",
         linkPreviewEnabled: true,
         linkPreviewResolutionScale: 1,
+        mouseNavigationEnabled: true,
+        mouseButtonMapping: "standard",
         ...configOverrides
     }));
     const head = `

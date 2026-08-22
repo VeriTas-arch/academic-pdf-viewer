@@ -2,6 +2,17 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.2.2] - 2026-08-22
+
+### Added
+
+- Added mouse side-button navigation with independently configurable mouse and default Alt inputs, plus Standard and Swapped mouse-button mapping presets.
+- Added browser-level regression coverage for both side-button mappings and reloads at non-preset zoom levels.
+
+### Fixed
+
+- Preserved exact non-preset zoom values, the current page, and scroll position when reloading a PDF.
+
 ## [1.2.1] - 2026-08-20
 
 ### Changed
