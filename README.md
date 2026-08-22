@@ -106,7 +106,7 @@ After installation:
 | Preview an internal link destination | Hold <kbd>Ctrl</kbd> while hovering | PDFs with embedded internal links |
 | Toggle diff highlights | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Active PDF diff |
 
-The built-in Alt shortcuts and mouse side buttons can be enabled independently under **Academic PDF Viewer › Navigation** in Settings. The mouse-button mapping defaults to **Standard** (Back → forward, Forward → back) and can be changed to **Swapped** (Back → back, Forward → forward). `PDF: Navigate Back` and `PDF: Navigate Forward` remain available in VS Code's Keyboard Shortcuts editor, so disabling the default Alt shortcuts does not prevent custom keyboard bindings.
+The built-in Alt shortcuts and mouse side buttons can be enabled independently under **Academic PDF Viewer › Navigation** in Settings. The mouse-button mapping defaults to **Standard** (Back → back, Forward → forward) and can be changed to **Swapped** (Back → forward, Forward → back). `PDF: Navigate Back` and `PDF: Navigate Forward` remain available in VS Code's Keyboard Shortcuts editor, so disabling the default Alt shortcuts does not prevent custom keyboard bindings.
 
 `PDF: Reload`, `PDF: Toggle Link Preview`, and the previous/next diff commands are available from the title bar or Command Palette when applicable. They can also be assigned from VS Code's Keyboard Shortcuts editor.
 

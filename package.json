@@ -133,8 +133,8 @@
                         "swapped"
                     ],
                     "enumDescriptions": [
-                        "Mouse Back navigates forward; Mouse Forward navigates back.",
-                        "Mouse Back navigates back; Mouse Forward navigates forward."
+                        "Mouse Back navigates back; Mouse Forward navigates forward.",
+                        "Mouse Back navigates forward; Mouse Forward navigates back."
                     ],
                     "default": "standard",
                     "scope": "window",

@@ -155,8 +155,8 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         assert.deepEqual(await page.evaluate(offset => window.__academicTestMessages
             .slice(offset)
             .filter(message => message.type === "navigation.request"), start), [
-            { type: "navigation.request", direction: "forward" },
-            { type: "navigation.request", direction: "back" }
+            { type: "navigation.request", direction: "back" },
+            { type: "navigation.request", direction: "forward" }
         ]);
 
         const disabled = await page.evaluate(() => {
@@ -200,8 +200,8 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         assert.deepEqual(await page.evaluate(offset => window.__academicTestMessages
             .slice(offset)
             .filter(message => message.type === "navigation.request"), swappedStart), [
-            { type: "navigation.request", direction: "back" },
-            { type: "navigation.request", direction: "forward" }
+            { type: "navigation.request", direction: "forward" },
+            { type: "navigation.request", direction: "back" }
         ]);
 
         await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", {

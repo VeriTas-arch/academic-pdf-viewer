@@ -364,10 +364,10 @@
 
     function mouseNavigationDirection(event: MouseEvent): NavigationDirection | undefined {
         if (event.button === 3) {
-            return mouseButtonMapping === "standard" ? "forward" : "back";
+            return mouseButtonMapping === "standard" ? "back" : "forward";
         }
         if (event.button === 4) {
-            return mouseButtonMapping === "standard" ? "back" : "forward";
+            return mouseButtonMapping === "standard" ? "forward" : "back";
         }
         return undefined;
     }
