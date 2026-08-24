@@ -1,6 +1,8 @@
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
+    | Omit<SyncTexRequest, 'pdfUri' | 'type'> & { type: 'synctex.forward' }
+    | { type: 'synctex.configure'; mode: 'off' | 'doubleclick' | 'rightclick' }
     | { type: 'navigation.configure'; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping }
     | { type: 'sidebar.configure'; defaultSidebar: SidebarView }
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
@@ -86,6 +88,15 @@ export type NavigationDirection = 'back' | 'forward';
 export type MouseButtonMapping = 'standard' | 'swapped';
 export type SidebarView = 'pages' | 'outline' | 'attachments' | 'layers';
 
+export interface SyncTexRequest {
+    type: 'synctex.forward' | 'synctex.inverse';
+    pdfUri?: string;
+    pageNumber: number;
+    x: number;
+    y: number;
+    trigger?: 'doubleClick' | 'rightClick';
+}
+
 const pdfDebugEventValues = [
     'viewerInitializing',
     'viewerInitialized',
@@ -109,6 +120,7 @@ type PdfDebugEvent = typeof pdfDebugEventValues[number];
 export type WebviewToExtensionMessage =
     | { type: 'navigation.request'; direction: NavigationDirection }
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
+    | SyncTexRequest
     | { type: 'workbench.openFile' }
     | { type: 'workbench.quickOpen' }
     | { type: 'workbench.showCommands' }
@@ -165,6 +177,11 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'navigation.request':
         case 'navigation.keyUp':
             return value.direction === 'back' || value.direction === 'forward';
+        case 'synctex.inverse':
+            return isPageNumber(value.pageNumber)
+                && isFiniteCoordinate(value.x)
+                && isFiniteCoordinate(value.y)
+                && (value.trigger === 'doubleClick' || value.trigger === 'rightClick');
         case 'workbench.openFile':
         case 'workbench.quickOpen':
         case 'workbench.showCommands':
@@ -288,6 +305,10 @@ function isNormalizedNumber(value: unknown): value is number {
         && Number.isFinite(value)
         && value >= 0
         && value <= 1;
+}
+
+function isFiniteCoordinate(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

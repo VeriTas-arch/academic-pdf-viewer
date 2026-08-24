@@ -1,9 +1,21 @@
 import * as vscode from 'vscode';
 
 import { createDevLogger } from './extension/devLogger';
-import { PDF_VIEW_TYPE, PdfEditorProvider } from './extension/pdfEditorProvider';
+import {
+    PDF_VIEW_TYPE,
+    PdfEditorProvider,
+    type SyncTexInverseEvent,
+} from './extension/pdfEditorProvider';
+import type { SyncTexRequest } from './shared/protocol';
 
-export function activate(context: vscode.ExtensionContext) {
+export interface AcademicPdfViewerApi {
+    readonly tex: {
+        readonly onDidRequestInverseSyncTex: vscode.Event<SyncTexInverseEvent>;
+        synctexForward(request: SyncTexRequest): boolean;
+    };
+}
+
+export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi {
     const logger = createDevLogger(context);
     logger?.info('extension.activate', {
         extensionMode: 'development',
@@ -37,6 +49,15 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('academicPdfViewer.reload', () => {
             return provider.reloadActive();
         }),
+        vscode.commands.registerCommand('academicPdfViewer.tex.synctexForward', (request: unknown) => {
+            if (!isSyncTexForwardRequest(request)) {
+                return false;
+            }
+            return provider.synctexForward(request);
+        }),
+        vscode.commands.registerCommand('academicPdfViewer.tex.synctexInverse', () => (
+            provider.inverseSyncTexFromContextMenu()
+        )),
         vscode.commands.registerCommand('academicPdfViewer.toggleLinkPreview', async () => {
             const enabled = await provider.toggleLinkPreviewActive();
             if (enabled !== undefined) {
@@ -67,6 +88,36 @@ export function activate(context: vscode.ExtensionContext) {
             if (event.affectsConfiguration('academicPdfViewer.navigation.defaultSidebar')) {
                 provider.refreshSidebarConfiguration();
             }
+            if (event.affectsConfiguration('academicPdfViewer.tex.synctex')) {
+                provider.refreshSyncTexConfiguration();
+            }
         }),
     );
+
+    return {
+        tex: {
+            onDidRequestInverseSyncTex: provider.onDidRequestInverseSyncTex,
+            synctexForward: request => (
+                isSyncTexForwardRequest(request) && provider.synctexForward(request)
+            ),
+        },
+    };
+}
+
+/** Validates an extension API request before forwarding it to a PDF panel. */
+function isSyncTexForwardRequest(value: unknown): value is SyncTexRequest {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const request = value as Record<string, unknown>;
+    return request.type === 'synctex.forward'
+        && typeof request.pdfUri === 'string'
+        && request.pdfUri.length > 0
+        && typeof request.pageNumber === 'number'
+        && Number.isSafeInteger(request.pageNumber)
+        && request.pageNumber >= 1
+        && typeof request.x === 'number'
+        && Number.isFinite(request.x)
+        && typeof request.y === 'number'
+        && Number.isFinite(request.y);
 }

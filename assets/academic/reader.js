@@ -17,6 +17,13 @@
     });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
     window.addEventListener("mousedown", handleMouseNavigation, true);
+    configureSyncTexMode(readSyncTexConfig());
+    window.addEventListener("academic-pdf-synctex-configure", event => {
+        const mode = event.detail;
+        if (mode === "off" || mode === "doubleclick" || mode === "rightclick") {
+            configureSyncTexMode(mode);
+        }
+    });
     window.addEventListener("mouseup", consumeMouseNavigation, true);
     window.addEventListener("auxclick", consumeMouseNavigation, true);
     const pressedNavigationKeys = {
@@ -286,6 +293,68 @@
         }
         consumeMouseEvent(event);
         vscode.postMessage({ type: "navigation.request", direction });
+    }
+    /** Resolves the PDF position under a pointer event. */
+    function getSyncTexPointer(event) {
+        const viewer = getViewer();
+        if (!viewer) {
+            return undefined;
+        }
+        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
+            const bounds = pageView.div.getBoundingClientRect();
+            if (event.clientX < bounds.left
+                || event.clientX > bounds.right
+                || event.clientY < bounds.top
+                || event.clientY > bounds.bottom) {
+                continue;
+            }
+            const [x, pdfY] = pageView.viewport.convertToPdfPoint(event.clientX - bounds.left, event.clientY - bounds.top);
+            const pageHeight = pageView.viewport.viewBox[3];
+            const y = pageHeight - pdfY;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                continue;
+            }
+            return { pageNumber: pageView.id, x, y };
+        }
+        return undefined;
+    }
+    /** Sends the PDF position for the configured inverse SyncTeX trigger. */
+    function handleSyncTexPointer(event, trigger) {
+        if (event.button !== (trigger === "doubleClick" ? 0 : 2)) {
+            return;
+        }
+        const point = getSyncTexPointer(event);
+        if (point) {
+            vscode.postMessage({ type: "synctex.inverse", ...point, trigger });
+        }
+    }
+    function configureSyncTexMode(mode) {
+        window.removeEventListener("dblclick", handleSyncTexDoubleClick, true);
+        window.removeEventListener("contextmenu", handleSyncTexRightClick, true);
+        if (mode === "doubleclick") {
+            window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
+        }
+        else if (mode === "rightclick") {
+            window.addEventListener("contextmenu", handleSyncTexRightClick, true);
+        }
+    }
+    function handleSyncTexDoubleClick(event) {
+        handleSyncTexPointer(event, "doubleClick");
+    }
+    function handleSyncTexRightClick(event) {
+        handleSyncTexPointer(event, "rightClick");
+    }
+    function readSyncTexConfig() {
+        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
+        try {
+            const settings = JSON.parse(value || "{}");
+            return settings.syncTexMode === "off" || settings.syncTexMode === "rightclick"
+                ? settings.syncTexMode
+                : "doubleclick";
+        }
+        catch {
+            return "doubleclick";
+        }
     }
     function consumeMouseNavigation(event) {
         if (mouseNavigationEnabled && mouseNavigationDirection(event)) {

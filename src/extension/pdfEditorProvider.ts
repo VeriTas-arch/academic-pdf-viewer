@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import {
@@ -11,6 +12,7 @@ import {
     type MouseButtonMapping,
     type NavigationDirection,
     type SidebarView,
+    type SyncTexRequest,
     type WebviewToExtensionMessage,
 } from '../shared/protocol';
 import type { DevLogger } from './devLogger';
@@ -20,6 +22,19 @@ import { assertPdfDiffPairSize } from './pdfSizeLimits';
 import { readViewerHtml, renderViewerHtml } from './viewerHtml';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
+
+export type SyncTexInverseEvent = SyncTexRequest & {
+    type: 'synctex.inverse';
+    pdfUri: string;
+    trigger: 'doubleClick' | 'rightClick';
+};
+
+interface PendingSyncTexContextMenu {
+    panel: vscode.WebviewPanel;
+    pageNumber: number;
+    x: number;
+    y: number;
+}
 
 function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
     const copy = new ArrayBuffer(data.byteLength);
@@ -62,12 +77,18 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private nextDocumentLoadId = 1;
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
+    private readonly inverseSyncTexEmitter = new vscode.EventEmitter<SyncTexInverseEvent>();
+    private pendingSyncTexContextMenu: PendingSyncTexContextMenu | undefined;
+
+    /** Emits validated inverse SyncTeX requests from the PDF webview. */
+    readonly onDidRequestInverseSyncTex = this.inverseSyncTexEmitter.event;
 
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly logger?: DevLogger,
     ) {
         this.viewerHtml = readViewerHtml(context);
+        context.subscriptions.push(this.inverseSyncTexEmitter);
     }
 
     async openCustomDocument(
@@ -115,6 +136,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 disposable.dispose();
             }
             this.panelDocuments.delete(panel);
+            if (this.pendingSyncTexContextMenu?.panel === panel) {
+                this.pendingSyncTexContextMenu = undefined;
+            }
             this.latestDocumentLoadByPanel.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
@@ -146,6 +170,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 mouseNavigationEnabled: this.isMouseNavigationEnabled(),
                 mouseButtonMapping: this.getMouseButtonMapping(),
                 defaultSidebar: this.getDefaultSidebar(),
+                syncTexMode: this.getSyncTexMode(document.uri),
             },
         );
     }
@@ -299,6 +324,23 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         void this.activePanel?.webview.postMessage(message);
     }
 
+    /** Sends a forward SyncTeX location to the matching PDF editor panel. */
+    synctexForward(request: SyncTexRequest): boolean {
+        const entry = [...this.panelDocuments.entries()]
+            .find(([, document]) => this.workspaceRelativePdfPath(document.uri) === request.pdfUri);
+        if (!entry) {
+            return false;
+        }
+
+        void entry[0].webview.postMessage({
+            type: 'synctex.forward',
+            pageNumber: request.pageNumber,
+            x: request.x,
+            y: request.y,
+        } satisfies ExtensionToWebviewMessage);
+        return true;
+    }
+
     navigate(direction: NavigationDirection): void {
         if (this.navigationKeyLocks.has(direction)) {
             this.armNavigationKeyFallbackRelease(direction);
@@ -416,6 +458,16 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
     }
 
+    /** Applies the current SyncTeX trigger mode to all open PDF webviews. */
+    refreshSyncTexConfiguration(): void {
+        for (const [panel, document] of this.panelDocuments) {
+            void panel.webview.postMessage({
+                type: 'synctex.configure',
+                mode: this.getSyncTexMode(document.uri),
+            } satisfies ExtensionToWebviewMessage);
+        }
+    }
+
     private handleWebviewMessage(
         message: WebviewToExtensionMessage,
         panel: vscode.WebviewPanel,
@@ -427,6 +479,19 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 bytes: document.data.byteLength,
             });
             void this.postDocument(panel, document, false).catch(() => undefined);
+        } else if (message.type === 'synctex.inverse') {
+            if (message.trigger === 'rightClick') {
+                this.pendingSyncTexContextMenu = { panel, ...message };
+            } else {
+                this.inverseSyncTexEmitter.fire({
+                    type: 'synctex.inverse',
+                    pdfUri: this.workspaceRelativePdfPath(document.uri),
+                    pageNumber: message.pageNumber,
+                    x: message.x,
+                    y: message.y,
+                    trigger: 'doubleClick',
+                } satisfies SyncTexInverseEvent);
+            }
         } else if (message.type === 'diff.pageResult') {
             if (!this.isCurrentModifiedSession(panel, message.sessionId)) {
                 return;
@@ -712,6 +777,45 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         return value === 'outline' || value === 'attachments' || value === 'layers'
             ? value
             : 'pages';
+    }
+
+    /** Emits inverse SyncTeX for the position selected through the context menu. */
+    async inverseSyncTexFromContextMenu(): Promise<boolean> {
+        const pending = this.pendingSyncTexContextMenu;
+        this.pendingSyncTexContextMenu = undefined;
+        if (!pending) {
+            return false;
+        }
+        const document = this.panelDocuments.get(pending.panel);
+        if (!document) {
+            return false;
+        }
+        this.inverseSyncTexEmitter.fire({
+            type: 'synctex.inverse',
+            pdfUri: this.workspaceRelativePdfPath(document.uri),
+            pageNumber: pending.pageNumber,
+            x: pending.x,
+            y: pending.y,
+            trigger: 'rightClick',
+        });
+        return true;
+    }
+
+    /** Returns the configured inverse SyncTeX trigger mode. */
+    private getSyncTexMode(documentUri: vscode.Uri): 'off' | 'doubleclick' | 'rightclick' {
+        const value = vscode.workspace
+            .getConfiguration('academicPdfViewer', documentUri)
+            .get<string>('tex.synctex', 'doubleclick');
+        return value === 'off' || value === 'rightclick' ? value : 'doubleclick';
+    }
+
+    /** Returns a normalized workspace-relative PDF identifier. */
+    private workspaceRelativePdfPath(uri: vscode.Uri): string {
+        const workspace = vscode.workspace.getWorkspaceFolder(uri);
+        if (!workspace) {
+            return path.basename(uri.fsPath);
+        }
+        return path.relative(workspace.uri.fsPath, uri.fsPath).split(path.sep).join('/');
     }
 
     private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {
