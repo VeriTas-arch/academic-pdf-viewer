@@ -11,7 +11,7 @@
     },
     "license": "MIT",
     "engines": {
-        "vscode": "^1.133.0"
+        "vscode": "^1.134.0"
     },
     "categories": [
         "Visualization",
@@ -61,6 +61,20 @@
                 "command": "academicPdfViewer.reload",
                 "title": "PDF: Reload",
                 "icon": "$(refresh)"
+            },
+            {
+                "command": "academicPdfViewer.tex.synctexForward",
+                "title": "PDF: SyncTeX Forward Search"
+            },
+            {
+                "command": "academicPdfViewer.tex.synctexForwardFromCursor",
+                "title": "TeX: SyncTeX Forward Search",
+                "icon": "$(open-preview)",
+                "enablement": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex"
+            },
+            {
+                "command": "academicPdfViewer.tex.synctexInverse",
+                "title": "PDF: SyncTeX Inverse Search"
             },
             {
                 "command": "academicPdfViewer.toggleLinkPreview",
@@ -157,11 +171,74 @@
                     "default": "pages",
                     "scope": "window",
                     "description": "Choose the view selected when the PDF sidebar opens. Unavailable views fall back to Pages."
+                },
+                "academicPdfViewer.tex.synctex": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "doubleclick",
+                        "rightclick"
+                    ],
+                    "enumDescriptions": [
+                        "Disable inverse SyncTeX from the PDF viewer.",
+                        "Send inverse SyncTeX on a double-click.",
+                        "Show a context-menu entry for inverse SyncTeX after a right-click."
+                    ],
+                    "default": "doubleclick",
+                    "scope": "window",
+                    "description": "Choose how inverse SyncTeX is triggered from the PDF viewer."
+                },
+                "academicPdfViewer.tex.bridge.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "scope": "window",
+                    "restricted": true,
+                    "description": "Run the built-in local SyncTeX command-line bridge for forward and inverse search in trusted workspaces."
+                },
+                "academicPdfViewer.tex.bridge.executable": {
+                    "type": "string",
+                    "default": "synctex",
+                    "scope": "window",
+                    "restricted": true,
+                    "markdownDescription": "SyncTeX executable name or path. Enter only the executable, without command-line arguments."
+                },
+                "academicPdfViewer.tex.bridge.pdfPath": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "window",
+                    "restricted": true,
+                    "markdownDescription": "PDF used for forward search. Leave empty for a PDF beside the active `.tex` file with the same base name; relative paths are resolved from its workspace folder."
                 }
             }
         },
         "menus": {
+            "webview/context": [
+                {
+                    "command": "academicPdfViewer.tex.synctexInverse",
+                    "when": "webviewId == academicPdfViewer.pdf && webviewSection == pdfPage && config.academicPdfViewer.tex.synctex == rightclick",
+                    "group": "navigation@1"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "academicPdfViewer.tex.synctexForwardFromCursor",
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex"
+                },
+                {
+                    "command": "academicPdfViewer.tex.synctexForward",
+                    "when": "false"
+                },
+                {
+                    "command": "academicPdfViewer.tex.synctexInverse",
+                    "when": "false"
+                }
+            ],
             "editor/title": [
+                {
+                    "command": "academicPdfViewer.tex.synctexForwardFromCursor",
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex",
+                    "group": "navigation@100"
+                },
                 {
                     "command": "academicPdfViewer.reload",
                     "when": "activeCustomEditorId == academicPdfViewer.pdf",
@@ -186,6 +263,13 @@
                     "command": "academicPdfViewer.nextDiffChange",
                     "when": "activeCustomEditorId == academicPdfViewer.pdf && academicPdfViewer.diffActive && academicPdfViewer.diffHighlightsEnabled",
                     "group": "navigation@3"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "academicPdfViewer.tex.synctexForwardFromCursor",
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex",
+                    "group": "navigation@100"
                 }
             ]
         },
@@ -221,7 +305,7 @@
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/keybindings.test.cjs",
+        "test": "node --test test/protocol.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs",
         "test:extension": "node test/extensionHost/run.mjs",
         "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },

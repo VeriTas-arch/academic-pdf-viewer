@@ -6,6 +6,7 @@
     const initialMouseNavigation = readMouseNavigationConfig();
     let mouseNavigationEnabled = initialMouseNavigation.enabled;
     let mouseButtonMapping = initialMouseNavigation.mapping;
+    let syncTexMode = "off";
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
@@ -17,6 +18,15 @@
     });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
     window.addEventListener("mousedown", handleMouseNavigation, true);
+    window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
+    window.addEventListener("contextmenu", handleSyncTexContextMenu, true);
+    configureSyncTexMode(readSyncTexConfig());
+    window.addEventListener("academic-pdf-synctex-configure", event => {
+        const mode = event.detail;
+        if (mode === "off" || mode === "doubleclick" || mode === "rightclick") {
+            configureSyncTexMode(mode);
+        }
+    });
     window.addEventListener("mouseup", consumeMouseNavigation, true);
     window.addEventListener("auxclick", consumeMouseNavigation, true);
     const pressedNavigationKeys = {
@@ -287,6 +297,141 @@
         consumeMouseEvent(event);
         vscode.postMessage({ type: "navigation.request", direction });
     }
+    const syncTexPageContext = JSON.stringify({ webviewSection: "pdfPage" });
+    function setSyncTexPageContexts() {
+        const viewer = getViewer();
+        if (!viewer) {
+            return;
+        }
+        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
+            pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
+        }
+    }
+    function isInteractivePointerTarget(target) {
+        return target instanceof Element
+            && target.closest("a, button, input, textarea, select, option, [contenteditable]:not([contenteditable='false'])") !== null;
+    }
+    function getSyncTexTextHint(event, pageView) {
+        const textElement = document.elementsFromPoint(event.clientX, event.clientY)
+            .map(element => element.closest(".textLayer span"))
+            .find((element) => (element instanceof HTMLElement && pageView.div.contains(element)));
+        if (!textElement) {
+            return undefined;
+        }
+        const caretDocument = document;
+        const caretPosition = caretDocument.caretPositionFromPoint?.(event.clientX, event.clientY);
+        const caretRange = caretPosition
+            ? undefined
+            : caretDocument.caretRangeFromPoint?.(event.clientX, event.clientY);
+        const offsetNode = caretPosition?.offsetNode ?? caretRange?.startContainer;
+        const offset = caretPosition?.offset ?? caretRange?.startOffset;
+        if (!offsetNode || offset === undefined || !textElement.contains(offsetNode)) {
+            return undefined;
+        }
+        const context = textElement.textContent ?? "";
+        if (context.length === 0 || context.trim().length === 0 || /[\0\r\n]/.test(context)) {
+            return undefined;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(textElement);
+        try {
+            range.setEnd(offsetNode, offset);
+        }
+        catch {
+            return undefined;
+        }
+        const fullOffset = range.toString().length;
+        if (fullOffset < 0 || fullOffset > context.length) {
+            return undefined;
+        }
+        const maximumContextLength = 256;
+        const initialStart = Math.max(0, fullOffset - Math.floor(maximumContextLength / 2));
+        const start = Math.min(initialStart, Math.max(0, context.length - maximumContextLength));
+        return {
+            context: context.slice(start, start + maximumContextLength),
+            offset: fullOffset - start,
+        };
+    }
+    /** Resolves the PDF position under a pointer event. */
+    function getSyncTexPointer(event) {
+        const viewer = getViewer();
+        if (!viewer || isInteractivePointerTarget(event.target)) {
+            return undefined;
+        }
+        const eventPath = event.composedPath();
+        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
+            if (!eventPath.includes(pageView.div)) {
+                continue;
+            }
+            pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
+            const bounds = pageView.div.getBoundingClientRect();
+            const viewportX = event.clientX - bounds.left - pageView.div.clientLeft;
+            const viewportY = event.clientY - bounds.top - pageView.div.clientTop;
+            if (viewportX < 0
+                || viewportX > pageView.div.clientWidth
+                || viewportY < 0
+                || viewportY > pageView.div.clientHeight) {
+                continue;
+            }
+            const [x, pdfY] = pageView.viewport.convertToPdfPoint(viewportX, viewportY);
+            const viewBox = pageView.viewport.viewBox;
+            if (viewBox.length < 4 || !viewBox.slice(0, 4).every(Number.isFinite)) {
+                continue;
+            }
+            const userUnit = Number.isFinite(pageView.viewport.userUnit) && pageView.viewport.userUnit > 0
+                ? pageView.viewport.userUnit
+                : 1;
+            const syncTexX = (x - viewBox[0]) * userUnit;
+            const syncTexY = (viewBox[3] - pdfY) * userUnit;
+            if (!Number.isFinite(syncTexX) || !Number.isFinite(syncTexY)) {
+                continue;
+            }
+            const textHint = getSyncTexTextHint(event, pageView);
+            return textHint
+                ? { pageNumber: pageView.id, x: syncTexX, y: syncTexY, ...textHint }
+                : { pageNumber: pageView.id, x: syncTexX, y: syncTexY };
+        }
+        return undefined;
+    }
+    /** Sends the PDF position for the configured inverse SyncTeX trigger. */
+    function handleSyncTexPointer(event, trigger) {
+        if (event.button !== (trigger === "doubleClick" ? 0 : 2)) {
+            return;
+        }
+        const point = getSyncTexPointer(event);
+        if (point) {
+            vscode.postMessage({ type: "synctex.inverse", ...point, trigger });
+        }
+    }
+    function configureSyncTexMode(mode) {
+        syncTexMode = mode;
+        vscode.postMessage({ type: "synctex.inverseClear" });
+    }
+    function handleSyncTexDoubleClick(event) {
+        if (syncTexMode !== "doubleclick") {
+            return;
+        }
+        handleSyncTexPointer(event, "doubleClick");
+    }
+    function handleSyncTexContextMenu(event) {
+        vscode.postMessage({ type: "synctex.inverseClear" });
+        if (syncTexMode !== "rightclick") {
+            return;
+        }
+        handleSyncTexPointer(event, "rightClick");
+    }
+    function readSyncTexConfig() {
+        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
+        try {
+            const settings = JSON.parse(value || "{}");
+            return settings.syncTexMode === "off" || settings.syncTexMode === "rightclick"
+                ? settings.syncTexMode
+                : "doubleclick";
+        }
+        catch {
+            return "doubleclick";
+        }
+    }
     function consumeMouseNavigation(event) {
         if (mouseNavigationEnabled && mouseNavigationDirection(event)) {
             consumeMouseEvent(event);
@@ -472,11 +617,14 @@
         await app.initializedPromise;
         history = new NavigationHistory(restoreLocation);
         patchExplicitNavigation(app);
+        setSyncTexPageContexts();
+        app.eventBus.on("pagesinit", setSyncTexPageContexts);
         app.eventBus.on("documentloaded", () => {
             if (history) {
                 history.reset();
             }
             patchExplicitNavigation(app);
+            setSyncTexPageContexts();
         });
         window.addEventListener("message", event => handleNavigationMessage(event.data));
         window.addEventListener("keydown", handleKeyDown, true);

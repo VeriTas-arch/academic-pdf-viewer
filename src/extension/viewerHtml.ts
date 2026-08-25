@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as vscode from 'vscode';
 
-import type { MouseButtonMapping, SidebarView } from '../shared/protocol';
+import type { MouseButtonMapping, SidebarView, SyncTexMode } from '../shared/protocol';
 
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
 
@@ -14,6 +14,7 @@ interface ViewerHtmlOptions {
     mouseNavigationEnabled: boolean;
     mouseButtonMapping: MouseButtonMapping;
     defaultSidebar: SidebarView;
+    syncTexMode: SyncTexMode;
 }
 
 export function readViewerHtml(context: vscode.ExtensionContext): string {
@@ -70,6 +71,7 @@ export function renderViewerHtml(
         mouseNavigationEnabled: options.mouseNavigationEnabled,
         mouseButtonMapping: options.mouseButtonMapping,
         defaultSidebar: options.defaultSidebar,
+        syncTexMode: options.syncTexMode,
     };
     const config = escapeHtmlAttribute(JSON.stringify(settings));
 

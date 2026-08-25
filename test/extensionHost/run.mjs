@@ -8,7 +8,7 @@ const extensionDevelopmentPath = path.resolve(testDirectory, '..', '..');
 
 try {
     await runTests({
-        version: '1.133.0',
+        version: '1.134.0',
         extensionDevelopmentPath,
         extensionTestsPath: path.join(testDirectory, 'suite.cjs'),
         launchArgs: [

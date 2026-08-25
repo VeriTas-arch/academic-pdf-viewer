@@ -53,3 +53,37 @@ test('PDF navigation has scoped, user-rebindable defaults', () => {
         );
     }
 });
+
+test('built-in SyncTeX bridge is opt-in and has discoverable source actions without a default keybinding', () => {
+    const commands = packageJson.contributes?.commands ?? [];
+    const keybindings = packageJson.contributes?.keybindings ?? [];
+    const menus = packageJson.contributes?.menus ?? {};
+    const properties = packageJson.contributes?.configuration?.properties ?? {};
+    const command = 'academicPdfViewer.tex.synctexForwardFromCursor';
+    const when = 'config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex';
+
+    for (const [setting, defaultValue] of [
+        ['academicPdfViewer.tex.bridge.enabled', false],
+        ['academicPdfViewer.tex.bridge.executable', 'synctex'],
+        ['academicPdfViewer.tex.bridge.pdfPath', ''],
+    ]) {
+        assert.equal(properties[setting]?.default, defaultValue);
+        assert.equal(properties[setting]?.scope, 'window');
+        assert.equal(properties[setting]?.restricted, true);
+    }
+    assert(
+        commands.some(contribution => contribution.command === command && contribution.enablement === when),
+        'Missing the scoped SyncTeX forward command contribution.',
+    );
+    for (const menu of ['commandPalette', 'editor/title', 'editor/context']) {
+        assert(
+            (menus[menu] ?? []).some(contribution => contribution.command === command && contribution.when === when),
+            `Missing the scoped SyncTeX forward action in ${menu}.`,
+        );
+    }
+    assert.equal(
+        keybindings.some(binding => binding.command === command),
+        false,
+        'The SyncTeX bridge must not claim a default keybinding.',
+    );
+});
