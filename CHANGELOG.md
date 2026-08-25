@@ -2,6 +2,24 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.3.0] - 2026-08-25
+
+### Added
+
+- Added a validated bidirectional SyncTeX transport API for forward PDF targets and inverse source requests, including optional line boxes and PDF text hints.
+- Added an opt-in local SyncTeX command-line bridge for trusted workspaces, with configurable executable and PDF paths plus discoverable `.tex` editor actions without a default keybinding.
+- Added a transient forward-search marker that highlights the complete SyncTeX line box when available.
+
+### Changed
+
+- Raised the minimum supported VS Code version to 1.134 to match the extension host and proposed API contract used by this release.
+
+### Fixed
+
+- Corrected forward-search coordinates for PDF page view boxes and user units, and queued requests until lazy PDF pages finish loading.
+- Improved inverse search by recovering precise source columns from PDF text hints when SyncTeX reports an unknown column, with whole-line selection as a safe fallback.
+- Scoped inverse right-click actions to PDF pages and made forward requests latest-wins across reloads and duplicate editor panels.
+
 ## [1.2.3] - 2026-08-22
 
 ### Added
