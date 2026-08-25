@@ -14,6 +14,7 @@ interface ViewerHtmlOptions {
     mouseNavigationEnabled: boolean;
     mouseButtonMapping: MouseButtonMapping;
     defaultSidebar: SidebarView;
+    syncTexMode: 'off' | 'doubleclick' | 'rightclick';
 }
 
 export function readViewerHtml(context: vscode.ExtensionContext): string {
@@ -70,6 +71,7 @@ export function renderViewerHtml(
         mouseNavigationEnabled: options.mouseNavigationEnabled,
         mouseButtonMapping: options.mouseButtonMapping,
         defaultSidebar: options.defaultSidebar,
+        syncTexMode: options.syncTexMode,
     };
     const config = escapeHtmlAttribute(JSON.stringify(settings));
 

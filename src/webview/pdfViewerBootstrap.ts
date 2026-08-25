@@ -10,6 +10,7 @@
         wasmUrl: string;
         workerSrc: string;
         defaultSidebar?: unknown;
+        syncTexMode?: 'off' | 'doubleclick' | 'rightclick';
     }
 
     interface ViewerOptions {
@@ -42,6 +43,13 @@
         type: "sidebar.configure";
         defaultSidebar: AcademicSidebarView;
     }
+
+    type SyncTexForwardMessage = {
+        type: "synctex.forward";
+        pageNumber: number;
+        x: number;
+        y: number;
+    };
 
     interface PendingFirstPageRender {
         fingerprint: string;
@@ -157,6 +165,37 @@
         const message = value as Record<string, unknown>;
         return message.type === "sidebar.configure"
             && isSidebarView(message.defaultSidebar);
+    }
+
+    /** Navigates to a SyncTeX location without changing the current zoom. */
+    function applySyncTexForward(message: SyncTexForwardMessage, application: PdfJsApplication): void {
+        const viewer = application.pdfViewer;
+        if (!viewer || message.pageNumber > viewer.pagesCount) {
+            return;
+        }
+
+        void viewer.pagesPromise.then(() => {
+            if (message.pageNumber > viewer.pagesCount) {
+                return;
+            }
+            const pageView = viewer.getPageView(message.pageNumber - 1);
+            const pageHeight = pageView?.viewport.viewBox[3];
+            if (typeof pageHeight !== "number" || !Number.isFinite(pageHeight)) {
+                return;
+            }
+            viewer.scrollPageIntoView({
+                pageNumber: message.pageNumber,
+                destArray: [
+                    null,
+                    { name: "XYZ" },
+                    message.x,
+                    pageHeight - message.y,
+                    null,
+                ],
+                allowNegativeOffset: true,
+                ignoreDestinationZoom: true,
+            });
+        });
     }
 
     function isSidebarView(value: unknown): value is AcademicSidebarView {
@@ -410,6 +449,20 @@
             });
         };
         window.addEventListener("message", (event: MessageEvent<unknown>) => {
+            if (typeof event.data === "object"
+                && event.data !== null
+                && (event.data as { type?: unknown }).type === "synctex.configure") {
+                window.dispatchEvent(new CustomEvent("academic-pdf-synctex-configure", {
+                    detail: (event.data as { mode?: unknown }).mode,
+                }));
+                return;
+            }
+            if (typeof event.data === "object"
+                && event.data !== null
+                && (event.data as { type?: unknown }).type === "synctex.forward") {
+                applySyncTexForward(event.data as SyncTexForwardMessage, application);
+                return;
+            }
             if (isSidebarConfigureMessage(event.data)) {
                 defaultSidebar = event.data.defaultSidebar;
                 if (application.pdfDocument) {

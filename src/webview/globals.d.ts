@@ -6,9 +6,11 @@ interface PdfJsEventBus {
 interface PdfJsViewport {
     width: number;
     height: number;
+    viewBox: number[];
     scale: number;
     transform: number[];
     convertToViewportPoint(x: number, y: number): number[];
+    convertToPdfPoint(x: number, y: number): number[];
 }
 
 interface PdfJsTextItem {

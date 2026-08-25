@@ -63,6 +63,14 @@
                 "icon": "$(refresh)"
             },
             {
+                "command": "academicPdfViewer.tex.synctexForward",
+                "title": "PDF: SyncTeX Forward Search"
+            },
+            {
+                "command": "academicPdfViewer.tex.synctexInverse",
+                "title": "PDF: SyncTeX Inverse Search"
+            },
+            {
                 "command": "academicPdfViewer.toggleLinkPreview",
                 "title": "PDF: Toggle Link Preview",
                 "enablement": "activeCustomEditorId == academicPdfViewer.pdf"
@@ -157,10 +165,33 @@
                     "default": "pages",
                     "scope": "window",
                     "description": "Choose the view selected when the PDF sidebar opens. Unavailable views fall back to Pages."
+                },
+                "academicPdfViewer.tex.synctex": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "doubleclick",
+                        "rightclick"
+                    ],
+                    "enumDescriptions": [
+                        "Disable inverse SyncTeX from the PDF viewer.",
+                        "Send inverse SyncTeX on a double-click.",
+                        "Show a context-menu entry for inverse SyncTeX after a right-click."
+                    ],
+                    "default": "doubleclick",
+                    "scope": "window",
+                    "description": "Choose how inverse SyncTeX is triggered from the PDF viewer."
                 }
             }
         },
         "menus": {
+            "webview/context": [
+                {
+                    "command": "academicPdfViewer.tex.synctexInverse",
+                    "when": "webviewId == academicPdfViewer.pdf && config.academicPdfViewer.tex.synctex == rightclick",
+                    "group": "navigation@1"
+                }
+            ],
             "editor/title": [
                 {
                     "command": "academicPdfViewer.reload",
