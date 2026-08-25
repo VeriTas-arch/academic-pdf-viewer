@@ -1,8 +1,17 @@
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
-    | Omit<SyncTexRequest, 'pdfUri' | 'type'> & { type: 'synctex.forward' }
-    | { type: 'synctex.configure'; mode: 'off' | 'doubleclick' | 'rightclick' }
+    | {
+        type: 'synctex.forward';
+        requestId: string;
+        loadId: number;
+        pageNumber: number;
+        x: number;
+        y: number;
+        targetBox?: SyncTexTargetBox;
+    }
+    | { type: 'synctex.forwardCancel'; requestId: string; loadId: number }
+    | { type: 'synctex.configure'; mode: SyncTexMode }
     | { type: 'navigation.configure'; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping }
     | { type: 'sidebar.configure'; defaultSidebar: SidebarView }
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
@@ -87,14 +96,34 @@ export function normalizeLinkPreviewResolutionScale(value: unknown): number {
 export type NavigationDirection = 'back' | 'forward';
 export type MouseButtonMapping = 'standard' | 'swapped';
 export type SidebarView = 'pages' | 'outline' | 'attachments' | 'layers';
+export type SyncTexMode = 'off' | 'doubleclick' | 'rightclick';
+export type SyncTexTrigger = 'doubleClick' | 'rightClick';
 
-export interface SyncTexRequest {
-    type: 'synctex.forward' | 'synctex.inverse';
-    pdfUri?: string;
+export interface SyncTexTargetBox {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface SyncTexForwardRequest {
+    type: 'synctex.forward';
+    pdfUri: string;
     pageNumber: number;
     x: number;
     y: number;
-    trigger?: 'doubleClick' | 'rightClick';
+    targetBox?: SyncTexTargetBox;
+}
+
+export interface SyncTexInverseEvent {
+    type: 'synctex.inverse';
+    pdfUri: string;
+    pageNumber: number;
+    x: number;
+    y: number;
+    trigger: SyncTexTrigger;
+    context?: string;
+    offset?: number;
 }
 
 const pdfDebugEventValues = [
@@ -120,7 +149,14 @@ type PdfDebugEvent = typeof pdfDebugEventValues[number];
 export type WebviewToExtensionMessage =
     | { type: 'navigation.request'; direction: NavigationDirection }
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
-    | SyncTexRequest
+    | Omit<SyncTexInverseEvent, 'pdfUri'>
+    | { type: 'synctex.inverseClear' }
+    | {
+        type: 'synctex.forwardResult';
+        requestId: string;
+        loadId: number;
+        status: 'applied' | 'rejected';
+    }
     | { type: 'workbench.openFile' }
     | { type: 'workbench.quickOpen' }
     | { type: 'workbench.showCommands' }
@@ -181,7 +217,14 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
             return isPageNumber(value.pageNumber)
                 && isFiniteCoordinate(value.x)
                 && isFiniteCoordinate(value.y)
-                && (value.trigger === 'doubleClick' || value.trigger === 'rightClick');
+                && (value.trigger === 'doubleClick' || value.trigger === 'rightClick')
+                && isSyncTexTextHint(value);
+        case 'synctex.inverseClear':
+            return true;
+        case 'synctex.forwardResult':
+            return isSyncTexRequestId(value.requestId)
+                && isSessionId(value.loadId)
+                && (value.status === 'applied' || value.status === 'rejected');
         case 'workbench.openFile':
         case 'workbench.quickOpen':
         case 'workbench.showCommands':
@@ -243,6 +286,32 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
     }
 }
 
+export function isSyncTexForwardRequest(value: unknown): value is SyncTexForwardRequest {
+    if (!isRecord(value)) {
+        return false;
+    }
+    return value.type === 'synctex.forward'
+        && typeof value.pdfUri === 'string'
+        && value.pdfUri.length > 0
+        && isPageNumber(value.pageNumber)
+        && isFiniteCoordinate(value.x)
+        && isFiniteCoordinate(value.y)
+        && isSyncTexTargetBox(value.targetBox);
+}
+
+function isSyncTexTargetBox(value: unknown): value is SyncTexTargetBox | undefined {
+    if (value === undefined) {
+        return true;
+    }
+    return isRecord(value)
+        && isFiniteCoordinate(value.x)
+        && isFiniteCoordinate(value.y)
+        && isFiniteCoordinate(value.width)
+        && value.width > 0
+        && isFiniteCoordinate(value.height)
+        && value.height > 0;
+}
+
 function isPageNumber(value: unknown): value is number {
     return typeof value === 'number'
         && Number.isSafeInteger(value)
@@ -253,6 +322,24 @@ function isSessionId(value: unknown): value is number {
     return typeof value === 'number'
         && Number.isSafeInteger(value)
         && value >= 1;
+}
+
+function isSyncTexRequestId(value: unknown): value is string {
+    return typeof value === 'string' && value.length > 0 && value.length <= 64;
+}
+
+function isSyncTexTextHint(value: Record<string, unknown>): boolean {
+    if (value.context === undefined && value.offset === undefined) {
+        return true;
+    }
+    return typeof value.context === 'string'
+        && value.context.length > 0
+        && value.context.length <= 256
+        && !/[\0\r\n]/.test(value.context)
+        && typeof value.offset === 'number'
+        && Number.isSafeInteger(value.offset)
+        && value.offset >= 0
+        && value.offset <= value.context.length;
 }
 
 function isDiffRole(value: unknown): value is DiffRole {

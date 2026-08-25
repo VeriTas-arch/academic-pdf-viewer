@@ -8,6 +8,7 @@ interface PdfJsViewport {
     height: number;
     viewBox: number[];
     scale: number;
+    userUnit: number;
     transform: number[];
     convertToViewportPoint(x: number, y: number): number[];
     convertToPdfPoint(x: number, y: number): number[];
@@ -67,8 +68,10 @@ interface PdfJsDocument {
 interface PdfJsPageView {
     id: number;
     div: HTMLElement;
+    pdfPage?: PdfJsPage;
     renderingState: number;
     viewport: PdfJsViewport;
+    setPdfPage(page: PdfJsPage): void;
 }
 
 interface PdfJsViewer {
@@ -80,11 +83,13 @@ interface PdfJsViewer {
     pagesCount: number;
     pagesPromise: Promise<void>;
     getPageView(index: number): PdfJsPageView | undefined;
+    update(): void;
     scrollPageIntoView(options: {
         pageNumber: number;
         destArray: unknown[];
         allowNegativeOffset: boolean;
         ignoreDestinationZoom: boolean;
+        center?: "vertical" | "horizontal" | "both";
     }): void;
 }
 

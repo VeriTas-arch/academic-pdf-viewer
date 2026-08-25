@@ -1,4 +1,3 @@
-import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import {
@@ -12,7 +11,9 @@ import {
     type MouseButtonMapping,
     type NavigationDirection,
     type SidebarView,
-    type SyncTexRequest,
+    type SyncTexForwardRequest,
+    type SyncTexInverseEvent,
+    type SyncTexMode,
     type WebviewToExtensionMessage,
 } from '../shared/protocol';
 import type { DevLogger } from './devLogger';
@@ -23,17 +24,21 @@ import { readViewerHtml, renderViewerHtml } from './viewerHtml';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
 
-export type SyncTexInverseEvent = SyncTexRequest & {
-    type: 'synctex.inverse';
-    pdfUri: string;
-    trigger: 'doubleClick' | 'rightClick';
-};
-
 interface PendingSyncTexContextMenu {
-    panel: vscode.WebviewPanel;
     pageNumber: number;
     x: number;
     y: number;
+    context?: string;
+    offset?: number;
+}
+
+interface PendingSyncTexForward {
+    requestId: string;
+    pageNumber: number;
+    x: number;
+    y: number;
+    targetBox?: SyncTexForwardRequest['targetBox'];
+    postedLoadId?: number;
 }
 
 function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
@@ -72,13 +77,17 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private readonly panelDocuments = new Map<vscode.WebviewPanel, PdfDocument>();
     private readonly diffSessionsByPanel = new Map<vscode.WebviewPanel, DiffPairSession>();
     private readonly latestDocumentLoadByPanel = new Map<vscode.WebviewPanel, number>();
+    private readonly postedDocumentLoadByPanel = new Map<vscode.WebviewPanel, number>();
     private readonly navigationKeyLocks = new Map<NavigationDirection, ReturnType<typeof setTimeout>>();
+    private readonly readyWebviews = new Set<vscode.WebviewPanel>();
+    private readonly pendingSyncTexForwards = new Map<vscode.WebviewPanel, PendingSyncTexForward>();
+    private readonly pendingSyncTexContextMenus = new Map<vscode.WebviewPanel, PendingSyncTexContextMenu>();
     private nextDiffSessionId = 1;
     private nextDocumentLoadId = 1;
+    private nextSyncTexRequestId = 1;
     private activePanel: vscode.WebviewPanel | undefined;
     private readonly viewerHtml: string;
     private readonly inverseSyncTexEmitter = new vscode.EventEmitter<SyncTexInverseEvent>();
-    private pendingSyncTexContextMenu: PendingSyncTexContextMenu | undefined;
 
     /** Emits validated inverse SyncTeX requests from the PDF webview. */
     readonly onDidRequestInverseSyncTex = this.inverseSyncTexEmitter.event;
@@ -127,6 +136,12 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             panel.onDidChangeViewState(event => {
                 if (event.webviewPanel.active) {
                     this.setActivePanel(event.webviewPanel);
+                } else {
+                    this.pendingSyncTexContextMenus.delete(event.webviewPanel);
+                }
+                if (!event.webviewPanel.visible) {
+                    this.readyWebviews.delete(event.webviewPanel);
+                    this.cancelPostedSyncTexForward(event.webviewPanel);
                 }
             }),
         );
@@ -136,10 +151,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 disposable.dispose();
             }
             this.panelDocuments.delete(panel);
-            if (this.pendingSyncTexContextMenu?.panel === panel) {
-                this.pendingSyncTexContextMenu = undefined;
-            }
+            this.readyWebviews.delete(panel);
+            this.pendingSyncTexForwards.delete(panel);
+            this.pendingSyncTexContextMenus.delete(panel);
             this.latestDocumentLoadByPanel.delete(panel);
+            this.postedDocumentLoadByPanel.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
                 this.activePanel = this.panelDocuments.keys().next().value;
@@ -324,20 +340,28 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         void this.activePanel?.webview.postMessage(message);
     }
 
-    /** Sends a forward SyncTeX location to the matching PDF editor panel. */
-    synctexForward(request: SyncTexRequest): boolean {
-        const entry = [...this.panelDocuments.entries()]
-            .find(([, document]) => this.workspaceRelativePdfPath(document.uri) === request.pdfUri);
-        if (!entry) {
+    /** Queues a forward SyncTeX location for the best matching PDF editor panel. */
+    synctexForward(request: SyncTexForwardRequest): boolean {
+        const panel = this.findSyncTexPanel(request.pdfUri);
+        if (!panel) {
             return false;
         }
 
-        void entry[0].webview.postMessage({
-            type: 'synctex.forward',
+        const targetUri = this.panelDocuments.get(panel)?.uri.toString();
+        for (const [candidate, document] of this.panelDocuments) {
+            if (document.uri.toString() === targetUri) {
+                this.cancelPostedSyncTexForward(candidate);
+                this.pendingSyncTexForwards.delete(candidate);
+            }
+        }
+        this.pendingSyncTexForwards.set(panel, {
+            requestId: String(this.nextSyncTexRequestId++),
             pageNumber: request.pageNumber,
             x: request.x,
             y: request.y,
-        } satisfies ExtensionToWebviewMessage);
+            ...(request.targetBox ? { targetBox: { ...request.targetBox } } : {}),
+        });
+        this.postPendingSyncTexForward(panel);
         return true;
     }
 
@@ -461,10 +485,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     /** Applies the current SyncTeX trigger mode to all open PDF webviews. */
     refreshSyncTexConfiguration(): void {
         for (const [panel, document] of this.panelDocuments) {
-            void panel.webview.postMessage({
-                type: 'synctex.configure',
-                mode: this.getSyncTexMode(document.uri),
-            } satisfies ExtensionToWebviewMessage);
+            const mode = this.getSyncTexMode(document.uri);
+            this.pendingSyncTexContextMenus.delete(panel);
+            this.postSyncTexConfiguration(panel, mode);
         }
     }
 
@@ -478,18 +501,57 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 ...describePdfUri(document.uri),
                 bytes: document.data.byteLength,
             });
+            this.readyWebviews.add(panel);
+            this.pendingSyncTexContextMenus.delete(panel);
+            this.postSyncTexConfiguration(panel, this.getSyncTexMode(document.uri));
             void this.postDocument(panel, document, false).catch(() => undefined);
+        } else if (message.type === 'synctex.forwardResult') {
+            const pending = this.pendingSyncTexForwards.get(panel);
+            if (!pending
+                || pending.requestId !== message.requestId
+                || pending.postedLoadId !== message.loadId) {
+                return;
+            }
+            this.pendingSyncTexForwards.delete(panel);
+            const fields = {
+                requestId: message.requestId,
+                loadId: message.loadId,
+                status: message.status,
+                ...describePdfUri(document.uri),
+            };
+            if (message.status === 'applied') {
+                this.logger?.info('synctex.forward.applied', fields);
+            } else {
+                this.logger?.warn('synctex.forward.rejected', fields);
+            }
+        } else if (message.type === 'synctex.inverseClear') {
+            this.pendingSyncTexContextMenus.delete(panel);
         } else if (message.type === 'synctex.inverse') {
+            const mode = this.getSyncTexMode(document.uri);
+            const expectedMode = message.trigger === 'rightClick' ? 'rightclick' : 'doubleclick';
+            if (mode !== expectedMode) {
+                this.pendingSyncTexContextMenus.delete(panel);
+                return;
+            }
             if (message.trigger === 'rightClick') {
-                this.pendingSyncTexContextMenu = { panel, ...message };
+                this.pendingSyncTexContextMenus.set(panel, {
+                    pageNumber: message.pageNumber,
+                    x: message.x,
+                    y: message.y,
+                    context: message.context,
+                    offset: message.offset,
+                });
             } else {
                 this.inverseSyncTexEmitter.fire({
                     type: 'synctex.inverse',
-                    pdfUri: this.workspaceRelativePdfPath(document.uri),
+                    pdfUri: document.uri.toString(),
                     pageNumber: message.pageNumber,
                     x: message.x,
                     y: message.y,
                     trigger: 'doubleClick',
+                    ...(message.context !== undefined && message.offset !== undefined
+                        ? { context: message.context, offset: message.offset }
+                        : {}),
                 } satisfies SyncTexInverseEvent);
             }
         } else if (message.type === 'diff.pageResult') {
@@ -612,6 +674,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             } satisfies ExtensionToWebviewMessage);
             const resultFields = { ...fields, delivered, durationMs: Date.now() - startedAt };
             if (delivered) {
+                if (this.latestDocumentLoadByPanel.get(panel) === loadId) {
+                    this.postedDocumentLoadByPanel.set(panel, loadId);
+                    this.postPendingSyncTexForward(panel);
+                }
                 this.logger?.info('webview.document.posted', resultFields);
             } else {
                 this.logger?.warn('webview.document.notDelivered', resultFields);
@@ -662,6 +728,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         const loadId = this.nextDocumentLoadId++;
         for (const panel of panels) {
             this.latestDocumentLoadByPanel.set(panel, loadId);
+            this.postedDocumentLoadByPanel.delete(panel);
+            this.pendingSyncTexContextMenus.delete(panel);
+            this.cancelPostedSyncTexForward(panel);
         }
         return loadId;
     }
@@ -709,6 +778,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     private setActivePanel(panel: vscode.WebviewPanel): void {
+        if (this.activePanel !== panel) {
+            this.pendingSyncTexContextMenus.clear();
+        }
         this.activePanel = panel;
         this.refreshDiffContext();
     }
@@ -781,41 +853,129 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     /** Emits inverse SyncTeX for the position selected through the context menu. */
     async inverseSyncTexFromContextMenu(): Promise<boolean> {
-        const pending = this.pendingSyncTexContextMenu;
-        this.pendingSyncTexContextMenu = undefined;
-        if (!pending) {
+        const panel = this.activePanel;
+        if (!panel || !panel.active) {
             return false;
         }
-        const document = this.panelDocuments.get(pending.panel);
-        if (!document) {
+
+        const pending = this.pendingSyncTexContextMenus.get(panel);
+        this.pendingSyncTexContextMenus.delete(panel);
+        const document = this.panelDocuments.get(panel);
+        if (!pending
+            || !document
+            || this.getSyncTexMode(document.uri) !== 'rightclick') {
             return false;
         }
         this.inverseSyncTexEmitter.fire({
             type: 'synctex.inverse',
-            pdfUri: this.workspaceRelativePdfPath(document.uri),
+            pdfUri: document.uri.toString(),
             pageNumber: pending.pageNumber,
             x: pending.x,
             y: pending.y,
             trigger: 'rightClick',
+            ...(pending.context !== undefined && pending.offset !== undefined
+                ? { context: pending.context, offset: pending.offset }
+                : {}),
         });
         return true;
     }
 
     /** Returns the configured inverse SyncTeX trigger mode. */
-    private getSyncTexMode(documentUri: vscode.Uri): 'off' | 'doubleclick' | 'rightclick' {
+    private getSyncTexMode(documentUri: vscode.Uri): SyncTexMode {
         const value = vscode.workspace
             .getConfiguration('academicPdfViewer', documentUri)
             .get<string>('tex.synctex', 'doubleclick');
         return value === 'off' || value === 'rightclick' ? value : 'doubleclick';
     }
 
-    /** Returns a normalized workspace-relative PDF identifier. */
-    private workspaceRelativePdfPath(uri: vscode.Uri): string {
-        const workspace = vscode.workspace.getWorkspaceFolder(uri);
-        if (!workspace) {
-            return path.basename(uri.fsPath);
+    private findSyncTexPanel(pdfUri: string): vscode.WebviewPanel | undefined {
+        let canonicalUri: string;
+        try {
+            canonicalUri = vscode.Uri.parse(pdfUri, true).toString();
+        } catch {
+            return undefined;
         }
-        return path.relative(workspace.uri.fsPath, uri.fsPath).split(path.sep).join('/');
+        if (canonicalUri !== pdfUri) {
+            return undefined;
+        }
+
+        const matches = [...this.panelDocuments.entries()]
+            .filter(([, document]) => document.uri.toString() === canonicalUri);
+        const currentPanel = matches.find(([panel]) => panel.active)?.[0];
+        if (currentPanel) {
+            return currentPanel;
+        }
+
+        const recentPanel = this.activePanel
+            && matches.some(([panel]) => panel === this.activePanel)
+            ? this.activePanel
+            : undefined;
+        return recentPanel?.visible
+            ? recentPanel
+            : matches.find(([panel]) => panel.visible)?.[0] ?? recentPanel ?? matches[0]?.[0];
+    }
+
+    private postSyncTexConfiguration(panel: vscode.WebviewPanel, mode: SyncTexMode): void {
+        void panel.webview.postMessage({
+            type: 'synctex.configure',
+            mode,
+        } satisfies ExtensionToWebviewMessage);
+    }
+
+    private postPendingSyncTexForward(panel: vscode.WebviewPanel): void {
+        const pending = this.pendingSyncTexForwards.get(panel);
+        const loadId = this.postedDocumentLoadByPanel.get(panel);
+        if (!pending
+            || loadId === undefined
+            || pending.postedLoadId === loadId
+            || !panel.visible
+            || !this.readyWebviews.has(panel)) {
+            return;
+        }
+
+        pending.postedLoadId = loadId;
+        void panel.webview.postMessage({
+            type: 'synctex.forward',
+            requestId: pending.requestId,
+            loadId,
+            pageNumber: pending.pageNumber,
+            x: pending.x,
+            y: pending.y,
+            ...(pending.targetBox ? { targetBox: pending.targetBox } : {}),
+        } satisfies ExtensionToWebviewMessage).then(delivered => {
+            const current = this.pendingSyncTexForwards.get(panel);
+            if (!delivered
+                && current?.requestId === pending.requestId
+                && current.postedLoadId === loadId) {
+                current.postedLoadId = undefined;
+                this.readyWebviews.delete(panel);
+            }
+        }, error => {
+            const current = this.pendingSyncTexForwards.get(panel);
+            if (current?.requestId === pending.requestId
+                && current.postedLoadId === loadId) {
+                current.postedLoadId = undefined;
+            }
+            this.logger?.error('synctex.forward.failed', error, {
+                requestId: pending.requestId,
+                loadId,
+            });
+        });
+    }
+
+    private cancelPostedSyncTexForward(panel: vscode.WebviewPanel): void {
+        const pending = this.pendingSyncTexForwards.get(panel);
+        const loadId = pending?.postedLoadId;
+        if (!pending || loadId === undefined) {
+            return;
+        }
+
+        pending.postedLoadId = undefined;
+        void panel.webview.postMessage({
+            type: 'synctex.forwardCancel',
+            requestId: pending.requestId,
+            loadId,
+        } satisfies ExtensionToWebviewMessage);
     }
 
     private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {

@@ -15,6 +15,17 @@
         pdfTop: number | null;
     }
 
+    interface SyncTexTextHint {
+        context: string;
+        offset: number;
+    }
+
+    interface SyncTexPointer extends Partial<SyncTexTextHint> {
+        pageNumber: number;
+        x: number;
+        y: number;
+    }
+
     type NavigationMessage =
         | { type: "navigation.back" }
         | { type: "navigation.forward" }
@@ -25,6 +36,7 @@
     const initialMouseNavigation = readMouseNavigationConfig();
     let mouseNavigationEnabled = initialMouseNavigation.enabled;
     let mouseButtonMapping = initialMouseNavigation.mapping;
+    let syncTexMode: "off" | "doubleclick" | "rightclick" = "off";
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
     }, { once: true });
@@ -36,6 +48,8 @@
     });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
     window.addEventListener("mousedown", handleMouseNavigation, true);
+    window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
+    window.addEventListener("contextmenu", handleSyncTexContextMenu, true);
     configureSyncTexMode(readSyncTexConfig());
     window.addEventListener("academic-pdf-synctex-configure", event => {
         const mode = (event as CustomEvent<unknown>).detail;
@@ -344,34 +358,124 @@
         vscode.postMessage({ type: "navigation.request", direction });
     }
 
-    /** Resolves the PDF position under a pointer event. */
-    function getSyncTexPointer(event: MouseEvent): { pageNumber: number; x: number; y: number } | undefined {
+    const syncTexPageContext = JSON.stringify({ webviewSection: "pdfPage" });
 
+    function setSyncTexPageContexts(): void {
         const viewer = getViewer();
         if (!viewer) {
+            return;
+        }
+        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
+            pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
+        }
+    }
+
+    function isInteractivePointerTarget(target: EventTarget | null): boolean {
+        return target instanceof Element
+            && target.closest(
+                "a, button, input, textarea, select, option, [contenteditable]:not([contenteditable='false'])",
+            ) !== null;
+    }
+
+    function getSyncTexTextHint(
+        event: MouseEvent,
+        pageView: PdfJsPageView,
+    ): SyncTexTextHint | undefined {
+        const textElement = document.elementsFromPoint(event.clientX, event.clientY)
+            .map(element => element.closest(".textLayer span"))
+            .find((element): element is HTMLElement => (
+                element instanceof HTMLElement && pageView.div.contains(element)
+            ));
+        if (!textElement) {
             return undefined;
         }
 
+        const caretDocument = document as Document & {
+            caretPositionFromPoint?: (
+                x: number,
+                y: number,
+            ) => { offsetNode: Node; offset: number } | null;
+            caretRangeFromPoint?: (x: number, y: number) => Range | null;
+        };
+        const caretPosition = caretDocument.caretPositionFromPoint?.(event.clientX, event.clientY);
+        const caretRange = caretPosition
+            ? undefined
+            : caretDocument.caretRangeFromPoint?.(event.clientX, event.clientY);
+        const offsetNode = caretPosition?.offsetNode ?? caretRange?.startContainer;
+        const offset = caretPosition?.offset ?? caretRange?.startOffset;
+        if (!offsetNode || offset === undefined || !textElement.contains(offsetNode)) {
+            return undefined;
+        }
+
+        const context = textElement.textContent ?? "";
+        if (context.length === 0 || context.trim().length === 0 || /[\0\r\n]/.test(context)) {
+            return undefined;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(textElement);
+        try {
+            range.setEnd(offsetNode, offset);
+        } catch {
+            return undefined;
+        }
+        const fullOffset = range.toString().length;
+        if (fullOffset < 0 || fullOffset > context.length) {
+            return undefined;
+        }
+
+        const maximumContextLength = 256;
+        const initialStart = Math.max(0, fullOffset - Math.floor(maximumContextLength / 2));
+        const start = Math.min(initialStart, Math.max(0, context.length - maximumContextLength));
+        return {
+            context: context.slice(start, start + maximumContextLength),
+            offset: fullOffset - start,
+        };
+    }
+
+    /** Resolves the PDF position under a pointer event. */
+    function getSyncTexPointer(event: MouseEvent): SyncTexPointer | undefined {
+        const viewer = getViewer();
+        if (!viewer || isInteractivePointerTarget(event.target)) {
+            return undefined;
+        }
+
+        const eventPath = event.composedPath();
         for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
+            if (!eventPath.includes(pageView.div)) {
+                continue;
+            }
+            pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
             const bounds = pageView.div.getBoundingClientRect();
-            if (event.clientX < bounds.left
-                || event.clientX > bounds.right
-                || event.clientY < bounds.top
-                || event.clientY > bounds.bottom) {
+            const viewportX = event.clientX - bounds.left - pageView.div.clientLeft;
+            const viewportY = event.clientY - bounds.top - pageView.div.clientTop;
+            if (viewportX < 0
+                || viewportX > pageView.div.clientWidth
+                || viewportY < 0
+                || viewportY > pageView.div.clientHeight) {
                 continue;
             }
 
             const [x, pdfY] = pageView.viewport.convertToPdfPoint(
-                event.clientX - bounds.left,
-                event.clientY - bounds.top,
+                viewportX,
+                viewportY,
             );
-            const pageHeight = pageView.viewport.viewBox[3];
-            const y = pageHeight - pdfY;
-            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            const viewBox = pageView.viewport.viewBox;
+            if (viewBox.length < 4 || !viewBox.slice(0, 4).every(Number.isFinite)) {
+                continue;
+            }
+            const userUnit = Number.isFinite(pageView.viewport.userUnit) && pageView.viewport.userUnit > 0
+                ? pageView.viewport.userUnit
+                : 1;
+            const syncTexX = (x - viewBox[0]) * userUnit;
+            const syncTexY = (viewBox[3] - pdfY) * userUnit;
+            if (!Number.isFinite(syncTexX) || !Number.isFinite(syncTexY)) {
                 continue;
             }
 
-            return { pageNumber: pageView.id, x, y };
+            const textHint = getSyncTexTextHint(event, pageView);
+            return textHint
+                ? { pageNumber: pageView.id, x: syncTexX, y: syncTexY, ...textHint }
+                : { pageNumber: pageView.id, x: syncTexX, y: syncTexY };
         }
         return undefined;
     }
@@ -388,20 +492,22 @@
     }
 
     function configureSyncTexMode(mode: "off" | "doubleclick" | "rightclick"): void {
-        window.removeEventListener("dblclick", handleSyncTexDoubleClick, true);
-        window.removeEventListener("contextmenu", handleSyncTexRightClick, true);
-        if (mode === "doubleclick") {
-            window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
-        } else if (mode === "rightclick") {
-            window.addEventListener("contextmenu", handleSyncTexRightClick, true);
-        }
+        syncTexMode = mode;
+        vscode.postMessage({ type: "synctex.inverseClear" });
     }
 
     function handleSyncTexDoubleClick(event: MouseEvent): void {
+        if (syncTexMode !== "doubleclick") {
+            return;
+        }
         handleSyncTexPointer(event, "doubleClick");
     }
 
-    function handleSyncTexRightClick(event: MouseEvent): void {
+    function handleSyncTexContextMenu(event: MouseEvent): void {
+        vscode.postMessage({ type: "synctex.inverseClear" });
+        if (syncTexMode !== "rightclick") {
+            return;
+        }
         handleSyncTexPointer(event, "rightClick");
     }
 
@@ -630,12 +736,16 @@
         await app.initializedPromise;
         history = new NavigationHistory(restoreLocation);
         patchExplicitNavigation(app);
+        setSyncTexPageContexts();
+
+        app.eventBus.on("pagesinit", setSyncTexPageContexts);
 
         app.eventBus.on("documentloaded", () => {
             if (history) {
                 history.reset();
             }
             patchExplicitNavigation(app);
+            setSyncTexPageContexts();
         });
 
         window.addEventListener("message", event => handleNavigationMessage(event.data));

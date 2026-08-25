@@ -4,14 +4,17 @@ import { createDevLogger } from './extension/devLogger';
 import {
     PDF_VIEW_TYPE,
     PdfEditorProvider,
-    type SyncTexInverseEvent,
 } from './extension/pdfEditorProvider';
-import type { SyncTexRequest } from './shared/protocol';
+import {
+    isSyncTexForwardRequest,
+    type SyncTexForwardRequest,
+    type SyncTexInverseEvent,
+} from './shared/protocol';
 
 export interface AcademicPdfViewerApi {
     readonly tex: {
         readonly onDidRequestInverseSyncTex: vscode.Event<SyncTexInverseEvent>;
-        synctexForward(request: SyncTexRequest): boolean;
+        synctexForward(request: SyncTexForwardRequest): boolean;
     };
 }
 
@@ -102,22 +105,4 @@ export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi
             ),
         },
     };
-}
-
-/** Validates an extension API request before forwarding it to a PDF panel. */
-function isSyncTexForwardRequest(value: unknown): value is SyncTexRequest {
-    if (typeof value !== 'object' || value === null) {
-        return false;
-    }
-    const request = value as Record<string, unknown>;
-    return request.type === 'synctex.forward'
-        && typeof request.pdfUri === 'string'
-        && request.pdfUri.length > 0
-        && typeof request.pageNumber === 'number'
-        && Number.isSafeInteger(request.pageNumber)
-        && request.pageNumber >= 1
-        && typeof request.x === 'number'
-        && Number.isFinite(request.x)
-        && typeof request.y === 'number'
-        && Number.isFinite(request.y);
 }

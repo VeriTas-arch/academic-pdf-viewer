@@ -11,7 +11,7 @@
     },
     "license": "MIT",
     "engines": {
-        "vscode": "^1.133.0"
+        "vscode": "^1.134.0"
     },
     "categories": [
         "Visualization",
@@ -188,8 +188,18 @@
             "webview/context": [
                 {
                     "command": "academicPdfViewer.tex.synctexInverse",
-                    "when": "webviewId == academicPdfViewer.pdf && config.academicPdfViewer.tex.synctex == rightclick",
+                    "when": "webviewId == academicPdfViewer.pdf && webviewSection == pdfPage && config.academicPdfViewer.tex.synctex == rightclick",
                     "group": "navigation@1"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "academicPdfViewer.tex.synctexForward",
+                    "when": "false"
+                },
+                {
+                    "command": "academicPdfViewer.tex.synctexInverse",
+                    "when": "false"
                 }
             ],
             "editor/title": [

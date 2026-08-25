@@ -968,6 +968,552 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await originalPage.close();
     });
 
+    await t.test("keeps SyncTeX requests aligned with the loaded PDF and page content", async () => {
+        const syncTexPage = await browser.newPage({ viewport: { width: 640, height: 720 } });
+        const syncTexPageErrors = [];
+        syncTexPage.on("pageerror", error => syncTexPageErrors.push(error.stack || error.message));
+        await syncTexPage.goto(`${origin}/__viewer_test__.html`);
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        const syncTexPageTexts = Array.from({ length: 20 }, (_, index) => `SyncTeX page ${index + 1}`);
+        const syncTexPdf = createTextPdfPagesWithGeometries(
+            syncTexPageTexts,
+            syncTexPageTexts.map((_, index) => index === 19
+                ? { mediaBox: [100, 200, 500, 900], userUnit: 3 }
+                : index === 18
+                    ? { mediaBox: [50, 60, 450, 660], userUnit: 4 }
+                    : index === 0
+                        ? { mediaBox: [0, 0, 595.276, 841.89], userUnit: 1 }
+                        : { mediaBox: [10, 20, 622, 812], userUnit: 2 }),
+        );
+        await syncTexPage.evaluate(({ pdf, forward }) => {
+            const viewer = window.PDFViewerApplication.pdfViewer;
+            const originalScrollPageIntoView = viewer.scrollPageIntoView.bind(viewer);
+            window.__academicSyncTexScrolls = [];
+            window.__academicSyncTexLocations = {};
+            window.addEventListener("academic-pdf-message", event => {
+                const message = event.detail;
+                if (message?.type !== "synctex.forwardResult" || message.status !== "applied") {
+                    return;
+                }
+                const location = viewer._location;
+                window.__academicSyncTexLocations[message.requestId] = location && {
+                    pageNumber: location.pageNumber,
+                    top: location.top,
+                };
+            });
+            viewer.scrollPageIntoView = options => {
+                window.__academicSyncTexScrolls.push(options);
+                originalScrollPageIntoView(options);
+            };
+            window.postMessage(forward, "*");
+            window.postMessage({
+                type: "document.load",
+                loadId: forward.loadId,
+                data: Uint8Array.from(pdf).buffer,
+                isEmptyRevision: false,
+                fingerprint: "synctex-load-race",
+                preserveView: false
+            }, "*");
+        }, {
+            pdf: [...syncTexPdf],
+            forward: {
+                type: "synctex.forward",
+                requestId: "load-race",
+                loadId: 1,
+                pageNumber: 20,
+                x: 120,
+                y: 160,
+            }
+        });
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult"
+                && message.requestId === "load-race"
+                && message.status === "applied"
+        ));
+        await syncTexPage.waitForTimeout(100);
+
+        const forwardState = await syncTexPage.evaluate(() => {
+            const result = window.__academicTestMessages.find(message =>
+                message.type === "synctex.forwardResult" && message.requestId === "load-race"
+            );
+            const scroll = window.__academicSyncTexScrolls.find(options =>
+                options.pageNumber === 20 && options.destArray?.[1]?.name === "XYZ"
+            );
+            const pageView = window.PDFViewerApplication.pdfViewer.getPageView(19);
+            return {
+                result,
+                destination: scroll?.destArray?.slice(2, 4),
+                userUnit: pageView?.viewport.userUnit,
+                viewBox: pageView?.viewport.viewBox,
+                pdfPageBound: Boolean(pageView?.pdfPage),
+                currentPageNumber: window.PDFViewerApplication.pdfViewer.currentPageNumber,
+                scrollTop: window.PDFViewerApplication.pdfViewer.container.scrollTop,
+                targetTop: pageView?.div.getBoundingClientRect().top,
+            };
+        });
+        assert.deepEqual(forwardState.result, {
+            type: "synctex.forwardResult",
+            requestId: "load-race",
+            loadId: 1,
+            status: "applied",
+        });
+        assert.equal(forwardState.destination[0], 140);
+        assert(Math.abs(forwardState.destination[1] - (900 - 160 / 3)) < 0.000001);
+        assert.equal(forwardState.userUnit, 3);
+        assert.deepEqual(forwardState.viewBox, [100, 200, 500, 900]);
+        assert.equal(forwardState.pdfPageBound, true);
+        assert.equal(forwardState.currentPageNumber, 20, JSON.stringify(forwardState));
+
+        const applyPageOneForward = async (requestId, y, targetBox) => {
+            const messageStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+            await syncTexPage.evaluate(({ requestId: id, targetY, box }) => window.postMessage({
+                type: "synctex.forward",
+                requestId: id,
+                loadId: 1,
+                pageNumber: 1,
+                x: 120,
+                y: targetY,
+                ...(box ? { targetBox: box } : {}),
+            }, "*"), { requestId, targetY: y, box: targetBox });
+            await syncTexPage.waitForFunction(({ offset, id }) => window.__academicTestMessages
+                .slice(offset)
+                .some(message => message.type === "synctex.forwardResult"
+                    && message.requestId === id
+                    && message.status === "applied"), {
+                offset: messageStart,
+                id: requestId,
+            });
+            await syncTexPage.waitForTimeout(100);
+            return syncTexPage.evaluate(({ requestId: id, targetY, box }) => {
+                const viewer = window.PDFViewerApplication.pdfViewer;
+                const pageView = viewer.getPageView(0);
+                const viewBox = pageView.viewport.viewBox;
+                const userUnit = pageView.viewport.userUnit;
+                const [viewportX, viewportY] = pageView.viewport.convertToViewportPoint(
+                    viewBox[0] + 120 / userUnit,
+                    viewBox[3] - targetY / userUnit,
+                );
+                const containerBounds = viewer.container.getBoundingClientRect();
+                const pageBounds = pageView.div.getBoundingClientRect();
+                const marker = pageView.div.querySelector(".academicPdfSyncTexTarget");
+                const markerBounds = marker?.getBoundingClientRect();
+                let expectedMarkerBox;
+                if (box) {
+                    const right = box.x + box.width;
+                    const bottom = box.y + box.height;
+                    const points = [
+                        [box.x, box.y],
+                        [right, box.y],
+                        [box.x, bottom],
+                        [right, bottom],
+                    ].map(([x, y]) => pageView.viewport.convertToViewportPoint(
+                        viewBox[0] + x / userUnit,
+                        viewBox[3] - y / userUnit,
+                    ));
+                    const xs = points.map(point => point[0]);
+                    const ys = points.map(point => point[1]);
+                    const left = Math.min(...xs);
+                    const targetTop = Math.min(...ys);
+                    const targetBottom = Math.max(...ys);
+                    const top = Math.max(0, targetTop - 3);
+                    const visualBottom = Math.min(pageView.viewport.height, targetBottom + 3);
+                    expectedMarkerBox = {
+                        left,
+                        top,
+                        width: Math.max(...xs) - left,
+                        height: visualBottom - top,
+                    };
+                }
+                return {
+                    scrollTop: viewer.container.scrollTop,
+                    targetHorizontalOffset: pageBounds.left
+                        + pageView.div.clientLeft
+                        + viewportX
+                        - containerBounds.left,
+                    targetOffset: pageBounds.top
+                        + pageView.div.clientTop
+                        + viewportY
+                        - containerBounds.top,
+                    containerHeight: viewer.container.clientHeight,
+                    containerWidth: viewer.container.clientWidth,
+                    acknowledgedLocation: window.__academicSyncTexLocations[id],
+                    markerCount: document.querySelectorAll(".academicPdfSyncTexTarget").length,
+                    markerKind: marker?.dataset.synctexTarget,
+                    markerBaseOpacity: marker?.style.opacity,
+                    markerBackground: marker?.style.backgroundColor,
+                    markerBox: markerBounds && {
+                        left: markerBounds.left - pageBounds.left - pageView.div.clientLeft,
+                        top: markerBounds.top - pageBounds.top - pageView.div.clientTop,
+                        width: markerBounds.width,
+                        height: markerBounds.height,
+                    },
+                    expectedMarkerBox,
+                    markerOffset: markerBounds && {
+                        x: markerBounds.left + markerBounds.width / 2
+                            - pageBounds.left
+                            - pageView.div.clientLeft
+                            - viewportX,
+                        y: markerBounds.top + markerBounds.height / 2
+                            - pageBounds.top
+                            - pageView.div.clientTop
+                            - viewportY,
+                    },
+                };
+            }, { requestId, targetY: y, box: targetBox });
+        };
+        const pageOneTopForward = await applyPageOneForward("page-one-top", 164.038193);
+        const pageOneBottomForward = await applyPageOneForward("page-one-bottom", 672.249023);
+        assert(pageOneBottomForward.scrollTop > pageOneTopForward.scrollTop, JSON.stringify({
+            pageOneTopForward,
+            pageOneBottomForward,
+        }));
+        for (const state of [pageOneTopForward, pageOneBottomForward]) {
+            assert.equal(state.acknowledgedLocation?.pageNumber, 1, JSON.stringify(state));
+            assert.equal(state.markerCount, 1, JSON.stringify(state));
+            assert(Math.abs(state.markerOffset?.x) < 1, JSON.stringify(state));
+            assert(Math.abs(state.markerOffset?.y) < 1, JSON.stringify(state));
+            assert(state.targetHorizontalOffset >= 24, JSON.stringify(state));
+            assert(state.targetHorizontalOffset <= state.containerWidth - 24, JSON.stringify(state));
+            assert(state.targetOffset >= 24, JSON.stringify(state));
+            assert(state.targetOffset <= state.containerHeight - 24, JSON.stringify(state));
+        }
+
+        const syncTexLineBox = {
+            x: 110.854279,
+            y: 663.946833,
+            width: 388.542938,
+            height: 10.626775,
+        };
+        const lineBoxForward = await applyPageOneForward(
+            "page-one-line-box",
+            672.249023,
+            syncTexLineBox,
+        );
+        assert.equal(lineBoxForward.markerKind, "box", JSON.stringify(lineBoxForward));
+        assert.equal(lineBoxForward.markerBaseOpacity, "0.65", JSON.stringify(lineBoxForward));
+        assert.equal(
+            lineBoxForward.markerBackground,
+            "rgba(55, 148, 255, 0.1)",
+            JSON.stringify(lineBoxForward),
+        );
+        for (const field of ["left", "top", "width", "height"]) {
+            assert(
+                Math.abs(lineBoxForward.markerBox[field] - lineBoxForward.expectedMarkerBox[field]) < 1,
+                JSON.stringify(lineBoxForward),
+            );
+        }
+
+        await syncTexPage.evaluate(() => {
+            const viewer = window.PDFViewerApplication.pdfViewer;
+            viewer.currentPageNumber = 1;
+            viewer.container.scrollTop = 0;
+        });
+        await syncTexPage.waitForFunction(() => {
+            const pageView = window.PDFViewerApplication.pdfViewer.getPageView(0);
+            return pageView?.renderingState === 3
+                && pageView.div.getAttribute("data-vscode-context") === '{"webviewSection":"pdfPage"}';
+        });
+        const textHintPoint = await syncTexPage.evaluate(() => {
+            const textElement = [...document.querySelectorAll(".textLayer span")]
+                .find(element => element.textContent === "SyncTeX page 1");
+            const textNode = textElement?.firstChild;
+            if (!(textNode instanceof Text)) {
+                return undefined;
+            }
+            const range = document.createRange();
+            range.setStart(textNode, 8);
+            range.setEnd(textNode, 9);
+            const bounds = range.getBoundingClientRect();
+            return {
+                x: bounds.left + bounds.width / 2,
+                y: bounds.top + bounds.height / 2,
+            };
+        });
+        assert(textHintPoint, "Could not find the SyncTeX text-layer target.");
+        const textHintStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.mouse.dblclick(textHintPoint.x, textHintPoint.y);
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverse"
+        ), textHintStart);
+        const hintedInverse = await syncTexPage.evaluate(offset => window.__academicTestMessages
+            .slice(offset)
+            .find(message => message.type === "synctex.inverse"), textHintStart);
+        assert.equal(hintedInverse.context, "SyncTeX page 1");
+        assert(hintedInverse.offset === 8 || hintedInverse.offset === 9, JSON.stringify(hintedInverse));
+
+        const clickPoint = await syncTexPage.evaluate(() => {
+            const pageView = window.PDFViewerApplication.pdfViewer.getPageView(0);
+            const viewBox = pageView.viewport.viewBox;
+            const userUnit = pageView.viewport.userUnit;
+            const [viewportX, viewportY] = pageView.viewport.convertToViewportPoint(
+                viewBox[0] + 120 / userUnit,
+                viewBox[3] - 160 / userUnit,
+            );
+            const bounds = pageView.div.getBoundingClientRect();
+            return {
+                x: bounds.left + pageView.div.clientLeft + viewportX,
+                y: bounds.top + pageView.div.clientTop + viewportY,
+            };
+        });
+        const inverseStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.mouse.dblclick(clickPoint.x, clickPoint.y);
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverse"
+        ), inverseStart);
+        const inverse = await syncTexPage.evaluate(offset => window.__academicTestMessages.slice(offset).find(
+            message => message.type === "synctex.inverse"
+        ), inverseStart);
+        assert.equal(inverse.pageNumber, 1);
+        assert.equal(inverse.trigger, "doubleClick");
+        assert(Math.abs(inverse.x - 120) < 1, JSON.stringify(inverse));
+        assert(Math.abs(inverse.y - 160) < 1, JSON.stringify(inverse));
+
+        const inverseCount = await syncTexPage.evaluate(() => window.__academicTestMessages.filter(
+            message => message.type === "synctex.inverse"
+        ).length);
+        const borderPoint = await syncTexPage.evaluate(() => {
+            const bounds = window.PDFViewerApplication.pdfViewer.getPageView(0).div.getBoundingClientRect();
+            return { x: bounds.left + 1, y: bounds.top + 1 };
+        });
+        await syncTexPage.mouse.dblclick(borderPoint.x, borderPoint.y);
+        await syncTexPage.evaluate(() => {
+            const page = window.PDFViewerApplication.pdfViewer.getPageView(0).div;
+            const input = document.createElement("input");
+            input.id = "academicSyncTexEditableTest";
+            input.style.position = "absolute";
+            input.style.left = "30px";
+            input.style.top = "30px";
+            page.appendChild(input);
+        });
+        await syncTexPage.locator("#academicSyncTexEditableTest").dblclick();
+        assert.equal(await syncTexPage.evaluate(() => window.__academicTestMessages.filter(
+            message => message.type === "synctex.inverse"
+        ).length), inverseCount);
+
+        const rightClickConfigureStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.evaluate(() => window.postMessage({
+            type: "synctex.configure",
+            mode: "rightclick"
+        }, "*"));
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverseClear"
+        ), rightClickConfigureStart);
+        const rightClickStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.mouse.click(textHintPoint.x, textHintPoint.y, { button: "right" });
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverse" && message.trigger === "rightClick"
+        ), rightClickStart);
+        assert.deepEqual(await syncTexPage.evaluate(offset => window.__academicTestMessages
+            .slice(offset)
+            .filter(message => message.type.startsWith("synctex.inverse"))
+            .map(message => message.type), rightClickStart), [
+            "synctex.inverseClear",
+            "synctex.inverse",
+        ]);
+        const rightClickInverse = await syncTexPage.evaluate(offset => window.__academicTestMessages
+            .slice(offset)
+            .find(message => message.type === "synctex.inverse"), rightClickStart);
+        assert.equal(rightClickInverse.context, "SyncTeX page 1");
+        assert(rightClickInverse.offset === 8 || rightClickInverse.offset === 9, JSON.stringify(rightClickInverse));
+
+        const nonPageStart = await syncTexPage.evaluate(() => ({
+            messages: window.__academicTestMessages.length,
+            inverse: window.__academicTestMessages.filter(message => message.type === "synctex.inverse").length,
+        }));
+        await syncTexPage.locator("#toolbarContainer").click({ button: "right", position: { x: 2, y: 2 } });
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverseClear"
+        ), nonPageStart.messages);
+        assert.equal(await syncTexPage.evaluate(() => window.__academicTestMessages.filter(
+            message => message.type === "synctex.inverse"
+        ).length), nonPageStart.inverse);
+
+        const configureStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.evaluate(() => window.postMessage({
+            type: "synctex.configure",
+            mode: "off"
+        }, "*"));
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverseClear"
+        ), configureStart);
+
+        const lazyScrollStart = await syncTexPage.evaluate(() => {
+            const viewer = window.PDFViewerApplication.pdfViewer;
+            const targetPageView = viewer.getPageView(18);
+            targetPageView.pdfPage = undefined;
+            targetPageView.viewport = viewer.getPageView(0).viewport;
+            window.__academicLazyPageSetCalls = 0;
+            const originalSetPdfPage = targetPageView.setPdfPage.bind(targetPageView);
+            targetPageView.setPdfPage = pdfPage => {
+                window.__academicLazyPageSetCalls++;
+                originalSetPdfPage(pdfPage);
+            };
+            window.postMessage({
+                type: "synctex.forward",
+                requestId: "lazy-page",
+                loadId: 1,
+                pageNumber: 19,
+                x: 80,
+                y: 100,
+            }, "*");
+            return window.__academicSyncTexScrolls.length;
+        });
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult"
+                && message.requestId === "lazy-page"
+                && message.status === "applied"
+        ));
+        const lazyPageState = await syncTexPage.evaluate(scrollStart => {
+            const pageView = window.PDFViewerApplication.pdfViewer.getPageView(18);
+            return {
+                bound: Boolean(pageView.pdfPage),
+                setPdfPageCalls: window.__academicLazyPageSetCalls,
+                userUnit: pageView.viewport.userUnit,
+                viewBox: pageView.viewport.viewBox,
+                scroll: window.__academicSyncTexScrolls.slice(scrollStart).find(options =>
+                    options.pageNumber === 19 && options.destArray?.[1]?.name === "XYZ"
+                ),
+            };
+        }, lazyScrollStart);
+        assert.equal(lazyPageState.bound, true);
+        assert(lazyPageState.setPdfPageCalls >= 1);
+        assert.equal(lazyPageState.userUnit, 4);
+        assert.deepEqual(lazyPageState.viewBox, [50, 60, 450, 660]);
+        assert.deepEqual(lazyPageState.scroll.destArray.slice(2, 4), [70, 635]);
+
+        const overflowScrollStart = await syncTexPage.evaluate(() => {
+            window.PDFViewerApplication.pdfViewer.getPageView(18).viewport.userUnit = 0.5;
+            window.postMessage({
+                type: "synctex.forward",
+                requestId: "overflow-coordinate",
+                loadId: 1,
+                pageNumber: 19,
+                x: Number.MAX_VALUE,
+                y: -Number.MAX_VALUE,
+            }, "*");
+            return window.__academicSyncTexScrolls.length;
+        });
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult"
+                && message.requestId === "overflow-coordinate"
+                && message.status === "rejected"
+        ));
+        assert.equal(await syncTexPage.evaluate(() => window.__academicSyncTexScrolls.length), overflowScrollStart);
+
+        await syncTexPage.evaluate(() => {
+            const viewer = window.PDFViewerApplication.pdfViewer;
+            let releasePagesPromise;
+            const pagesPromise = new Promise(resolve => {
+                releasePagesPromise = resolve;
+            });
+            window.__academicReleaseSyncTexPages = releasePagesPromise;
+            window.__academicSyncTexPagesObserved = false;
+            Object.defineProperty(viewer, "pagesPromise", {
+                configurable: true,
+                get() {
+                    window.__academicSyncTexPagesObserved = true;
+                    return pagesPromise;
+                }
+            });
+            window.postMessage({
+                type: "synctex.forward",
+                requestId: "cancelled-request",
+                loadId: 1,
+                pageNumber: 1,
+                x: 20,
+                y: 30,
+            }, "*");
+        });
+        await syncTexPage.waitForFunction(() => window.__academicSyncTexPagesObserved);
+        const malformedCancelStart = await syncTexPage.evaluate(() => window.__academicTestMessages.length);
+        await syncTexPage.evaluate(() => {
+            window.postMessage({
+                type: "synctex.forwardCancel",
+                requestId: "cancelled-request",
+                loadId: "1",
+            }, "*");
+            window.postMessage({
+                type: "synctex.configure",
+                mode: "off",
+            }, "*");
+        });
+        await syncTexPage.waitForFunction(offset => window.__academicTestMessages.slice(offset).some(
+            message => message.type === "synctex.inverseClear"
+        ), malformedCancelStart);
+        assert.equal(await syncTexPage.evaluate(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult" && message.requestId === "cancelled-request"
+        )), false);
+
+        await syncTexPage.evaluate(() => window.postMessage({
+            type: "synctex.forwardCancel",
+            requestId: "cancelled-request",
+            loadId: 1,
+        }, "*"));
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult"
+                && message.requestId === "cancelled-request"
+                && message.status === "rejected"
+        ));
+        const cancelledScrollStart = await syncTexPage.evaluate(() => window.__academicSyncTexScrolls.length);
+        await syncTexPage.evaluate(({ pdf }) => {
+            window.postMessage({
+                type: "document.load",
+                loadId: 2,
+                data: Uint8Array.from(pdf).buffer,
+                isEmptyRevision: false,
+                fingerprint: "synctex-after-cancel",
+                preserveView: false
+            }, "*");
+            window.postMessage({
+                type: "synctex.forward",
+                requestId: "replacement-request",
+                loadId: 2,
+                pageNumber: 20,
+                x: 120,
+                y: 160,
+            }, "*");
+            window.__academicReleaseSyncTexPages();
+        }, { pdf: [...syncTexPdf] });
+        await syncTexPage.waitForFunction(() => window.__academicTestMessages.some(message =>
+            message.type === "synctex.forwardResult"
+                && message.requestId === "replacement-request"
+                && message.status === "applied"
+        ));
+        const cancellationState = await syncTexPage.evaluate(scrollStart => ({
+            cancelledResults: window.__academicTestMessages.filter(message =>
+                message.type === "synctex.forwardResult" && message.requestId === "cancelled-request"
+            ),
+            replacementResult: window.__academicTestMessages.find(message =>
+                message.type === "synctex.forwardResult" && message.requestId === "replacement-request"
+            ),
+            cancelledScrolls: window.__academicSyncTexScrolls.slice(scrollStart).filter(options =>
+                options.pageNumber === 1
+                    && options.destArray?.[1]?.name === "XYZ"
+                    && options.destArray?.[2] === 20
+                    && options.destArray?.[3] === 811.89
+            ),
+            replacementScrolls: window.__academicSyncTexScrolls.slice(scrollStart).filter(options =>
+                options.pageNumber === 20
+                    && options.destArray?.[1]?.name === "XYZ"
+                    && options.destArray?.[2] === 140
+            ),
+        }), cancelledScrollStart);
+        assert.deepEqual(cancellationState.cancelledResults, [{
+            type: "synctex.forwardResult",
+            requestId: "cancelled-request",
+            loadId: 1,
+            status: "rejected",
+        }]);
+        assert.equal(cancellationState.replacementResult.status, "applied");
+        assert.equal(cancellationState.cancelledScrolls.length, 0);
+        assert.equal(cancellationState.replacementScrolls.length, 1);
+        assert.deepEqual(syncTexPageErrors, []);
+        await syncTexPage.close();
+    });
+
     await t.test("applies the preferred sidebar and preserves the current view on reload", async () => {
         const sidebarPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const sidebarPageErrors = [];
@@ -1408,7 +1954,14 @@ function createTextPdfPages(pageTexts) {
     return createPdfFromStrings(pageTexts);
 }
 
-function createTextPdfWithCommands(pages) {
+function createTextPdfPagesWithGeometries(pageTexts, pageGeometries) {
+    assert.equal(pageTexts.length, pageGeometries.length);
+    return createTextPdfWithCommands(pageTexts.map(text => [
+        `(${text.replace(/([\\()])/g, "\\$1")}) Tj`
+    ]), { pageGeometries });
+}
+
+function createTextPdfWithCommands(pages, options = {}) {
     const firstPageObject = 3;
     const fontObject = firstPageObject + pages.length * 2;
     const pageObjects = Array.from({ length: pages.length }, (_, index) => firstPageObject + index * 2);
@@ -1417,11 +1970,14 @@ function createTextPdfWithCommands(pages) {
         `2 0 obj\n<< /Type /Pages /Kids [${pageObjects.map(id => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>\nendobj\n`
     ];
     for (const [index, commands] of pages.entries()) {
+        const geometry = options.pageGeometries?.[index] || options;
+        const mediaBox = geometry.mediaBox || [0, 0, 612, 792];
+        const userUnit = geometry.userUnit || 1;
         const pageObject = pageObjects[index];
         const contentObject = pageObject + 1;
         const stream = `BT\n/F1 24 Tf\n72 700 Td\n${commands.join("\n")}\nET\n`;
         objects.push(
-            `${pageObject} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObject} 0 R >> >> /Contents ${contentObject} 0 R >>\nendobj\n`,
+            `${pageObject} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [${mediaBox.join(" ")}] /UserUnit ${userUnit} /Resources << /Font << /F1 ${fontObject} 0 R >> >> /Contents ${contentObject} 0 R >>\nendobj\n`,
             `${contentObject} 0 obj\n<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream\nendobj\n`
         );
     }

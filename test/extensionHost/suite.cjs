@@ -35,12 +35,25 @@ async function closeAllEditors() {
 async function run() {
     const extension = vscode.extensions.getExtension(extensionId);
     assert(extension, `Extension ${extensionId} was not loaded.`);
-    await extension.activate();
+    const api = await extension.activate();
     assert.equal(extension.isActive, true);
+    assert.equal(typeof api?.tex?.synctexForward, 'function', 'The exported SyncTeX forward API was not available.');
+    assert.equal(
+        typeof api?.tex?.onDidRequestInverseSyncTex,
+        'function',
+        'The exported inverse SyncTeX event was not available.',
+    );
+
+    let inverseEvent;
+    const inverseSubscription = api.tex.onDidRequestInverseSyncTex(event => {
+        inverseEvent = event;
+    });
 
     const commands = await vscode.commands.getCommands(true);
     for (const command of [
         'academicPdfViewer.reload',
+        'academicPdfViewer.tex.synctexForward',
+        'academicPdfViewer.tex.synctexInverse',
         'academicPdfViewer.toggleDiffHighlights',
         'academicPdfViewer.previousDiffChange',
         'academicPdfViewer.nextDiffChange',
@@ -84,8 +97,56 @@ async function run() {
     const ordinaryPdf = vscode.Uri.file(path.join(fixtureRoot, 'lewm.pdf'));
     await vscode.commands.executeCommand('vscode.openWith', ordinaryPdf, viewType);
     await waitFor(activeCustomEditor, 'the ordinary PDF custom editor');
+
+    const forwardRequest = {
+        type: 'synctex.forward',
+        pdfUri: ordinaryPdf.toString(),
+        pageNumber: 1,
+        x: 72,
+        y: 72,
+        targetBox: { x: 60, y: 66, width: 240, height: 12 },
+    };
+    assert.equal(
+        api.tex.synctexForward(forwardRequest),
+        true,
+        'The exported API should accept a forward request for the open canonical PDF URI.',
+    );
+    assert.equal(
+        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexForward', forwardRequest),
+        true,
+        'The command API should accept the same canonical forward request.',
+    );
+    assert.equal(
+        api.tex.synctexForward({ ...forwardRequest, pdfUri: ordinaryPdf.fsPath }),
+        false,
+        'A filesystem path must not be treated as the canonical PDF URI.',
+    );
+    assert.equal(
+        api.tex.synctexForward({
+            ...forwardRequest,
+            targetBox: { ...forwardRequest.targetBox, width: 0 },
+        }),
+        false,
+        'A non-positive SyncTeX target box must be rejected.',
+    );
+    assert.equal(
+        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexForward', {
+            ...forwardRequest,
+            pageNumber: 0,
+        }),
+        false,
+        'The command API should reject malformed forward requests.',
+    );
+    assert.equal(
+        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexInverse'),
+        false,
+        'The context-menu command should reject execution without a pending PDF-page request.',
+    );
+    assert.equal(inverseEvent, undefined, 'Rejected integration commands must not emit an inverse event.');
+
     await vscode.commands.executeCommand('academicPdfViewer.reload');
     await closeAllEditors();
+    inverseSubscription.dispose();
 }
 
 module.exports = { run };

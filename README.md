@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases"><img alt="Latest preview release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?include_prereleases&label=preview&color=7c3aed"></a>
-  <img alt="VS Code 1.133 or later" src="https://img.shields.io/badge/VS%20Code-1.133%2B-007ACC?logo=visualstudiocode&logoColor=white">
+  <img alt="VS Code 1.134 or later" src="https://img.shields.io/badge/VS%20Code-1.134%2B-007ACC?logo=visualstudiocode&logoColor=white">
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/VeriTas-arch/academic-pdf-viewer?color=2563eb"></a>
 </p>
 
@@ -18,6 +18,8 @@
   <a href="#install-and-start-reading">Get started</a>
   ·
   <a href="#preview-internal-references">Link previews</a>
+  ·
+  <a href="#integrate-with-synctex">SyncTeX API</a>
   ·
   <a href="#review-pdf-revisions-preview">Git PDF review</a>
   ·
@@ -112,6 +114,89 @@ The sidebar defaults to **Pages**. Set **Academic PDF Viewer › Navigation: Def
 
 `PDF: Reload`, `PDF: Toggle Link Preview`, and the previous/next diff commands are available from the title bar or Command Palette when applicable. They can also be assigned from VS Code's Keyboard Shortcuts editor.
 
+## Integrate with SyncTeX
+
+Academic PDF Viewer provides a transport API for TeX extensions. It does not run a SyncTeX executable or map PDF positions to source files itself. Set `academicPdfViewer.tex.synctex` to choose whether a PDF double-click or context-menu action requests inverse synchronization.
+
+From your extension's `activate` function, activate Academic PDF Viewer and subscribe to inverse requests through its exported API:
+
+```ts
+interface SyncTexForwardRequest {
+    type: 'synctex.forward';
+    pdfUri: string;
+    pageNumber: number;
+    x: number;
+    y: number;
+    targetBox?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+}
+
+interface SyncTexInverseEvent extends Omit<SyncTexForwardRequest, 'type' | 'targetBox'> {
+    type: 'synctex.inverse';
+    trigger: 'doubleClick' | 'rightClick';
+    context?: string;
+    offset?: number;
+}
+
+interface AcademicPdfViewerApi {
+    readonly tex: {
+        readonly onDidRequestInverseSyncTex: vscode.Event<SyncTexInverseEvent>;
+        synctexForward(request: SyncTexForwardRequest): boolean;
+    };
+}
+
+const extension = vscode.extensions.getExtension<AcademicPdfViewerApi>(
+    'ovolab-veritas.academic-pdf-viewer',
+);
+if (!extension) {
+    return;
+}
+const api = await extension.activate();
+const subscription = api.tex.onDidRequestInverseSyncTex((request: SyncTexInverseEvent) => {
+    // Resolve request.pdfUri and map this PDF position back to a TeX source position.
+});
+context.subscriptions.push(subscription);
+```
+
+For forward synchronization, call the API method or execute the registered command:
+
+```ts
+const request: SyncTexForwardRequest = {
+    type: 'synctex.forward',
+    pdfUri: pdfUri.toString(),
+    pageNumber: 3,
+    x: 144,
+    y: 216,
+};
+
+const accepted = api.tex.synctexForward(request);
+// Alternative for integrations that do not use the exported API:
+const commandAccepted = await vscode.commands.executeCommand<boolean>(
+    'academicPdfViewer.tex.synctexForward',
+    request,
+);
+```
+
+The public command requires the complete request object, so a TeX integration
+should expose its own source-side command that runs SyncTeX and then calls this
+API. An editor-title action and a scoped editor context-menu item provide
+discoverable, conflict-free defaults; users who prefer the keyboard can bind
+that integration command normally in VS Code.
+
+`pdfUri` is the canonical URI string produced by `vscode.Uri.toString()`, including its scheme and any query or fragment. `pageNumber` is one-based. `x` and `y` are PDF coordinates measured from the top-left corner in 72-dpi points. `targetBox`, when available, uses the same coordinate system and describes the enclosing SyncTeX line box from its top-left corner. A `true` forward result means that a matching open document accepted and queued the request; the latest request for that document wins. A `false` result means that the request was invalid or no matching document was open.
+
+An applied forward request briefly highlights `targetBox` when supplied, or
+falls back to marking the reported PDF point, and keeps the target inside the
+visible area. Inverse requests can additionally include `context`
+from the PDF text layer and the zero-based `offset` of the clicked character in
+that text. Integrations may pass those fields to SyncTeX's content hint and use
+them to recover a source column when the SyncTeX producer reports `Column:-1`;
+the fields are absent when no reliable text-layer hit is available.
+
 ## Preview internal references
 
 Many publisher and LaTeX-generated PDFs already contain links from citations, figures, equations, and section references to their destinations. Academic PDF Viewer uses those embedded annotations directly:
@@ -153,12 +238,13 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 | --- | --- | --- |
 | `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding <kbd>Ctrl</kbd> over an internal PDF link. |
 | `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4` without changing popup size. |
+| `academicPdfViewer.tex.synctex` | `doubleclick` | Chooses `off`, `doubleclick`, or `rightclick` for inverse SyncTeX requests. |
 
 `PDF: Toggle Link Preview` changes the enabled setting for the current VS Code window.
 
 ## Requirements and limitations
 
-- The current Preview build requires VS Code 1.133 or later.
+- The current Preview build requires VS Code 1.134 or later.
 - Git PDF review requires Proposed API access and can need adaptation after a VS Code update.
 - Citation previews require native internal link annotations embedded in the PDF; GROBID-based extraction is not included.
 - Preview quality depends on the PDF's link destinations and text layer.
