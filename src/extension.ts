@@ -5,6 +5,7 @@ import {
     PDF_VIEW_TYPE,
     PdfEditorProvider,
 } from './extension/pdfEditorProvider';
+import { registerSyncTexCliBridge } from './extension/synctexCliBridge';
 import {
     isSyncTexForwardRequest,
     type SyncTexForwardRequest,
@@ -25,6 +26,10 @@ export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi
         version: context.extension.packageJSON.version,
     });
     const provider = new PdfEditorProvider(context, logger);
+    registerSyncTexCliBridge(context, {
+        onDidRequestInverseSyncTex: provider.onDidRequestInverseSyncTex,
+        synctexForward: request => provider.synctexForward(request),
+    });
     const setDiffHighlights = async (enabled?: boolean): Promise<void> => {
         try {
             const result = await provider.setDiffHighlights(enabled);

@@ -116,7 +116,22 @@ The sidebar defaults to **Pages**. Set **Academic PDF Viewer › Navigation: Def
 
 ## Integrate with SyncTeX
 
-Academic PDF Viewer provides a transport API for TeX extensions. It does not run a SyncTeX executable or map PDF positions to source files itself. Set `academicPdfViewer.tex.synctex` to choose whether a PDF double-click or context-menu action requests inverse synchronization.
+Academic PDF Viewer provides both an opt-in local command-line bridge and a transport API for TeX extensions. Set `academicPdfViewer.tex.synctex` to choose whether a PDF double-click or context-menu action requests inverse synchronization.
+
+### Built-in bridge
+
+Enable `academicPdfViewer.tex.bridge.enabled` in a trusted workspace to use the `synctex` executable directly. By default, forward search maps the active `.tex` file to a sibling PDF with the same base name. If the PDF is written elsewhere, set `academicPdfViewer.tex.bridge.pdfPath` to its absolute path or to a path relative to the workspace folder. Set `academicPdfViewer.tex.bridge.executable` when `synctex` is not on `PATH`.
+
+With the bridge enabled:
+
+- Run **TeX: SyncTeX Forward Search** from the `.tex` editor title bar, editor context menu, or Command Palette. No default keybinding is claimed; bind this command in VS Code's Keyboard Shortcuts editor if desired.
+- Double-click the PDF for inverse search when `academicPdfViewer.tex.synctex` is `doubleclick`, or use the page context menu when it is `rightclick`.
+
+The bridge supports local `file:` documents only, invokes the configured executable without a shell, and does not run in an untrusted workspace. The TeX build must have generated a matching `.synctex.gz` file.
+
+### Extension API
+
+The public API remains available for TeX extensions that manage their own build directories, source roots, remote environments, or SyncTeX process.
 
 From your extension's `activate` function, activate Academic PDF Viewer and subscribe to inverse requests through its exported API:
 
@@ -181,11 +196,9 @@ const commandAccepted = await vscode.commands.executeCommand<boolean>(
 );
 ```
 
-The public command requires the complete request object, so a TeX integration
-should expose its own source-side command that runs SyncTeX and then calls this
-API. An editor-title action and a scoped editor context-menu item provide
-discoverable, conflict-free defaults; users who prefer the keyboard can bind
-that integration command normally in VS Code.
+The public command requires the complete request object, so an external TeX
+integration should expose its own source-side command that runs SyncTeX and then
+calls this API.
 
 `pdfUri` is the canonical URI string produced by `vscode.Uri.toString()`, including its scheme and any query or fragment. `pageNumber` is one-based. `x` and `y` are PDF coordinates measured from the top-left corner in 72-dpi points. `targetBox`, when available, uses the same coordinate system and describes the enclosing SyncTeX line box from its top-left corner. A `true` forward result means that a matching open document accepted and queued the request; the latest request for that document wins. A `false` result means that the request was invalid or no matching document was open.
 
@@ -239,6 +252,9 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 | `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding <kbd>Ctrl</kbd> over an internal PDF link. |
 | `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4` without changing popup size. |
 | `academicPdfViewer.tex.synctex` | `doubleclick` | Chooses `off`, `doubleclick`, or `rightclick` for inverse SyncTeX requests. |
+| `academicPdfViewer.tex.bridge.enabled` | `false` | Enables the local SyncTeX command-line bridge in a trusted workspace. |
+| `academicPdfViewer.tex.bridge.executable` | `synctex` | Sets the SyncTeX executable name or path, without additional arguments. |
+| `academicPdfViewer.tex.bridge.pdfPath` | empty | Overrides the forward-search PDF path; relative paths start at the workspace folder. |
 
 `PDF: Toggle Link Preview` changes the enabled setting for the current VS Code window.
 
@@ -248,6 +264,7 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 - Git PDF review requires Proposed API access and can need adaptation after a VS Code update.
 - Citation previews require native internal link annotations embedded in the PDF; GROBID-based extraction is not included.
 - Preview quality depends on the PDF's link destinations and text layer.
+- The built-in bridge requires a local TeX installation that provides `synctex`; remote and virtual-workspace toolchains should use the extension API instead.
 - Moving across many unchanged or complex pages can take longer because cross-page diff navigation compares uncached pages on demand.
 - PDF JavaScript evaluation remains disabled.
 

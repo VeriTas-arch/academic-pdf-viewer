@@ -53,6 +53,7 @@ async function run() {
     for (const command of [
         'academicPdfViewer.reload',
         'academicPdfViewer.tex.synctexForward',
+        'academicPdfViewer.tex.synctexForwardFromCursor',
         'academicPdfViewer.tex.synctexInverse',
         'academicPdfViewer.toggleDiffHighlights',
         'academicPdfViewer.previousDiffChange',

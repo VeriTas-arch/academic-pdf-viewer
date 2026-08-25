@@ -296,7 +296,7 @@ test('validates the public SyncTeX forward request contract', () => {
     }
 });
 
-test('keeps SyncTeX integration commands out of the palette and scopes the context action', () => {
+test('keeps SyncTeX transport commands out of the palette and scopes the context action', () => {
     const contextMenu = packageJson.contributes.menus['webview/context']
         .find(item => item.command === 'academicPdfViewer.tex.synctexInverse');
     assert(contextMenu, 'The inverse SyncTeX webview context action was not contributed.');
