@@ -1,0 +1,10 @@
+{
+	"folders": [
+		{
+			"path": "../manual-tests"
+		}
+	],
+	"settings": {
+		"academicPdfViewer.tex.bridge.enabled": true
+	}
+}

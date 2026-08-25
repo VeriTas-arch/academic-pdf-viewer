@@ -13,7 +13,7 @@
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
 				"--enable-proposed-api=ovolab-veritas.academic-pdf-viewer",
-				"${workspaceFolder}/manual-tests"
+				"${workspaceFolder}/.vscode/manual-tests.code-workspace"
 			],
 			"outFiles": [
 				"${workspaceFolder}/out/**/*.js"
