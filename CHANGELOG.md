@@ -7,7 +7,7 @@ All notable changes to the Academic PDF Viewer extension are documented in this 
 ### Added
 
 - Added a validated bidirectional SyncTeX transport API for forward PDF targets and inverse source requests, including optional line boxes and PDF text hints.
-- Added an opt-in local SyncTeX command-line bridge for trusted workspaces, with configurable executable and PDF paths plus discoverable `.tex` editor actions without a default keybinding.
+- Added an opt-in local bridge for the MiKTeX `synctex.exe`-compatible `view`/`edit` protocol in trusted workspaces, with configurable executable and PDF paths plus discoverable `.tex` editor actions without a default keybinding.
 - Added a transient forward-search marker that highlights the complete SyncTeX line box when available.
 
 ### Changed

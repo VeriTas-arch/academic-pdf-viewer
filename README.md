@@ -120,14 +120,18 @@ Academic PDF Viewer provides both an opt-in local command-line bridge and a tran
 
 ### Built-in bridge
 
-Enable `academicPdfViewer.tex.bridge.enabled` in a trusted workspace to use the `synctex` executable directly. By default, forward search maps the active `.tex` file to a sibling PDF with the same base name. If the PDF is written elsewhere, set `academicPdfViewer.tex.bridge.pdfPath` to its absolute path or to a path relative to the workspace folder. Set `academicPdfViewer.tex.bridge.executable` when `synctex` is not on `PATH`.
+Enable `academicPdfViewer.tex.bridge.enabled` in a trusted workspace to use a local SyncTeX executable directly. The bridge was designed and tested with MiKTeX `synctex.exe` and expects its `view`/`edit` command-line protocol. Compatible `synctex` executables from other distributions may also work, but ConTeXt `mtxrun --script synctex` uses different commands and output formats and is not currently supported by the bridge; integrate it through the extension API instead.
+
+By default, forward search maps the active `.tex` file to a sibling PDF with the same base name. If the PDF is written elsewhere, set `academicPdfViewer.tex.bridge.pdfPath` to its absolute path or to a path relative to the workspace folder. Set `academicPdfViewer.tex.bridge.executable` when a compatible `synctex` executable is not on `PATH`.
 
 With the bridge enabled:
 
 - Run **TeX: SyncTeX Forward Search** from the `.tex` editor title bar, editor context menu, or Command Palette. No default keybinding is claimed; bind this command in VS Code's Keyboard Shortcuts editor if desired.
 - Double-click the PDF for inverse search when `academicPdfViewer.tex.synctex` is `doubleclick`, or use the page context menu when it is `rightclick`.
 
-The bridge supports local `file:` documents only, invokes the configured executable without a shell, and does not run in an untrusted workspace. The TeX build must have generated a matching `.synctex.gz` file.
+The bridge supports local `file:` documents only, invokes the configured executable without a shell, and does not run in an untrusted workspace. The configured executable must be able to locate and parse a matching `.synctex` or `.synctex.gz` sidecar.
+
+Forward-search precision is limited by the SyncTeX producer. MiKTeX can return the same PDF point and enclosing box for different columns on one source line; in that case, the viewer intentionally highlights the complete returned line box. For inverse search, the bridge uses an unambiguous PDF text hint to recover the source column when SyncTeX reports `Column:-1`, and otherwise selects the resolved source line.
 
 ### Extension API
 
@@ -252,8 +256,8 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 | `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding <kbd>Ctrl</kbd> over an internal PDF link. |
 | `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4` without changing popup size. |
 | `academicPdfViewer.tex.synctex` | `doubleclick` | Chooses `off`, `doubleclick`, or `rightclick` for inverse SyncTeX requests. |
-| `academicPdfViewer.tex.bridge.enabled` | `false` | Enables the local SyncTeX command-line bridge in a trusted workspace. |
-| `academicPdfViewer.tex.bridge.executable` | `synctex` | Sets the SyncTeX executable name or path, without additional arguments. |
+| `academicPdfViewer.tex.bridge.enabled` | `false` | Enables the local MiKTeX `synctex.exe`-compatible `view`/`edit` bridge in a trusted workspace. |
+| `academicPdfViewer.tex.bridge.executable` | `synctex` | Sets the compatible SyncTeX executable name or path; additional arguments are not supported. |
 | `academicPdfViewer.tex.bridge.pdfPath` | empty | Overrides the forward-search PDF path; relative paths start at the workspace folder. |
 
 `PDF: Toggle Link Preview` changes the enabled setting for the current VS Code window.
@@ -264,7 +268,7 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 - Git PDF review requires Proposed API access and can need adaptation after a VS Code update.
 - Citation previews require native internal link annotations embedded in the PDF; GROBID-based extraction is not included.
 - Preview quality depends on the PDF's link destinations and text layer.
-- The built-in bridge requires a local TeX installation that provides `synctex`; remote and virtual-workspace toolchains should use the extension API instead.
+- The built-in bridge requires a local SyncTeX CLI compatible with MiKTeX `synctex.exe` and its `view`/`edit` commands. ConTeXt `mtxrun`, remote, and virtual-workspace toolchains should use the extension API instead.
 - Moving across many unchanged or complex pages can take longer because cross-page diff navigation compares uncached pages on demand.
 - PDF JavaScript evaluation remains disabled.
 

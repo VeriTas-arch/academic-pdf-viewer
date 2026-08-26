@@ -70,7 +70,7 @@
                 "command": "academicPdfViewer.tex.synctexForwardFromCursor",
                 "title": "TeX: SyncTeX Forward Search",
                 "icon": "$(open-preview)",
-                "enablement": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex"
+                "enablement": "config.academicPdfViewer.tex.bridge.enabled && isWorkspaceTrusted && resourceScheme == file && resourceExtname == .tex"
             },
             {
                 "command": "academicPdfViewer.tex.synctexInverse",
@@ -193,14 +193,14 @@
                     "default": false,
                     "scope": "window",
                     "restricted": true,
-                    "description": "Run the built-in local SyncTeX command-line bridge for forward and inverse search in trusted workspaces."
+                    "description": "Run the built-in local bridge for the MiKTeX synctex.exe-compatible view/edit protocol in trusted workspaces."
                 },
                 "academicPdfViewer.tex.bridge.executable": {
                     "type": "string",
                     "default": "synctex",
                     "scope": "window",
                     "restricted": true,
-                    "markdownDescription": "SyncTeX executable name or path. Enter only the executable, without command-line arguments."
+                    "markdownDescription": "Executable name or path for a SyncTeX CLI compatible with MiKTeX `synctex.exe` and its `view`/`edit` commands. Additional arguments are not supported; toolchains such as ConTeXt `mtxrun --script synctex` should use the extension API."
                 },
                 "academicPdfViewer.tex.bridge.pdfPath": {
                     "type": "string",
@@ -222,7 +222,7 @@
             "commandPalette": [
                 {
                     "command": "academicPdfViewer.tex.synctexForwardFromCursor",
-                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex"
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && isWorkspaceTrusted && resourceScheme == file && resourceExtname == .tex"
                 },
                 {
                     "command": "academicPdfViewer.tex.synctexForward",
@@ -236,7 +236,7 @@
             "editor/title": [
                 {
                     "command": "academicPdfViewer.tex.synctexForwardFromCursor",
-                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex",
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && isWorkspaceTrusted && resourceScheme == file && resourceExtname == .tex",
                     "group": "navigation@100"
                 },
                 {
@@ -268,7 +268,7 @@
             "editor/context": [
                 {
                     "command": "academicPdfViewer.tex.synctexForwardFromCursor",
-                    "when": "config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex",
+                    "when": "config.academicPdfViewer.tex.bridge.enabled && isWorkspaceTrusted && resourceScheme == file && resourceExtname == .tex",
                     "group": "navigation@100"
                 }
             ]

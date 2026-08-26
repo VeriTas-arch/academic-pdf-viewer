@@ -60,7 +60,10 @@ test('built-in SyncTeX bridge is opt-in and has discoverable source actions with
     const menus = packageJson.contributes?.menus ?? {};
     const properties = packageJson.contributes?.configuration?.properties ?? {};
     const command = 'academicPdfViewer.tex.synctexForwardFromCursor';
-    const when = 'config.academicPdfViewer.tex.bridge.enabled && resourceExtname == .tex';
+    const when = 'config.academicPdfViewer.tex.bridge.enabled'
+        + ' && isWorkspaceTrusted'
+        + ' && resourceScheme == file'
+        + ' && resourceExtname == .tex';
 
     for (const [setting, defaultValue] of [
         ['academicPdfViewer.tex.bridge.enabled', false],
