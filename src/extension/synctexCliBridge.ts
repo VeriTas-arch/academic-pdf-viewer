@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import type { SyncTexForwardRequest, SyncTexInverseEvent } from '../shared/protocol';
 import { PDF_VIEW_TYPE } from './pdfEditorProvider';
 import {
+    createLatestRequestTracker,
     querySyncTexForward,
     querySyncTexInverse,
     resolveSourceColumn,
@@ -32,6 +33,8 @@ export function registerSyncTexCliBridge(
     processRunner: SyncTexRunner = runSyncTexProcess,
 ): void {
     const output = vscode.window.createOutputChannel('Academic PDF Viewer SyncTeX');
+    const forwardRequests = createLatestRequestTracker();
+    const inverseRequests = createLatestRequestTracker();
     const runner: SyncTexRunner = async request => {
         output.appendLine(formatCommand(request.executable, request.args));
         const result = await processRunner(request);
@@ -50,10 +53,13 @@ export function registerSyncTexCliBridge(
     context.subscriptions.push(
         output,
         vscode.commands.registerCommand(SYNCTEX_FORWARD_FROM_CURSOR_COMMAND, async () => {
+            const isCurrent = forwardRequests.begin();
             try {
-                return await forwardFromCursor(viewer, runner, output);
+                return await forwardFromCursor(viewer, runner, output, isCurrent);
             } catch (error) {
-                reportError(error);
+                if (isCurrent()) {
+                    reportError(error);
+                }
                 return false;
             }
         }),
@@ -61,7 +67,12 @@ export function registerSyncTexCliBridge(
             if (!isBridgeEnabled(vscode.Uri.parse(event.pdfUri, true))) {
                 return;
             }
-            void inverseToSource(event, runner, output).catch(reportError);
+            const isCurrent = inverseRequests.begin();
+            void inverseToSource(event, runner, output, isCurrent).catch(error => {
+                if (isCurrent()) {
+                    reportError(error);
+                }
+            });
         }),
     );
 }
@@ -70,6 +81,7 @@ async function forwardFromCursor(
     viewer: SyncTexViewer,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
+    isCurrent: () => boolean,
 ): Promise<boolean> {
     const editor = vscode.window.activeTextEditor;
     if (!editor
@@ -91,6 +103,9 @@ async function forwardFromCursor(
     if ((pdfStat.type & vscode.FileType.File) === 0) {
         throw new Error(`The configured SyncTeX PDF is not a file: ${pdfPath}`);
     }
+    if (!isCurrent()) {
+        return false;
+    }
 
     const position = editor.selection.active;
     const result = await querySyncTexForward(
@@ -101,12 +116,18 @@ async function forwardFromCursor(
         position.line + 1,
         position.character + 1,
     );
+    if (!isCurrent()) {
+        return false;
+    }
     await vscode.commands.executeCommand(
         'vscode.openWith',
         pdfUri,
         PDF_VIEW_TYPE,
         vscode.ViewColumn.Beside,
     );
+    if (!isCurrent()) {
+        return false;
+    }
     const accepted = viewer.synctexForward({
         type: 'synctex.forward',
         pdfUri: pdfUri.toString(),
@@ -123,6 +144,7 @@ async function inverseToSource(
     event: SyncTexInverseEvent,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
+    isCurrent: () => boolean,
 ): Promise<void> {
     ensureTrustedWorkspace();
     const pdfUri = vscode.Uri.parse(event.pdfUri, true);
@@ -141,10 +163,16 @@ async function inverseToSource(
         event.y,
         textHint,
     );
+    if (!isCurrent()) {
+        return;
+    }
     const sourcePath = path.isAbsolute(result.input)
         ? result.input
         : path.resolve(path.dirname(pdfUri.fsPath), result.input);
     const sourceDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
+    if (!isCurrent()) {
+        return;
+    }
     if (result.line > sourceDocument.lineCount) {
         throw new Error(`SyncTeX returned source line ${result.line}, but the file has only ${sourceDocument.lineCount} lines.`);
     }
@@ -165,6 +193,9 @@ async function inverseToSource(
     const sourceEditor = await vscode.window.showTextDocument(sourceDocument, {
         viewColumn: vscode.ViewColumn.One,
     });
+    if (!isCurrent()) {
+        return;
+    }
     sourceEditor.selection = new vscode.Selection(target.start, target.end);
     sourceEditor.revealRange(target, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }

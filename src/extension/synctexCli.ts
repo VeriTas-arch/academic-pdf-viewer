@@ -42,6 +42,21 @@ export type SourceColumnResolution = {
     method: 'synctex' | 'hint' | 'line';
 };
 
+export interface LatestRequestTracker {
+    begin(): () => boolean;
+}
+
+/** Returns guards that remain current only until the next request begins. */
+export function createLatestRequestTracker(): LatestRequestTracker {
+    let generation = 0;
+    return {
+        begin: () => {
+            const requestGeneration = ++generation;
+            return () => requestGeneration === generation;
+        },
+    };
+}
+
 export const runSyncTexProcess: SyncTexRunner = request => new Promise((resolve, reject) => {
     execFile(
         request.executable,
@@ -137,8 +152,9 @@ export function resolveSourceColumn(
     sourceText: string,
     textHint?: SyncTexTextHint,
 ): SourceColumnResolution {
-    if (Number.isInteger(column) && column >= 0 && column <= sourceText.length) {
-        return { column, method: 'synctex' };
+    // SyncTeX node columns are one-based; non-positive values mean that no exact column is available.
+    if (Number.isInteger(column) && column > 0 && column <= sourceText.length) {
+        return { column: column - 1, method: 'synctex' };
     }
 
     const contextIndex = textHint ? sourceText.indexOf(textHint.context) : -1;
@@ -165,7 +181,11 @@ function parseSyncTexFields(output: string): Map<string, string> {
 }
 
 function finiteField(fields: Map<string, string>, key: string): number {
-    const value = Number(fields.get(key));
+    const field = fields.get(key);
+    if (field === undefined || field.length === 0) {
+        throw new Error(`SyncTeX did not return a valid ${key} field.`);
+    }
+    const value = Number(field);
     if (!Number.isFinite(value)) {
         throw new Error(`SyncTeX did not return a valid ${key} field.`);
     }

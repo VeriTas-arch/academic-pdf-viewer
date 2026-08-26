@@ -3,11 +3,22 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+    createLatestRequestTracker,
     querySyncTexForward,
     querySyncTexInverse,
     resolveSourceColumn,
     syncTexTextHint,
 } = require('../src/extension/synctexCli.ts');
+
+test('marks an earlier SyncTeX operation stale when a newer one begins', () => {
+    const tracker = createLatestRequestTracker();
+    const firstIsCurrent = tracker.begin();
+    assert.equal(firstIsCurrent(), true);
+
+    const secondIsCurrent = tracker.begin();
+    assert.equal(firstIsCurrent(), false);
+    assert.equal(secondIsCurrent(), true);
+});
 
 test('queries forward SyncTeX through the injected runner and converts its line box', async () => {
     const calls = [];
@@ -71,10 +82,14 @@ test('queries inverse SyncTeX with the validated PDF text hint', async () => {
     });
 });
 
-test('uses zero-based SyncTeX columns and falls back for ambiguous text hints', () => {
-    assert.deepEqual(resolveSourceColumn(4, 'example', undefined), {
-        column: 4,
+test('converts one-based SyncTeX columns and falls back for unknown columns', () => {
+    assert.deepEqual(resolveSourceColumn(1, 'example', undefined), {
+        column: 0,
         method: 'synctex',
+    });
+    assert.deepEqual(resolveSourceColumn(0, 'prefix target suffix', { context: 'target', offset: 3 }), {
+        column: 10,
+        method: 'hint',
     });
     assert.deepEqual(resolveSourceColumn(-1, 'target target', { context: 'target', offset: 3 }), {
         column: undefined,
@@ -88,5 +103,20 @@ test('rejects incomplete SyncTeX output', async () => {
     await assert.rejects(
         querySyncTexForward(runner, 'synctex', 'source.tex', 'source.pdf', 1, 1),
         /valid x field/,
+    );
+
+    const emptyCoordinateRunner = async () => ({ stdout: 'Page:1\nx:\ny:72\n', stderr: '' });
+    await assert.rejects(
+        querySyncTexForward(emptyCoordinateRunner, 'synctex', 'source.tex', 'source.pdf', 1, 1),
+        /valid x field/,
+    );
+
+    const emptyColumnRunner = async () => ({
+        stdout: 'Input:source.tex\nLine:1\nColumn:\n',
+        stderr: '',
+    });
+    await assert.rejects(
+        querySyncTexInverse(emptyColumnRunner, 'synctex', 'source.pdf', 1, 0, 0),
+        /valid Column field/,
     );
 });
