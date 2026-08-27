@@ -193,10 +193,17 @@ function finiteField(fields: Map<string, string>, key: string): number {
 }
 
 function readSyncTexTargetBox(fields: Map<string, string>): SyncTexTargetBox | undefined {
-    const x = Number(fields.get('h'));
-    const bottom = Number(fields.get('v'));
-    const width = Number(fields.get('W'));
-    const height = Number(fields.get('H'));
+    const xField = fields.get('h');
+    const bottomField = fields.get('v');
+    const widthField = fields.get('W');
+    const heightField = fields.get('H');
+    if (!xField || !bottomField || !widthField || !heightField) {
+        return undefined;
+    }
+    const x = Number(xField);
+    const bottom = Number(bottomField);
+    const width = Number(widthField);
+    const height = Number(heightField);
     const y = bottom - height;
     if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
         return undefined;

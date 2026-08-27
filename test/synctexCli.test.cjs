@@ -56,6 +56,39 @@ test('queries forward SyncTeX through the injected runner and converts its line 
     assert.equal(result.targetBox.height, 10.626775);
 });
 
+test('omits the optional SyncTeX line box when one of its fields is empty', async () => {
+    const boxFields = {
+        h: '110',
+        v: '674',
+        W: '388',
+        H: '10',
+    };
+    for (const emptyField of Object.keys(boxFields)) {
+        const runner = async () => ({
+            stdout: [
+                'Page:1',
+                'x:148',
+                'y:672',
+                ...Object.entries(boxFields).map(([field, value]) => (
+                    `${field}:${field === emptyField ? '' : value}`
+                )),
+            ].join('\n'),
+            stderr: '',
+        });
+
+        const result = await querySyncTexForward(
+            runner,
+            'synctex',
+            'source.tex',
+            'source.pdf',
+            1,
+            1,
+        );
+
+        assert.deepEqual(result, { pageNumber: 1, x: 148, y: 672 }, emptyField);
+    }
+});
+
 test('queries inverse SyncTeX with the validated PDF text hint', async () => {
     const calls = [];
     const pdfPath = path.resolve('manual-tests', 'synctex', 'fixture.pdf');
