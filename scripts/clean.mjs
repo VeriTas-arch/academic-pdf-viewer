@@ -2,9 +2,11 @@ import { rm } from 'node:fs/promises';
 
 const generatedPaths = [
     'out',
+    'tmp/webview-build',
     'assets/academic/citationPreview.js',
     'assets/academic/citationPreviewLines.js',
     'assets/academic/citationPreviewLines.mjs',
+    'assets/academic/extensionMessages.js',
     'assets/academic/pdfDiff.js',
     'assets/academic/pdfDiffAlgorithm.mjs',
     'assets/academic/pdfjsAdapter.js',

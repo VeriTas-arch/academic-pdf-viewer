@@ -57,6 +57,14 @@
   </tr>
 </table>
 
+## What's new in 1.3.1
+
+- Link previews adapt to screen density and available width, refreshing when needed while preserving the reading position.
+- Preview cropping retains content on asymmetric pages, and PDF link borders scale with page zoom.
+- Preview caching accounts for decoded image memory and discards outdated rendering results.
+
+The default `academicPdfViewer.linkPreview.resolutionScale` is now `0` (automatic). Existing explicit values from `1` to `4` retain their fixed-density behavior; set the value to `0` to use automatic adaptation. See [CHANGELOG.md](./CHANGELOG.md) for details.
+
 ## Install and start reading
 
 The current build is distributed as a Preview VSIX through [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases). Because it declares VS Code's proposed `customEditorDiffs` API, Proposed API access must be enabled for this extension even when using it as a regular PDF reader.
@@ -224,7 +232,7 @@ Many publisher and LaTeX-generated PDFs already contain links from citations, fi
 
 While Control is held, you can move into the popup and scroll its preview. Release Control to close it; the original PDF links and document outline remain clickable during normal reading. PDFs without embedded link annotations still work as normal PDFs, but they cannot provide these previews.
 
-For sharper preview images, increase `academicPdfViewer.linkPreview.resolutionScale`. This changes rendered resolution without enlarging the popup; higher values require more temporary memory and rendering time.
+Link previews automatically adapt their rendered resolution to the screen and available content width, with at least two image pixels per CSS pixel. `academicPdfViewer.linkPreview.resolutionScale` defaults to `0` (automatic); values from `1` to `4` select a fixed rendering density without enlarging the popup. Higher values require more temporary memory and rendering time, and large previews remain subject to pixel limits.
 
 ## Review PDF revisions *(Preview)*
 
@@ -254,7 +262,7 @@ Open a changed or staged PDF from the Source Control view. VS Code places the tr
 | Setting | Default | Description |
 | --- | --- | --- |
 | `academicPdfViewer.linkPreview.enabled` | `true` | Shows a destination preview while holding <kbd>Ctrl</kbd> over an internal PDF link. |
-| `academicPdfViewer.linkPreview.resolutionScale` | `2` | Sets rendered image pixels per CSS pixel from `1` to `4` without changing popup size. |
+| `academicPdfViewer.linkPreview.resolutionScale` | `0` | Automatically adapts to screen density; `1` to `4` set fixed image pixels per CSS pixel without changing popup size. |
 | `academicPdfViewer.tex.synctex` | `doubleclick` | Chooses `off`, `doubleclick`, or `rightclick` for inverse SyncTeX requests. |
 | `academicPdfViewer.tex.bridge.enabled` | `false` | Enables the local MiKTeX `synctex.exe`-compatible `view`/`edit` bridge in a trusted workspace. |
 | `academicPdfViewer.tex.bridge.executable` | `synctex` | Sets the compatible SyncTeX executable name or path; additional arguments are not supported. |

@@ -38,6 +38,9 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         src: string;
         canvas?: HTMLCanvasElement;
         sizeBytes?: number;
+        pixelWidth?: number;
+        pixelHeight?: number;
+        maxPixelWidth?: number;
         targetXRatio: number;
         targetYRatio: number;
     }
@@ -72,10 +75,11 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
     const OPEN_DELAY_MS = 200;
     const TEXT_RADIUS_PX = 90;
-    const DEFAULT_RESOLUTION_SCALE = 2;
+    const DEFAULT_RESOLUTION_SCALE = 0;
     const MIN_RESOLUTION_SCALE = 1;
     const MAX_RESOLUTION_SCALE = 4;
     const MAX_PREVIEW_PIXELS = 25600000;
+    const MAX_PREVIEW_DIMENSION = 16384;
     const MAX_PREVIEW_DISPLAY_WIDTH = 760;
     const PREVIEW_VIEWPORT_MARGIN = 16;
     const PREVIEW_MARGIN_FALLBACK_RATIO = 0.08;
@@ -148,6 +152,11 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         _controlPressed: boolean;
         _hoveredPreview: HoveredPreview | null;
         _pointerPosition: { x: number; y: number } | null;
+        _displayedImage: ImagePreview | null = null;
+        _previewGeneration = 0;
+        _refreshTimer: Timer = null;
+        _displayWidth = 0;
+        _displayDensity = 0;
 
         constructor(app: PdfJsApplication) {
             const initialConfiguration = readInitialConfiguration();
@@ -184,6 +193,25 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         initialize(): void {
+            const refresh = () => this._schedulePreviewRefresh();
+            const observer = new ResizeObserver(refresh);
+            observer.observe(this._popup);
+            window.addEventListener("resize", refresh);
+            let media: MediaQueryList;
+            const watchDensity = () => {
+                media?.removeEventListener("change", watchDensity);
+                media = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+                media.addEventListener("change", watchDensity);
+                refresh();
+            };
+            watchDensity();
+            window.addEventListener("pagehide", () => {
+                observer.disconnect();
+                media.removeEventListener("change", watchDensity);
+                window.removeEventListener("resize", refresh);
+                this._hidePopup();
+                this._clearPreviewCache();
+            }, { once: true });
             this._eventBus.on("documentloaded", () => {
                 this._documentGeneration += 1;
                 this._pdfDocument = this._app.pdfDocument;
@@ -227,8 +255,9 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             });
 
             window.addEventListener("message", event => {
-                const message = event.data;
-                if (isConfigureMessage(message)) {
+                if (window.academicExtensionMessages.isMessage(event.data)
+                    && event.data.type === "linkPreview.configure") {
+                    const message = event.data;
                     this._configure(message.enabled, message.resolutionScale);
                 }
             });
@@ -533,7 +562,34 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             return true;
         }
 
-        async _showPopup(anchor: HTMLElement, link: PreviewLink): Promise<void> {
+        _getPreviewDensity(): number {
+            return this._resolutionScale || Math.max(2, window.devicePixelRatio || 1);
+        }
+
+        _schedulePreviewRefresh(): void {
+            if (!this._popup.classList.contains("is-open") || !this._displayedImage) {
+                return;
+            }
+            const width = this._getPreviewDisplayWidth();
+            const density = this._getPreviewDensity();
+            const requiredWidth = Math.min(Math.ceil(width * density), this._displayedImage.maxPixelWidth ?? Infinity);
+            if (Math.abs(width - this._displayWidth) < 0.5 && density === this._displayDensity
+                && (this._displayedImage.pixelWidth ?? 0) >= requiredWidth) {
+                return;
+            }
+            if (this._refreshTimer) {
+                clearTimeout(this._refreshTimer);
+            }
+            this._refreshTimer = setTimeout(() => {
+                this._refreshTimer = null;
+                const hovered = this._hoveredPreview;
+                if (hovered && this._controlPressed && this._popup.classList.contains("is-open")) {
+                    void this._showPopup(hovered.anchor, hovered.link, true);
+                }
+            }, SCALE_RENDER_DEBOUNCE_MS);
+        }
+
+        async _showPopup(anchor: HTMLElement, link: PreviewLink, preserveScroll = false): Promise<void> {
             if (this._isHoverSuppressed()) {
                 return;
             }
@@ -547,19 +603,17 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 return;
             }
 
+            this._popup.classList.add("is-open");
             const cachedText = getCachedEntry(this._textCache, textPreviewKey(destination));
             const cachedImage = this._getCachedImagePreview(destination);
-            if (cachedText !== undefined && cachedImage !== undefined) {
-                this._popup.classList.add("is-open");
+            if (!preserveScroll && cachedText !== undefined && cachedImage !== undefined) {
                 this._renderPopupContent(destination, cachedText, cachedImage, anchor);
-                return;
-            }
-
-            this._popup.classList.add("is-open");
-            this._popup.innerHTML = `
+            } else if (!preserveScroll) {
+                this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        <div class="academic-citation-popup__loading">Loading preview...</div>
+        <div class="academic-citation-popup__preview"><div class="academic-citation-popup__loading">Loading preview...</div></div>
       `;
+            }
             this._positionPopup(anchor);
 
             const [text, image] = await Promise.all([
@@ -567,7 +621,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                     console.warn("Failed to render PDF link text preview.", error);
                     return "";
                 }),
-                this._getImagePreview(destination).catch((error: unknown): null => {
+                this._getImagePreview(destination, requestId).catch((error: unknown): null => {
                     console.warn("Failed to render PDF link image preview.", error);
                     return null;
                 })
@@ -575,11 +629,18 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             if (requestId !== this._previewRequestId || this._isHoverSuppressed()) {
                 return;
             }
+            if (!image?.src && !image?.canvas && this._displayedImage) {
+                return;
+            }
+            if (image && image === this._displayedImage && !preserveScroll) {
+                return;
+            }
             this._renderPopupContent(
                 destination,
                 text,
                 image?.src || image?.canvas ? image : null,
-                anchor
+                anchor,
+                preserveScroll || this._displayedImage !== null
             );
         }
 
@@ -587,11 +648,18 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             destination: ResolvedDestination,
             text: string,
             image: ImagePreview | null,
-            anchor: HTMLElement
+            anchor: HTMLElement,
+            preserveScroll = false
         ): void {
+            const previous = this._popup.querySelector<HTMLElement>(".academic-citation-popup__preview");
+            const scroll = preserveScroll && previous && this._displayWidth > 0
+                ? { top: previous.scrollTop / this._displayWidth, left: previous.scrollLeft / this._displayWidth }
+                : null;
+            const oldImage = this._displayedImage;
+            this._displayedImage = image;
             this._popup.innerHTML = `
         <div class="academic-citation-popup__meta">Page ${destination.pageNumber}</div>
-        ${image ? `<div class="academic-citation-popup__preview">${image.src ? `<img class="academic-citation-popup__image" src="${image.src}" alt="" draggable="false">` : ""}</div>` : ""}
+        ${image ? `<div class="academic-citation-popup__preview">${image.src ? `<img class="academic-citation-popup__image" src="${image.src}" width="${image.pixelWidth}" height="${image.pixelHeight}" alt="" draggable="false">` : ""}</div>` : ""}
         <div class="academic-citation-popup__text">${escapeHtml(text || "No nearby text found.")}</div>
       `;
             if (image?.canvas) {
@@ -599,7 +667,12 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 image.canvas.setAttribute("aria-hidden", "true");
                 this._popup.querySelector(".academic-citation-popup__preview")?.append(image.canvas);
             }
-            this._bindPreviewScroll(image, anchor);
+            this._displayWidth = this._getPreviewDisplayWidth();
+            this._displayDensity = this._getPreviewDensity();
+            this._bindPreviewScroll(image, anchor, scroll);
+            if (oldImage !== image) {
+                this._releasePreviewCanvas(oldImage);
+            }
             requestAnimationFrame(() => this._positionPopup(anchor));
         }
 
@@ -608,6 +681,10 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _hidePopup(): void {
+            if (this._refreshTimer) {
+                clearTimeout(this._refreshTimer);
+                this._refreshTimer = null;
+            }
             this._previewRequestId++;
             this._cancelActiveRenderTask();
             this._hoverDelayer.cancelOpen();
@@ -616,6 +693,9 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             this._cancelPendingPointerMoveFrame();
             this._popup.classList.remove("is-open");
             this._popup.innerHTML = "";
+            const image = this._displayedImage;
+            this._displayedImage = null;
+            this._releasePreviewCanvas(image);
         }
 
         _scheduleClose(): void {
@@ -677,7 +757,11 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             return popup;
         }
 
-        _bindPreviewScroll(image: ImagePreview | null, anchor: HTMLElement): void {
+        _bindPreviewScroll(
+            image: ImagePreview | null,
+            anchor: HTMLElement,
+            scroll: { top: number; left: number } | null = null
+        ): void {
             const preview = this._popup.querySelector<HTMLElement>(".academic-citation-popup__preview");
             if (!preview) {
                 return;
@@ -687,15 +771,19 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
             const previewImage = preview.querySelector<HTMLElement>(".academic-citation-popup__image");
             const settlePreview = () => {
+                if (!preview.isConnected || this._displayedImage !== image) {
+                    return;
+                }
                 this._positionPopup(anchor);
-                preview.scrollTop = Math.max(0, preview.scrollHeight * image.targetYRatio - preview.clientHeight * 0.32);
-                preview.scrollLeft = Math.max(0, preview.scrollWidth * image.targetXRatio - preview.clientWidth * 0.5);
+                const width = this._getPreviewDisplayWidth();
+                preview.scrollTop = scroll ? scroll.top * width
+                    : Math.max(0, preview.scrollHeight * image.targetYRatio - preview.clientHeight * 0.32);
+                preview.scrollLeft = scroll ? scroll.left * width
+                    : Math.max(0, preview.scrollWidth * image.targetXRatio - preview.clientWidth * 0.5);
+                this._schedulePreviewRefresh();
             };
-            if (previewImage instanceof HTMLImageElement && previewImage.complete) {
-                requestAnimationFrame(settlePreview);
-            } else if (previewImage instanceof HTMLImageElement) {
-                previewImage.addEventListener("load", () => requestAnimationFrame(settlePreview), { once: true });
-            } else if (previewImage) {
+            // Explicit image dimensions make layout available before PNG decoding completes.
+            if (previewImage) {
                 requestAnimationFrame(settlePreview);
             }
         }
@@ -762,29 +850,44 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             return text;
         }
 
-        async _getImagePreview(destination: ResolvedDestination): Promise<ImagePreview> {
+        async _getImagePreview(destination: ResolvedDestination, requestId: number): Promise<ImagePreview | null> {
             const startedAt = performance.now();
             const key = imagePreviewKey(destination);
-            const cachedPreview = this._getCachedImagePreview(destination);
-            if (cachedPreview) {
-                return cachedPreview;
-            }
-            const encodingKey = `${this._documentGeneration}:${this._resolutionScale}:${key}`;
-            const pendingPreview = this._pendingPreviewEncodings.get(encodingKey);
-            if (pendingPreview) {
-                return pendingPreview.image;
-            }
-
             const pdfDocument = this._pdfDocument;
-            const resolutionScale = this._resolutionScale;
+            const generation = this._previewGeneration;
             const page = await this._getPage(destination.pageNumber);
             const baseViewport = page.getViewport({ scale: 1 });
             const baseTextBounds = await this._getPageTextBounds(destination.pageNumber, baseViewport);
+            if (requestId !== this._previewRequestId || generation !== this._previewGeneration) {
+                return null;
+            }
             const baseCrop = getPreviewCrop(baseViewport, baseTextBounds);
+            const loading = this._popup.querySelector<HTMLElement>(".academic-citation-popup__preview > .academic-citation-popup__loading");
+            if (loading) {
+                // Lay out the same scrollable page height before measuring the content width.
+                loading.style.boxSizing = "border-box";
+                loading.style.aspectRatio = `${baseCrop.width} / ${baseCrop.height}`;
+            }
             const displayWidth = this._getPreviewDisplayWidth();
-            const desiredScale = displayWidth * resolutionScale / baseCrop.width;
-            const maxPixelScale = Math.sqrt(MAX_PREVIEW_PIXELS / (baseCrop.width * baseCrop.height));
-            const scale = Math.min(desiredScale, maxPixelScale);
+            const maxPixelScale = Math.min(
+                Math.sqrt(MAX_PREVIEW_PIXELS / (baseCrop.width * baseCrop.height)),
+                MAX_PREVIEW_DIMENSION / baseCrop.width,
+                MAX_PREVIEW_DIMENSION / baseCrop.height
+            );
+            const maxPixelWidth = Math.max(1, Math.floor(baseCrop.width * maxPixelScale));
+            const pixelWidth = Math.max(1, Math.min(Math.ceil(displayWidth * this._getPreviewDensity()), maxPixelWidth));
+            const scale = Math.min(pixelWidth / baseCrop.width, maxPixelScale);
+            const pixelHeight = Math.max(1, Math.floor(baseCrop.height * scale));
+            const cachedPreview = this._getCachedImagePreview(destination);
+            if (cachedPreview && (cachedPreview.pixelWidth ?? 0) >= pixelWidth) {
+                return cachedPreview;
+            }
+            const encodingKey = `${generation}:${key}:${pixelWidth}`;
+            for (const [pendingKey, pending] of this._pendingPreviewEncodings) {
+                if (pendingKey.startsWith(`${generation}:${key}:`) && (pending.image.pixelWidth ?? 0) >= pixelWidth) {
+                    return pending.image;
+                }
+            }
             const viewport = page.getViewport({ scale });
             const point = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)
@@ -797,16 +900,13 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             });
 
             const canvas = document.createElement("canvas");
-            canvas.width = Math.round(crop.width);
-            canvas.height = Math.round(crop.height);
+            canvas.width = pixelWidth;
+            canvas.height = pixelHeight;
 
             const context = canvas.getContext("2d", { alpha: false });
             if (!context) {
-                return {
-                    src: "",
-                    targetXRatio: 0,
-                    targetYRatio: 0
-                };
+                canvas.width = canvas.height = 0;
+                return null;
             }
             context.fillStyle = "#ffffff";
             context.fillRect(0, 0, canvas.width, canvas.height);
@@ -819,12 +919,10 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 await renderTask.promise;
             } catch (error) {
                 if (isRenderingCancelled(error)) {
-                    return {
-                        src: "",
-                        targetXRatio: 0,
-                        targetYRatio: 0
-                    };
+                    canvas.width = canvas.height = 0;
+                    return null;
                 }
+                canvas.width = canvas.height = 0;
                 throw error;
             } finally {
                 if (this._activeRenderTask === renderTask) {
@@ -832,18 +930,18 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 }
             }
             drawPreviewTarget(context, point, crop, crop.width / displayWidth);
-            if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
+            if (this._pdfDocument !== pdfDocument || generation !== this._previewGeneration
+                || requestId !== this._previewRequestId) {
                 canvas.width = 0;
                 canvas.height = 0;
-                return {
-                    src: "",
-                    targetXRatio: 0,
-                    targetYRatio: 0
-                };
+                return null;
             }
             const image = {
                 src: "",
                 canvas,
+                pixelWidth,
+                pixelHeight,
+                maxPixelWidth,
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
@@ -859,7 +957,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 image,
                 canvas,
                 pdfDocument,
-                resolutionScale,
+                generation,
                 destination.pageNumber
             );
             return image;
@@ -871,7 +969,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             image: ImagePreview,
             canvas: HTMLCanvasElement,
             pdfDocument: PdfJsDocument | null,
-            resolutionScale: number,
+            generation: number,
             pageNumber: number
         ): void {
             if (this._pendingPreviewEncodings.has(encodingKey)
@@ -880,12 +978,17 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
             const encodingStartedAt = performance.now();
             const encoding = canvasToPngBlob(canvas).then((blob): ImagePreview | null => {
-                if (this._pdfDocument !== pdfDocument || this._resolutionScale !== resolutionScale) {
+                if (this._pdfDocument !== pdfDocument || this._previewGeneration !== generation
+                    || (this._previewCache.get(key)?.pixelWidth ?? 0) > canvas.width) {
                     return null;
                 }
                 const encodedPreview = {
                     src: URL.createObjectURL(blob),
-                    sizeBytes: blob.size,
+                    // Include a decoded RGBA copy; compressed PNG size alone understates the cost.
+                    sizeBytes: blob.size + canvas.width * canvas.height * 4,
+                    pixelWidth: image.pixelWidth,
+                    pixelHeight: image.pixelHeight,
+                    maxPixelWidth: image.maxPixelWidth,
                     targetXRatio: image.targetXRatio,
                     targetYRatio: image.targetYRatio
                 };
@@ -903,6 +1006,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 if (this._pendingPreviewEncodings.get(encodingKey)?.task === encoding) {
                     this._pendingPreviewEncodings.delete(encodingKey);
                 }
+                this._releasePreviewCanvas(image);
             });
             this._pendingPreviewEncodings.set(encodingKey, { image, task: encoding });
         }
@@ -953,6 +1057,13 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _getPreviewDisplayWidth(): number {
+            const content = this._popup.querySelector<HTMLElement>(
+                ".academic-citation-popup__image, .academic-citation-popup__preview > .academic-citation-popup__loading"
+            );
+            const width = content?.getBoundingClientRect().width;
+            if (width && width > 0) {
+                return width;
+            }
             const popupWidth = this._popup.clientWidth;
             if (popupWidth > 0) {
                 return popupWidth;
@@ -986,11 +1097,24 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _clearPreviewCache(): void {
+            this._previewGeneration++;
             for (const image of this._previewCache.values()) {
                 URL.revokeObjectURL(image.src);
             }
             this._previewCache.clear();
             this._previewCacheBytes = 0;
+        }
+
+        _releasePreviewCanvas(image: ImagePreview | null): void {
+            if (!image?.canvas || image.canvas.isConnected) {
+                return;
+            }
+            for (const pending of this._pendingPreviewEncodings.values()) {
+                if (pending.image === image) {
+                    return;
+                }
+            }
+            image.canvas.width = image.canvas.height = 0;
         }
 
         _cancelActiveRenderTask(): void {
@@ -1072,20 +1196,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             && (Array.isArray(annotation.dest)
                 || typeof annotation.dest === "string" && annotation.dest.length > 0)
             && Array.isArray(annotation.rect);
-    }
-
-    function isConfigureMessage(
-        message: unknown
-    ): message is { type: "linkPreview.configure"; enabled: boolean; resolutionScale: number } {
-        return typeof message === "object"
-            && message !== null
-            && "type" in message
-            && (message as { type: unknown }).type === "linkPreview.configure"
-            && "enabled" in message
-            && typeof (message as { enabled: unknown }).enabled === "boolean"
-            && "resolutionScale" in message
-            && typeof (message as { resolutionScale: unknown }).resolutionScale === "number"
-            && Number.isFinite((message as { resolutionScale: number }).resolutionScale);
     }
 
     function readInitialConfiguration(): LinkPreviewConfiguration {
@@ -1190,7 +1300,8 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         if (textBounds) {
             const leftMargin = textBounds.left;
             const rightMargin = viewport.width - textBounds.right;
-            const balancedMargin = Math.max(leftMargin, rightMargin);
+            // Symmetric cropping must retain the wider side of asymmetric content.
+            const balancedMargin = Math.min(leftMargin, rightMargin);
             left = balancedMargin;
             right = viewport.width - balancedMargin;
         }
@@ -1254,7 +1365,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
     }
 
     function normalizeResolutionScale(value: unknown): number {
-        if (typeof value !== "number" || !Number.isFinite(value)) {
+        if (value === 0 || typeof value !== "number" || !Number.isFinite(value)) {
             return DEFAULT_RESOLUTION_SCALE;
         }
         return clamp(value, MIN_RESOLUTION_SCALE, MAX_RESOLUTION_SCALE);

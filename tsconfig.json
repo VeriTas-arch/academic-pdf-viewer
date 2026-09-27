@@ -21,6 +21,7 @@
         "src/**/*.ts"
     ],
     "exclude": [
-        "src/webview/**"
+        "src/webview/**",
+        "src/shared/extensionMessages.ts"
     ]
 }

@@ -4,7 +4,6 @@
 
 (function () {
     type NavigationDirection = "back" | "forward";
-    type MouseButtonMapping = "standard" | "swapped";
 
     interface NavigationPoint {
         pageNumber: number;
@@ -25,11 +24,6 @@
         x: number;
         y: number;
     }
-
-    type NavigationMessage =
-        | { type: "navigation.back" }
-        | { type: "navigation.forward" }
-        | { type: "navigation.configure"; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping };
 
     const vscode = acquireVsCodeApi();
     const pdfjsAdapter = window.academicPdfJsAdapter;
@@ -286,8 +280,8 @@
         });
     }
 
-    function handleNavigationMessage(data: NavigationMessage | unknown, allowPressedKey = false): void {
-        if (!isNavigationMessage(data)) {
+    function handleNavigationMessage(data: unknown, allowPressedKey = false): void {
+        if (!window.academicExtensionMessages.isMessage(data)) {
             return;
         }
         if (data.type === "navigation.configure") {
@@ -306,20 +300,6 @@
             }
             history.forward(captureLocation());
         }
-    }
-
-    function isNavigationMessage(data: unknown): data is NavigationMessage {
-        return typeof data === "object"
-            && data !== null
-            && "type" in data
-            && ((data as { type: unknown }).type === "navigation.back"
-                || (data as { type: unknown }).type === "navigation.forward"
-                || ((data as { type: unknown }).type === "navigation.configure"
-                    && "mouseButtonsEnabled" in data
-                    && typeof (data as { mouseButtonsEnabled: unknown }).mouseButtonsEnabled === "boolean"
-                    && "mouseButtonMapping" in data
-                    && ((data as { mouseButtonMapping: unknown }).mouseButtonMapping === "standard"
-                        || (data as { mouseButtonMapping: unknown }).mouseButtonMapping === "swapped")));
     }
 
     function handleViewerShortcutBoundary(event: KeyboardEvent): void {
@@ -529,7 +509,7 @@
         }
     }
 
-    function readMouseNavigationConfig(): { enabled: boolean; mapping: MouseButtonMapping } {
+    function readMouseNavigationConfig(): { enabled: boolean; mapping: AcademicMouseButtonMapping } {
         const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
         if (!value) {
             return { enabled: true, mapping: "standard" };

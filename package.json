@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -122,11 +122,11 @@
                 },
                 "academicPdfViewer.linkPreview.resolutionScale": {
                     "type": "number",
-                    "default": 2,
-                    "minimum": 1,
+                    "default": 0,
+                    "minimum": 0,
                     "maximum": 4,
                     "scope": "window",
-                    "markdownDescription": "Controls link-preview image clarity without changing its displayed size. The value is the number of rendered image pixels per CSS pixel; higher values use more memory and rendering time."
+                    "markdownDescription": "Controls link-preview clarity without changing its displayed size. `0` automatically adapts to screen pixel density with at least 2 image pixels per CSS pixel. Values from `1` to `4` use a fixed number of image pixels per CSS pixel. Higher values use more memory and rendering time; large previews remain subject to pixel limits."
                 },
                 "academicPdfViewer.navigation.defaultAltShortcuts": {
                     "type": "boolean",
@@ -299,13 +299,13 @@
         "clean": "node ./scripts/clean.mjs",
         "compile": "npm run compile:extension && npm run compile:webview",
         "compile:extension": "tsc -p ./",
-        "compile:webview": "tsc -p ./tsconfig.webview.json",
+        "compile:webview": "tsc -p ./tsconfig.webview.json && node ./scripts/copyWebviewBuild.mts",
         "typecheck:scripts": "tsc -p ./tsconfig.scripts.json",
         "lint": "eslint \"src/**/*.ts\" \"src/**/*.mts\" \"scripts/**/*.mts\"",
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs",
+        "test": "node --test test/protocol.test.cjs test/extensionMessages.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs",
         "test:extension": "node test/extensionHost/run.mjs",
         "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },

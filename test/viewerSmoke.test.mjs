@@ -112,6 +112,176 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         )), true);
     });
 
+    await t.test("scales PDF link borders with the page without changing their style", async t => {
+        const borderPage = await browser.newPage({ deviceScaleFactor: 2 });
+        t.after(() => borderPage.close());
+        const errors = [];
+        borderPage.on("pageerror", error => errors.push(error.message));
+        await borderPage.goto(`${origin}/__viewer_test__.html`);
+        await borderPage.waitForFunction(() => window.__academicTestMessages.some(
+            message => message.type === "webview.ready"
+        ));
+
+        for (const userUnit of [1, 2]) {
+            await borderPage.evaluate(({ bytes, loadId }) => {
+                window.postMessage({
+                    type: "document.load",
+                    loadId,
+                    data: new Uint8Array(bytes).buffer,
+                    isEmptyRevision: false,
+                    fingerprint: `link-borders-${loadId}`,
+                    preserveView: false
+                }, "*");
+            }, { bytes: Array.from(createLinkBorderPdf(userUnit)), loadId: userUnit });
+            await borderPage.waitForFunction(loadId => window.__academicTestDebug.some(
+                message => message.event === "firstPageRendered"
+                    && message.fingerprint === `link-borders-${loadId}`
+            ), userUnit);
+            await borderPage.locator('.annotationLayer .linkAnnotation[data-annotation-id="6R"]').waitFor();
+
+            // Return to the initial zoom and rotate to catch cumulative scaling or recreation bugs.
+            for (const [scale, rotation] of [[0.75, 0], [1.5, 0], [3, 90], [0.75, 0]]) {
+                await borderPage.evaluate(({ scale, rotation }) => {
+                    const viewer = window.PDFViewerApplication.pdfViewer;
+                    viewer.currentScaleValue = String(scale);
+                    viewer.pagesRotation = rotation;
+                }, { scale, rotation });
+                await borderPage.waitForFunction(() => {
+                    const view = window.PDFViewerApplication.pdfViewer.getPageView(0);
+                    return view.renderingState === 3 && !view.div.querySelector(".annotationLayer")?.hidden;
+                });
+                const borders = await borderPage.locator(".annotationLayer .linkAnnotation").evaluateAll(elements =>
+                    elements.map(element => {
+                        const style = getComputedStyle(element);
+                        return {
+                            width: parseFloat(style.borderBottomWidth),
+                            topWidth: parseFloat(style.borderTopWidth),
+                            style: style.borderBottomStyle,
+                            color: style.borderBottomColor
+                        };
+                    })
+                );
+                const unit = scale * 4 / 3 * userUnit;
+                assert.equal(borders.length, 5);
+                for (const [index, width, style] of [[0, 1, "solid"], [1, 2, "dashed"], [2, 1, "solid"]]) {
+                    assert.equal(borders[index].width, width * unit,
+                        `link ${index}, zoom ${scale}, rotation ${rotation}, UserUnit ${userUnit}`);
+                    assert.equal(borders[index].style, style);
+                    assert.equal(borders[index].color, "rgb(0, 255, 0)");
+                }
+                assert.equal(borders[2].topWidth, 0, "underline must remain bottom-only");
+                assert.equal(borders[3].width, 0, "zero-width link must stay borderless");
+                assert.equal(borders[4].width, 0, "transparent link must stay borderless");
+            }
+        }
+        assert.deepEqual(errors, []);
+    });
+
+    await t.test("adapts preview pixels to content width, DPI and cached image quality", async t => {
+        const previewPage = await browser.newPage({ viewport: { width: 600, height: 900 }, deviceScaleFactor: 1.25 });
+        previewPage.setDefaultTimeout(5_000);
+        t.after(() => previewPage.close());
+        const errors = [];
+        previewPage.on("pageerror", error => errors.push(error.message));
+        await previewPage.goto(`${origin}/__viewer_test__.html`);
+        // Headless Chromium normally overlays scrollbars; exercise the reserved gutter too.
+        await previewPage.addStyleTag({ content: ".academic-citation-popup__preview { scrollbar-gutter: stable; }" });
+        await previewPage.waitForFunction(() => window.__academicTestMessages.some(m => m.type === "webview.ready"));
+        await previewPage.evaluate(bytes => window.postMessage({
+            type: "document.load", loadId: 1, data: new Uint8Array(bytes).buffer,
+            isEmptyRevision: false, fingerprint: "preview-resolution", preserveView: false
+        }, "*"), Array.from(createLinkBorderPdf(1)));
+        await previewPage.locator(".academic-citation-link").first().waitFor();
+        await previewPage.evaluate(() => {
+            window.PDFViewerApplication.pdfViewer.currentScaleValue = "0.75";
+            window.postMessage({ type: "linkPreview.configure", enabled: true, resolutionScale: 0 }, "*");
+        });
+        const openPreview = async () => {
+            await previewPage.evaluate(() => {
+                const link = document.querySelector(".academic-citation-link");
+                const rect = link.getBoundingClientRect();
+                link.dispatchEvent(new PointerEvent("pointermove", {
+                    bubbles: true, clientX: rect.x + rect.width / 2,
+                    clientY: rect.y + rect.height / 2, ctrlKey: true
+                }));
+                window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", bubbles: true }));
+            });
+            await waitForPreview(previewPage);
+            await previewPage.waitForFunction(() => {
+                const image = document.querySelector(".academic-citation-popup__image");
+                return image instanceof HTMLCanvasElement || image instanceof HTMLImageElement && image.complete;
+            });
+            await previewPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        };
+        const readImage = () => previewPage.evaluate(() => {
+            const image = document.querySelector(".academic-citation-popup__image");
+            const preview = image.parentElement;
+            const width = image.getBoundingClientRect().width;
+            return {
+                pixels: image instanceof HTMLImageElement ? image.naturalWidth : image.width,
+                height: image instanceof HTMLImageElement ? image.naturalHeight : image.height,
+                width, popupWidth: document.querySelector(".academic-citation-popup").clientWidth,
+                scroll: preview.scrollTop / width,
+                renders: window.__academicTestDebug.filter(m => m.event === "linkPreviewRendered").length
+            };
+        });
+        await openPreview();
+        const initial = await readImage();
+        assert(Math.abs(initial.pixels - Math.ceil(initial.width * 2)) <= 1, JSON.stringify(initial));
+        assert(initial.width < initial.popupWidth, "fixture must exercise scrollbar width");
+        await previewPage.waitForFunction(() => window.__academicTestDebug.some(m => m.event === "linkPreviewEncoded"));
+        await previewPage.evaluate(() => window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control" })));
+        await openPreview();
+        const cached = await readImage();
+        assert.equal(cached.renders, initial.renders);
+        assert.equal(cached.pixels, initial.pixels);
+        assert.equal(cached.width, initial.width);
+        assert.equal(cached.scroll, initial.scroll, "cached image must retain the destination position");
+
+        await previewPage.evaluate(() => { document.querySelector(".academic-citation-popup__preview").scrollTop = 120; });
+        const beforeResize = await readImage();
+        await previewPage.setViewportSize({ width: 1200, height: 900 });
+        await previewPage.waitForFunction(previous => {
+            const image = document.querySelector(".academic-citation-popup__image");
+            return image && (image.naturalWidth || image.width) > previous;
+        }, initial.pixels);
+        await previewPage.evaluate(() => new Promise(requestAnimationFrame));
+        const resized = await readImage();
+        assert(Math.abs(resized.pixels - Math.ceil(resized.width * 2)) <= 1, JSON.stringify(resized));
+        assert(Math.abs(resized.scroll - beforeResize.scroll) < 0.005, JSON.stringify({ beforeResize, resized }));
+
+        const cdp = await previewPage.context().newCDPSession(previewPage);
+        // CDP changes DPR without notifying media queries unless viewport metrics also change.
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 901, deviceScaleFactor: 3, mobile: false });
+        await previewPage.waitForFunction(() => {
+            const image = document.querySelector(".academic-citation-popup__image");
+            return image && (image.naturalWidth || image.width) >= image.getBoundingClientRect().width * 3 - 1;
+        });
+        const highDpi = await readImage();
+        assert(Math.abs(highDpi.pixels - Math.ceil(highDpi.width * 3)) <= 1, JSON.stringify(highDpi));
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1.25, mobile: false });
+        await previewPage.waitForTimeout(250);
+        assert.equal((await readImage()).renders, highDpi.renders, "lower DPI should reuse sufficient pixels");
+
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 901, deviceScaleFactor: 8, mobile: false });
+        await previewPage.waitForFunction(previous => {
+            const image = document.querySelector(".academic-citation-popup__image");
+            return image && (image.naturalWidth || image.width) > previous;
+        }, highDpi.pixels);
+        const capped = await readImage();
+        assert(capped.pixels * capped.height <= 25_600_000, JSON.stringify(capped));
+        assert(capped.pixels < capped.width * 8, "pixel budget must cap the requested density");
+        await previewPage.waitForTimeout(350);
+        assert.equal((await readImage()).renders, capped.renders, "pixel cap must not cause repeated rendering");
+
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 3, mobile: false });
+        await previewPage.evaluate(() => window.postMessage({ type: "linkPreview.configure", enabled: true, resolutionScale: 1 }, "*"));
+        await openPreview();
+        const manual = await readImage();
+        assert(Math.abs(manual.pixels - Math.ceil(manual.width)) <= 1, JSON.stringify(manual));
+        assert.deepEqual(errors, []);
+    });
+
     await t.test("routes VS Code-owned shortcuts to the workbench", async () => {
         for (const [shortcut, messageType] of [
             ["Control+P", "workbench.quickOpen"],
@@ -323,7 +493,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await page.waitForFunction(() => !document.querySelector(".academic-citation-popup")?.classList.contains("is-open"));
     });
 
-    await t.test("reuses an in-flight PNG encoding on repeated preview", async () => {
+    await t.test("reuses pending preview encoding and discards it after configuration changes", async () => {
         const renderedBefore = await page.evaluate(() => window.__academicTestDebug.filter(
             message => message.event === "linkPreviewRendered"
         ).length);
@@ -370,8 +540,33 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 message => message.event === "linkPreviewEncoded"
             ).length - start, encodedBefore), 0);
             await page.evaluate(() => {
+                window.__academicPendingCanvas = document.querySelector("canvas.academic-citation-popup__image");
+            });
+            await page.keyboard.up("Control");
+            // Returning to the same numeric setting must not revive an old generation.
+            for (const resolutionScale of [1, 2]) {
+                await page.evaluate(scale => new Promise(resolve => {
+                    const applied = event => {
+                        if (event.data?.type === "linkPreview.configure" && event.data.resolutionScale === scale) {
+                            window.removeEventListener("message", applied);
+                            resolve();
+                        }
+                    };
+                    window.addEventListener("message", applied);
+                    window.postMessage({ type: "linkPreview.configure", enabled: true, resolutionScale: scale }, "*");
+                }), resolutionScale);
+            }
+            await page.evaluate(() => {
                 window.__academicPendingToBlobCallbacks.splice(0).forEach(callback => callback());
             });
+            await page.waitForFunction(() => window.__academicPendingCanvas.width === 0);
+            assert.equal(await page.evaluate(start => window.__academicTestDebug.filter(
+                message => message.event === "linkPreviewEncoded"
+            ).length - start, encodedBefore), 0, "stale encoding must not populate the cache");
+            await page.keyboard.down("Control");
+            await waitForPreview(page);
+            await page.waitForFunction(() => window.__academicPendingToBlobCallbacks.length === 1);
+            assert.equal(await page.evaluate(() => window.__academicToBlobCalls), 2);
         } finally {
             await page.keyboard.up("Control");
             await page.evaluate(() => {
@@ -380,6 +575,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 delete window.__academicOriginalToBlob;
                 delete window.__academicToBlobCalls;
                 delete window.__academicPendingToBlobCallbacks;
+                delete window.__academicPendingCanvas;
                 window.postMessage({
                     type: "linkPreview.configure",
                     enabled: true,
@@ -1875,6 +2071,7 @@ async function buildViewerHtml(configOverrides = {}) {
 <link rel="stylesheet" href="/assets/academic/reader.css">
 <link rel="stylesheet" href="/assets/academic/citationPreview.css">
 <script src="/test/viewer/harnessPrelude.js"></script>
+<script src="/assets/academic/extensionMessages.js"></script>
 <script src="/assets/academic/pdfjsAdapter.js"></script>
 <script src="/assets/academic/pdfViewerBootstrap.js"></script>
 <script src="/assets/pdfviewer/lib/build/pdf.mjs" type="module"></script>
@@ -1943,6 +2140,30 @@ function contentType(path) {
 
 function escapeHtmlAttribute(value) {
     return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function createLinkBorderPdf(userUnit) {
+    const borders = [
+        "/Border [0 0 1] /C [0 1 0]",
+        "/BS << /W 2 /S /D /D [3 2] >> /C [0 1 0]",
+        "/BS << /W 1 /S /U >> /C [0 1 0]",
+        "/Border [0 0 0] /C [0 1 0]",
+        "/Border [0 0 1] /C []"
+    ];
+    const stream = borders.map((_, index) =>
+        `BT /F1 24 Tf 72 ${700 - index * 50} Td ([1]) Tj ET\n`
+    ).join("");
+    return createPdfFromObjects([
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /UserUnit ${userUnit} /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>\nendobj\n`,
+        `4 0 obj\n<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream\nendobj\n`,
+        "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        ...borders.map((border, index) => {
+            const y = 700 - index * 50;
+            return `${6 + index} 0 obj\n<< /Type /Annot /Subtype /Link /Rect [72 ${y} 102 ${y + 28}] ${border} /Dest [3 0 R /XYZ 72 400 null] >>\nendobj\n`;
+        })
+    ]);
 }
 
 function createTextPdf(text) {

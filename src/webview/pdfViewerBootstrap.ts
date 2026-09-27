@@ -30,43 +30,10 @@
         sidebar: AcademicSidebarState | null;
     }
 
-    interface DocumentLoadMessage {
-        type: "document.load";
-        loadId: number;
-        data: ArrayBuffer;
-        isEmptyRevision: boolean;
-        fingerprint: string;
-        preserveView: boolean;
-    }
-
-    interface SidebarConfigureMessage {
-        type: "sidebar.configure";
-        defaultSidebar: AcademicSidebarView;
-    }
-
-    interface SyncTexForwardIdentity {
-        requestId: string;
-        loadId: number;
-    }
-
-    interface SyncTexTargetBox {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-    }
-
-    type SyncTexForwardMessage = SyncTexForwardIdentity & {
-        type: "synctex.forward";
-        pageNumber: number;
-        x: number;
-        y: number;
-        targetBox?: SyncTexTargetBox;
-    };
-
-    type SyncTexForwardCancelMessage = SyncTexForwardIdentity & {
-        type: "synctex.forwardCancel";
-    };
+    type DocumentLoadMessage = Extract<AcademicExtensionToWebviewMessage, { type: "document.load" }>;
+    type SyncTexForwardMessage = Extract<AcademicExtensionToWebviewMessage, { type: "synctex.forward" }>;
+    type SyncTexForwardIdentity = Pick<SyncTexForwardMessage, "requestId" | "loadId">;
+    type SyncTexTargetBox = NonNullable<SyncTexForwardMessage["targetBox"]>;
 
     interface PendingFirstPageRender {
         fingerprint: string;
@@ -157,86 +124,6 @@
                 resolve();
             });
         }));
-    }
-
-    function isDocumentLoadMessage(value: unknown): value is DocumentLoadMessage {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const message = value as Record<string, unknown>;
-        return message.type === "document.load"
-            && typeof message.loadId === "number"
-            && Number.isSafeInteger(message.loadId)
-            && message.loadId >= 1
-            && message.data instanceof ArrayBuffer
-            && typeof message.isEmptyRevision === "boolean"
-            && typeof message.fingerprint === "string"
-            && typeof message.preserveView === "boolean";
-    }
-
-    function isSidebarConfigureMessage(value: unknown): value is SidebarConfigureMessage {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const message = value as Record<string, unknown>;
-        return message.type === "sidebar.configure"
-            && isSidebarView(message.defaultSidebar);
-    }
-
-    function isSyncTexForwardMessage(value: unknown): value is SyncTexForwardMessage {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const message = value as Record<string, unknown>;
-        return message.type === "synctex.forward"
-            && isSyncTexRequestId(message.requestId)
-            && isSyncTexLoadId(message.loadId)
-            && typeof message.pageNumber === "number"
-            && Number.isSafeInteger(message.pageNumber)
-            && message.pageNumber >= 1
-            && typeof message.x === "number"
-            && Number.isFinite(message.x)
-            && typeof message.y === "number"
-            && Number.isFinite(message.y)
-            && isSyncTexTargetBox(message.targetBox);
-    }
-
-    function isSyncTexTargetBox(value: unknown): value is SyncTexTargetBox | undefined {
-        if (value === undefined) {
-            return true;
-        }
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const box = value as Record<string, unknown>;
-        return typeof box.x === "number"
-            && Number.isFinite(box.x)
-            && typeof box.y === "number"
-            && Number.isFinite(box.y)
-            && typeof box.width === "number"
-            && Number.isFinite(box.width)
-            && box.width > 0
-            && typeof box.height === "number"
-            && Number.isFinite(box.height)
-            && box.height > 0;
-    }
-
-    function isSyncTexForwardCancelMessage(value: unknown): value is SyncTexForwardCancelMessage {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const message = value as Record<string, unknown>;
-        return message.type === "synctex.forwardCancel"
-            && isSyncTexRequestId(message.requestId)
-            && isSyncTexLoadId(message.loadId);
-    }
-
-    function isSyncTexRequestId(value: unknown): value is string {
-        return typeof value === "string" && value.length > 0 && value.length <= 64;
-    }
-
-    function isSyncTexLoadId(value: unknown): value is number {
-        return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
     }
 
     let syncTexTargetMarker: HTMLElement | null = null;
@@ -534,6 +421,9 @@
             workerSource: workerBlobUrl ? "blob" : "mainThreadFallback"
         });
 
+        application.eventBus.on<{ source: PdfJsPageView }>("annotationlayerrendered", event => {
+            pdfjsAdapter.scaleLinkBorders(event.source);
+        });
         application.eventBus.on<{ pageNumber: number }>("pagerendered", event => {
             if (!pendingFirstPageRender?.opened) {
                 return;
@@ -797,41 +687,42 @@
             });
         };
         window.addEventListener("message", (event: MessageEvent<unknown>) => {
-            if (typeof event.data === "object"
-                && event.data !== null
-                && (event.data as { type?: unknown }).type === "synctex.configure") {
+            if (!window.academicExtensionMessages.isMessage(event.data)) {
+                return;
+            }
+            const message = event.data;
+            if (message.type === "synctex.configure") {
                 window.dispatchEvent(new CustomEvent("academic-pdf-synctex-configure", {
-                    detail: (event.data as { mode?: unknown }).mode,
+                    detail: message.mode,
                 }));
                 return;
             }
-            if (isSyncTexForwardMessage(event.data)) {
-                queueSyncTexForward(event.data);
+            if (message.type === "synctex.forward") {
+                queueSyncTexForward(message);
                 return;
             }
-            if (isSyncTexForwardCancelMessage(event.data)) {
-                if (isSameSyncTexForward(pendingSyncTexForward, event.data)) {
+            if (message.type === "synctex.forwardCancel") {
+                if (isSameSyncTexForward(pendingSyncTexForward, message)) {
                     rejectPendingSyncTexForward();
                 }
                 return;
             }
-            if (isSidebarConfigureMessage(event.data)) {
-                defaultSidebar = event.data.defaultSidebar;
+            if (message.type === "sidebar.configure") {
+                defaultSidebar = message.defaultSidebar;
                 if (application.pdfDocument) {
                     pdfjsAdapter.setSidebarView(defaultSidebar);
                 }
                 return;
             }
-            if (!isDocumentLoadMessage(event.data)
-                || event.data.loadId <= latestDocumentLoadId) {
+            if (message.type !== "document.load" || message.loadId <= latestDocumentLoadId) {
                 return;
             }
-            latestDocumentLoadId = event.data.loadId;
+            latestDocumentLoadId = message.loadId;
             clearSyncTexTarget();
             if (pendingSyncTexForward && pendingSyncTexForward.loadId < latestDocumentLoadId) {
                 rejectPendingSyncTexForward();
             }
-            pendingDocumentLoad = event.data;
+            pendingDocumentLoad = message;
             scheduleDocumentLoadDrain();
         });
 

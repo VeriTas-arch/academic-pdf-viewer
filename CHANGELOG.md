@@ -2,6 +2,20 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.3.1] - 2026-09-27
+
+### Changed
+
+- Made automatic link-preview resolution the default (`resolutionScale: 0`), adapting to screen density and actual content width while preserving explicit fixed-density settings from `1` to `4`.
+- Refresh link previews when their required resolution changes, reuse sufficiently detailed cached images, and preserve the preview's reading position.
+- Account for decoded image memory in the preview cache budget, limit canvas dimensions, and release discarded canvases.
+
+### Fixed
+
+- Corrected PDF link border scaling across page zoom levels and PDF user units while preserving border styles.
+- Prevented symmetric preview cropping from cutting off content on pages with asymmetric text margins.
+- Stabilized cached preview layout before image decoding and rejected stale encoding results after configuration changes.
+
 ## [1.3.0] - 2026-08-25
 
 ### Added

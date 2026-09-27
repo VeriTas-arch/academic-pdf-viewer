@@ -127,8 +127,6 @@ interface PdfJsLocation {
     top: number | null;
 }
 
-type AcademicSidebarView = "pages" | "outline" | "attachments" | "layers";
-
 interface AcademicSidebarState {
     view: AcademicSidebarView;
     isOpen: boolean;
@@ -150,6 +148,7 @@ interface AcademicPdfJsAdapter {
     getViewerContainer(viewer?: PdfJsViewer | null): HTMLElement | null;
     getToolbarHost(): HTMLElement | null;
     getPageViews(viewer: PdfJsViewer): PdfJsPageView[];
+    scaleLinkBorders(pageView: PdfJsPageView): void;
     getCapabilities(
         document?: PdfJsDocument | null,
         viewer?: PdfJsViewer | null

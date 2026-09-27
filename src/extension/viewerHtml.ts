@@ -85,6 +85,7 @@ export function renderViewerHtml(
 <link rel="stylesheet" href="${escapeHtmlAttribute(libUri('pdf.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'reader.css'))}">
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
+<script src="${escapeHtmlAttribute(assetUri('academic', 'extensionMessages.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'pdfjsAdapter.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'pdfViewerBootstrap.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.mjs'))}" type="module"></script>

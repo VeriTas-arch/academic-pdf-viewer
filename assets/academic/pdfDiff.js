@@ -1,5 +1,5 @@
 /// <reference path="./globals.d.ts" />
-import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, maximumRegionsPerPage, maximumTextTokensPerPage, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
+import { compareRasters, compareTextTokens, findNextDiffPage, fullPageRegion, maximumTextTokensPerPage, mergeTextAndRasterResults, nextDiffRegionIndex, } from "./pdfDiffAlgorithm.mjs";
 import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
 "use strict";
 (function () {
@@ -10,8 +10,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const eagerComparisonPageLimit = 16;
     const maximumQueuedPages = eagerComparisonPageLimit;
     const comparisonPrefetchRadius = 3;
-    const maximumMessageStringLength = 8 * 1024;
-    const maximumPdfBytes = 512 * 1024 * 1024;
     const pdfjsAdapter = window.academicPdfJsAdapter;
     const pageScheduler = new PageComparisonScheduler(maximumConcurrentPageComparisons, maximumQueuedPages);
     let config;
@@ -50,32 +48,36 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         config = loadConfig();
         initializeStatus();
         window.addEventListener("message", event => {
-            if (isDocumentLoadMessage(event.data)) {
-                handleDocumentLoad(event.data);
+            if (!window.academicExtensionMessages.isMessage(event.data)) {
+                return;
             }
-            else if (isDiffEnableMessage(event.data)) {
-                void enableDiff(event.data);
+            const message = event.data;
+            if (message.type === "document.load") {
+                handleDocumentLoad(message);
             }
-            else if (isDiffDisableMessage(event.data)) {
-                disableDiff(event.data);
+            else if (message.type === "diff.setEnabled" && message.enabled) {
+                void enableDiff(message);
             }
-            else if (isDiffApplyPageMessage(event.data)) {
-                applyForwardedPage(event.data);
+            else if (message.type === "diff.setEnabled") {
+                disableDiff(message);
             }
-            else if (isDiffRemovedPageRangeMessage(event.data)) {
-                applyRemovedPageRange(event.data);
+            else if (message.type === "diff.applyPage") {
+                applyForwardedPage(message);
             }
-            else if (isDiffNavigateMessage(event.data)) {
-                navigateChange(event.data);
+            else if (message.type === "diff.setRemovedPageRange") {
+                applyRemovedPageRange(message);
             }
-            else if (isDiffScanForChangeMessage(event.data)) {
-                scanForForwardedChange(event.data);
+            else if (message.type === "diff.navigate") {
+                navigateChange(message);
             }
-            else if (isDiffRevealChangeMessage(event.data)) {
-                applyForwardedNavigation(event.data);
+            else if (message.type === "diff.scanForChange") {
+                scanForForwardedChange(message);
             }
-            else if (isDiffApplyScrollMessage(event.data)) {
-                applySynchronizedScroll(event.data);
+            else if (message.type === "diff.revealChange") {
+                applyForwardedNavigation(message);
+            }
+            else if (message.type === "diff.applyScroll") {
+                applySynchronizedScroll(message);
             }
         });
         window.PDFViewerApplication.initializedPromise.then(() => {
@@ -119,164 +121,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             throw new Error("Could not load PDF diff configuration.");
         }
         return JSON.parse(value);
-    }
-    function isDocumentLoadMessage(value) {
-        if (!isMessage(value, "document.load")) {
-            return false;
-        }
-        const message = value;
-        return isPositiveInteger(message.loadId)
-            && typeof message.isEmptyRevision === "boolean"
-            && isPdfData(message.data, message.isEmptyRevision)
-            && isBoundedNonEmptyString(message.fingerprint)
-            && typeof message.preserveView === "boolean";
-    }
-    function isDiffEnableMessage(value) {
-        if (!isMessage(value, "diff.setEnabled")
-            || value.enabled !== true
-            || !isPositiveInteger(value.sessionId)) {
-            return false;
-        }
-        const message = value;
-        if (message.role === "original") {
-            return typeof message.allPagesChanged === "boolean";
-        }
-        if (message.role !== "modified" || typeof message.modifiedIsEmptyRevision !== "boolean") {
-            return false;
-        }
-        return message.modifiedIsEmptyRevision || (typeof message.originalIsEmptyRevision === "boolean"
-            && isPdfData(message.originalData, message.originalIsEmptyRevision)
-            && isBoundedNonEmptyString(message.originalFingerprint));
-    }
-    function isDiffDisableMessage(value) {
-        return isMessage(value, "diff.setEnabled")
-            && value.enabled === false
-            && isPositiveInteger(value.sessionId);
-    }
-    function isDiffApplyPageMessage(value) {
-        return isMessage(value, "diff.applyPage")
-            && isPositiveInteger(value.sessionId)
-            && isPositiveInteger(value.pageNumber)
-            && isDiffSideChanges(value.changes);
-    }
-    function isDiffRemovedPageRangeMessage(value) {
-        if (!isMessage(value, "diff.setRemovedPageRange")) {
-            return false;
-        }
-        const message = value;
-        return isPositiveInteger(message.sessionId)
-            && isPositiveInteger(message.fromPage)
-            && isPositiveInteger(message.toPage)
-            && message.fromPage <= message.toPage;
-    }
-    function isDiffNavigateMessage(value) {
-        return isMessage(value, "diff.navigate")
-            && isPositiveInteger(value.sessionId)
-            && (value.direction === "next"
-                || value.direction === "previous");
-    }
-    function isDiffScanForChangeMessage(value) {
-        return isMessage(value, "diff.scanForChange")
-            && isPositiveInteger(value.sessionId)
-            && isPositiveInteger(value.requestId)
-            && (value.role === "original"
-                || value.role === "modified")
-            && (value.direction === "next"
-                || value.direction === "previous")
-            && isPositiveInteger(value.startPage);
-    }
-    function isDiffRevealChangeMessage(value) {
-        if (!isMessage(value, "diff.revealChange")) {
-            return false;
-        }
-        const message = value;
-        return isPositiveInteger(message.sessionId)
-            && isPositiveInteger(message.requestId)
-            && isPositiveInteger(message.pageNumber)
-            && typeof message.index === "number"
-            && Number.isSafeInteger(message.index)
-            && message.index >= 0
-            && isDiffSideChanges(message.changes)
-            && message.index < message.changes.length;
-    }
-    function isDiffApplyScrollMessage(value) {
-        if (!isMessage(value, "diff.applyScroll")) {
-            return false;
-        }
-        const message = value;
-        return typeof message.pageNumber === "number"
-            && Number.isSafeInteger(message.pageNumber)
-            && message.pageNumber >= 1
-            && typeof message.pageRatio === "number"
-            && Number.isFinite(message.pageRatio)
-            && message.pageRatio >= 0
-            && message.pageRatio <= 1
-            && typeof message.documentRatio === "number"
-            && Number.isFinite(message.documentRatio)
-            && message.documentRatio >= 0
-            && message.documentRatio <= 1;
-    }
-    function isMessage(value, type) {
-        return typeof value === "object"
-            && value !== null
-            && "type" in value
-            && value.type === type;
-    }
-    function isPositiveInteger(value) {
-        return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
-    }
-    function isDiffSideChanges(value) {
-        if (!Array.isArray(value) || value.length > maximumRegionsPerPage) {
-            return false;
-        }
-        let regionCount = 0;
-        for (const change of value) {
-            if (!isDiffSideChange(change)) {
-                return false;
-            }
-            regionCount += change.regions.length;
-            if (regionCount > maximumRegionsPerPage) {
-                return false;
-            }
-        }
-        return true;
-    }
-    function isDiffSideChange(value) {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const change = value;
-        return Array.isArray(change.regions)
-            && change.regions.length > 0
-            && change.regions.every(isDiffRegion);
-    }
-    function isDiffRegion(value) {
-        if (typeof value !== "object" || value === null) {
-            return false;
-        }
-        const region = value;
-        return isNormalizedNumber(region.left)
-            && isNormalizedNumber(region.top)
-            && isNormalizedNumber(region.width)
-            && isNormalizedNumber(region.height)
-            && region.left + region.width <= 1.000001
-            && region.top + region.height <= 1.000001;
-    }
-    function isNormalizedNumber(value) {
-        return typeof value === "number"
-            && Number.isFinite(value)
-            && value >= 0
-            && value <= 1;
-    }
-    function isPdfData(value, isEmptyRevision) {
-        return value instanceof ArrayBuffer
-            && value.byteLength <= maximumPdfBytes
-            && (value.byteLength === 0) === isEmptyRevision;
-    }
-    function isBoundedNonEmptyString(value) {
-        return typeof value === "string"
-            && value.length > 0
-            && value.length <= maximumMessageStringLength;
     }
     function handleDocumentLoad(message) {
         if (message.loadId <= latestDocumentLoadId) {

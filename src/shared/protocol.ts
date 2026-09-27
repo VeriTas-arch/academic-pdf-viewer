@@ -79,12 +79,12 @@ export function sanitizePdfDiffChanges(changes: readonly PdfDiffChange[]): PdfDi
 export type DiffNavigationDirection = 'next' | 'previous';
 export type DiffRole = 'original' | 'modified';
 
-export const DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE = 2;
+export const DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE = 0;
 export const MIN_LINK_PREVIEW_RESOLUTION_SCALE = 1;
 export const MAX_LINK_PREVIEW_RESOLUTION_SCALE = 4;
 
 export function normalizeLinkPreviewResolutionScale(value: unknown): number {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
+    if (value === 0 || typeof value !== 'number' || !Number.isFinite(value)) {
         return DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE;
     }
     return Math.min(

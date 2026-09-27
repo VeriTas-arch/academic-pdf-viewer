@@ -3,8 +3,8 @@
         "module": "ES2022",
         "moduleResolution": "Bundler",
         "target": "ES2022",
-        "outDir": "assets/academic",
-        "rootDir": "src/webview",
+        "outDir": "tmp/webview-build",
+        "rootDir": "src",
         "lib": [
             "ES2022",
             "DOM"
@@ -20,6 +20,8 @@
         "ignoreDeprecations": "6.0"
     },
     "include": [
-        "src/webview/**/*.ts"
+        "src/webview/**/*.ts",
+        "src/shared/extensionMessages.ts",
+        "src/shared/protocol.ts"
     ]
 }

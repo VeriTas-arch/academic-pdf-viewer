@@ -227,7 +227,7 @@
         });
     }
     function handleNavigationMessage(data, allowPressedKey = false) {
-        if (!isNavigationMessage(data)) {
+        if (!window.academicExtensionMessages.isMessage(data)) {
             return;
         }
         if (data.type === "navigation.configure") {
@@ -249,19 +249,6 @@
             }
             history.forward(captureLocation());
         }
-    }
-    function isNavigationMessage(data) {
-        return typeof data === "object"
-            && data !== null
-            && "type" in data
-            && (data.type === "navigation.back"
-                || data.type === "navigation.forward"
-                || (data.type === "navigation.configure"
-                    && "mouseButtonsEnabled" in data
-                    && typeof data.mouseButtonsEnabled === "boolean"
-                    && "mouseButtonMapping" in data
-                    && (data.mouseButtonMapping === "standard"
-                        || data.mouseButtonMapping === "swapped")));
     }
     function handleViewerShortcutBoundary(event) {
         const key = event.key.toLowerCase();

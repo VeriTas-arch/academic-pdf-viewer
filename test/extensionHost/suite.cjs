@@ -24,6 +24,11 @@ function activeCustomEditor() {
     return input instanceof vscode.TabInputCustom && input.viewType === viewType ? input : undefined;
 }
 
+function activeCustomEditorFor(uri) {
+    const input = activeCustomEditor();
+    return input?.uri.toString() === uri.toString() ? input : undefined;
+}
+
 async function closeAllEditors() {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     await waitFor(
@@ -144,6 +149,22 @@ async function run() {
         'The context-menu command should reject execution without a pending PDF-page request.',
     );
     assert.equal(inverseEvent, undefined, 'Rejected integration commands must not emit an inverse event.');
+
+    const secondPdf = vscode.Uri.file(path.join(fixtureRoot, 'paper1.pdf'));
+    await vscode.commands.executeCommand('vscode.openWith', secondPdf, viewType, vscode.ViewColumn.Beside);
+    await waitFor(() => activeCustomEditorFor(secondPdf), 'the second PDF custom editor');
+    assert.equal(
+        api.tex.synctexForward({ ...forwardRequest, pdfUri: secondPdf.toString() }),
+        true,
+        'Forward SyncTeX should find the active second PDF panel.',
+    );
+    assert.equal(
+        api.tex.synctexForward(forwardRequest),
+        true,
+        'Forward SyncTeX should still find the visible first PDF panel.',
+    );
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    await waitFor(() => activeCustomEditorFor(ordinaryPdf), 'the first PDF editor to become active again');
 
     await vscode.commands.executeCommand('academicPdfViewer.reload');
     await closeAllEditors();

@@ -89,6 +89,18 @@
             return pages;
         },
 
+        scaleLinkBorders(pageView: PdfJsPageView): void {
+            for (const link of pageView.div.querySelectorAll<HTMLElement>(".annotationLayer .linkAnnotation")) {
+                const width = link.style.borderWidth;
+                // PDF.js 6.2 writes PDF-space widths as fixed CSS pixels. Keep the
+                // original width and let the page's scale (including UserUnit) track zoom.
+                // Already-scaled and borderless links need no changes.
+                if (width.endsWith("px") && parseFloat(width) > 0) {
+                    link.style.borderWidth = `calc(${width} * var(--total-scale-factor))`;
+                }
+            }
+        },
+
         getCapabilities(
             document = adapter.getApplication()?.pdfDocument ?? null,
             viewer = adapter.getViewer()

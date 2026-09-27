@@ -318,6 +318,8 @@ test('keeps SyncTeX transport commands out of the palette and scopes the context
 test('normalizes link preview resolution scale', () => {
     assert.equal(normalizeLinkPreviewResolutionScale(undefined), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
     assert.equal(normalizeLinkPreviewResolutionScale(Number.NaN), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
+    assert.equal(DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE, 0);
+    assert.equal(normalizeLinkPreviewResolutionScale(0), 0);
     assert.equal(normalizeLinkPreviewResolutionScale(0.5), 1);
     assert.equal(normalizeLinkPreviewResolutionScale(2.5), 2.5);
     assert.equal(normalizeLinkPreviewResolutionScale(8), 4);
