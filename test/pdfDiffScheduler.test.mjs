@@ -38,3 +38,19 @@ test('invalidates queued work while retaining active capacity accounting', () =>
     scheduler.complete();
     assert.equal(scheduler.activeCount, 0);
 });
+
+test('refreshes queued priority and removes work started immediately', () => {
+    const scheduler = new PageComparisonScheduler(2, 3);
+    scheduler.enqueue(1);
+    scheduler.enqueue(2);
+    scheduler.enqueue(1);
+    assert.deepEqual(scheduler.startNext(), { pageNumber: 2, generation: 0 });
+    assert.deepEqual(scheduler.startImmediately(1), { pageNumber: 1, generation: 0 });
+    assert.equal(scheduler.queuedCount, 0);
+    scheduler.complete();
+    assert.equal(scheduler.startNext(), undefined);
+
+    scheduler.invalidate();
+    scheduler.enqueue(3);
+    assert.deepEqual(scheduler.startNext(), { pageNumber: 3, generation: 1 });
+});

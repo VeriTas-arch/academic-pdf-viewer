@@ -53,13 +53,39 @@
             return pages;
         },
         scaleLinkBorders(pageView) {
-            for (const link of pageView.div.querySelectorAll(".annotationLayer .linkAnnotation")) {
+            const layer = pageView.div.querySelector(".annotationLayer");
+            if (!layer) {
+                return;
+            }
+            // Canvas rounding changes the page's CSS size, but its rendering
+            // transform still maps PDF points at the exact viewport scale. Using
+            // the rounded size for percentage-based annotations causes zoom drift.
+            const [x1, y1, x2, y2] = pageView.viewport.viewBox;
+            layer.style.width = `calc(${x2 - x1}px * var(--total-scale-factor))`;
+            layer.style.height = `calc(${y2 - y1}px * var(--total-scale-factor))`;
+            for (const link of layer.querySelectorAll(".linkAnnotation")) {
                 const width = link.style.borderWidth;
-                // PDF.js 6.2 writes PDF-space widths as fixed CSS pixels. Keep the
-                // original width and let the page's scale (including UserUnit) track zoom.
-                // Already-scaled and borderless links need no changes.
+                // PDF.js places CSS borders inside the annotation rectangle. Draw
+                // a stronger, centered stroke separately so it cannot inset the link
+                // target or crowd the glyph. Keep PDF coordinates and styles intact.
                 if (width.endsWith("px") && parseFloat(width) > 0) {
-                    link.style.borderWidth = `calc(${width} * var(--total-scale-factor))`;
+                    const strokeWidth = parseFloat(width) * 1.5;
+                    const frame = document.createElement("span");
+                    frame.className = "academic-link-border";
+                    frame.setAttribute("aria-hidden", "true");
+                    Object.assign(frame.style, {
+                        position: "absolute",
+                        pointerEvents: "none",
+                        boxSizing: "border-box",
+                        inset: `calc(${-strokeWidth / 2}px * var(--total-scale-factor))`,
+                        borderWidth: `calc(${strokeWidth}px * var(--total-scale-factor))`,
+                        borderStyle: link.style.borderStyle,
+                        borderBottomStyle: link.style.borderBottomStyle,
+                        borderColor: link.style.borderColor,
+                        borderRadius: link.style.borderRadius
+                    });
+                    link.style.borderWidth = "0";
+                    link.append(frame);
                 }
             }
         },

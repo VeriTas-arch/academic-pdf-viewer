@@ -214,7 +214,7 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'navigation.keyUp':
             return value.direction === 'back' || value.direction === 'forward';
         case 'synctex.inverse':
-            return isPageNumber(value.pageNumber)
+            return isPositiveInteger(value.pageNumber)
                 && isFiniteCoordinate(value.x)
                 && isFiniteCoordinate(value.y)
                 && (value.trigger === 'doubleClick' || value.trigger === 'rightClick')
@@ -223,7 +223,7 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
             return true;
         case 'synctex.forwardResult':
             return isSyncTexRequestId(value.requestId)
-                && isSessionId(value.loadId)
+                && isPositiveInteger(value.loadId)
                 && (value.status === 'applied' || value.status === 'rejected');
         case 'workbench.openFile':
         case 'workbench.quickOpen':
@@ -231,32 +231,32 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'webview.ready':
             return true;
         case 'diff.pageResult':
-            return isSessionId(value.sessionId)
-                && isPageNumber(value.pageNumber)
+            return isPositiveInteger(value.sessionId)
+                && isPositiveInteger(value.pageNumber)
                 && isPdfDiffChanges(value.originalChanges);
         case 'diff.removedPageRange':
-            return isSessionId(value.sessionId)
-                && isPageNumber(value.fromPage)
-                && isPageNumber(value.toPage)
+            return isPositiveInteger(value.sessionId)
+                && isPositiveInteger(value.fromPage)
+                && isPositiveInteger(value.toPage)
                 && value.fromPage <= value.toPage;
         case 'diff.navigationRequest':
-            return isSessionId(value.sessionId)
-                && isSessionId(value.requestId)
+            return isPositiveInteger(value.sessionId)
+                && isPositiveInteger(value.requestId)
                 && isDiffRole(value.role)
                 && isDiffNavigationDirection(value.direction)
-                && isPageNumber(value.startPage);
+                && isPositiveInteger(value.startPage);
         case 'diff.navigationResult':
-            return isSessionId(value.sessionId)
-                && isSessionId(value.requestId)
+            return isPositiveInteger(value.sessionId)
+                && isPositiveInteger(value.requestId)
                 && isDiffRole(value.role)
-                && isPageNumber(value.pageNumber)
+                && isPositiveInteger(value.pageNumber)
                 && typeof value.index === 'number'
                 && Number.isSafeInteger(value.index)
                 && value.index >= 0
                 && isPdfDiffChanges(value.changes)
                 && value.changes.length > value.index;
         case 'diff.scroll':
-            return isPageNumber(value.pageNumber)
+            return isPositiveInteger(value.pageNumber)
                 && isNormalizedNumber(value.pageRatio)
                 && isNormalizedNumber(value.documentRatio);
         case 'pdf.debug':
@@ -293,7 +293,7 @@ export function isSyncTexForwardRequest(value: unknown): value is SyncTexForward
     return value.type === 'synctex.forward'
         && typeof value.pdfUri === 'string'
         && value.pdfUri.length > 0
-        && isPageNumber(value.pageNumber)
+        && isPositiveInteger(value.pageNumber)
         && isFiniteCoordinate(value.x)
         && isFiniteCoordinate(value.y)
         && isSyncTexTargetBox(value.targetBox);
@@ -312,13 +312,7 @@ function isSyncTexTargetBox(value: unknown): value is SyncTexTargetBox | undefin
         && value.height > 0;
 }
 
-function isPageNumber(value: unknown): value is number {
-    return typeof value === 'number'
-        && Number.isSafeInteger(value)
-        && value >= 1;
-}
-
-function isSessionId(value: unknown): value is number {
+function isPositiveInteger(value: unknown): value is number {
     return typeof value === 'number'
         && Number.isSafeInteger(value)
         && value >= 1;

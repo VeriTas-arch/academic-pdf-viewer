@@ -100,8 +100,7 @@ import {
     let comparisonGeneration = 0;
     let navigationGeneration = 0;
     let scanGeneration = 0;
-    const pageResults = new Map<number, DiffSideChange[]>();
-    const counterpartPageResults = new Map<number, DiffSideChange[]>();
+    const pageResults = new Map<number, { changes: DiffSideChange[]; counterpartChanges?: DiffSideChange[] }>();
     const pendingPages = new Map<number, Promise<PageDiffResult | undefined>>();
     const activePageTasks = new Set<Promise<PageDiffResult | undefined>>();
     let removedPageRange: { fromPage: number; toPage: number } | null = null;
@@ -329,7 +328,6 @@ import {
 
     function resetPageResults(): void {
         pageResults.clear();
-        counterpartPageResults.clear();
         pendingPages.clear();
         removedPageRange = null;
         clearSelectedChange();
@@ -469,10 +467,8 @@ import {
             }
             pageResults.delete(pageNumber);
             pageResults.set(pageNumber, cached);
-            const counterpart = counterpartPageResults.get(pageNumber);
+            const counterpart = cached.counterpartChanges;
             if (counterpart !== undefined) {
-                counterpartPageResults.delete(pageNumber);
-                counterpartPageResults.set(pageNumber, counterpart);
                 postExtensionMessage({
                     type: "diff.pageResult",
                     sessionId: currentSessionId,
@@ -545,13 +541,13 @@ import {
             if (!enabled || !pageScheduler.isCurrent(currentGeneration)) {
                 return undefined;
             }
-            rememberComputedPageResult(pageNumber, result);
+            rememberPageResult(pageNumber, sideChanges(result, "modified"), sideChanges(result, "original"));
             applyPageResult(pageNumber);
             postExtensionMessage({
                 type: "diff.pageResult",
                 sessionId: currentSessionId,
                 pageNumber,
-                originalChanges: counterpartPageResults.get(pageNumber) ?? []
+                originalChanges: pageResults.get(pageNumber)?.counterpartChanges ?? []
             });
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
@@ -633,50 +629,19 @@ import {
         };
     }
 
-    function rememberPageResult(pageNumber: number, changes: DiffSideChange[]): void {
-        rememberBoundedMapEntry(pageResults, pageNumber, changes);
-    }
-
-    function rememberComputedPageResult(pageNumber: number, result: PageDiffResult): void {
-        rememberPairedBoundedMapEntries(
-            pageResults,
-            counterpartPageResults,
-            pageNumber,
-            sideChanges(result, "modified"),
-            sideChanges(result, "original")
-        );
-    }
-
-    function rememberBoundedMapEntry<T>(cache: Map<number, T>, pageNumber: number, changes: T): void {
-        cache.delete(pageNumber);
-        cache.set(pageNumber, changes);
-        while (cache.size > maximumCachedPageResults) {
-            const oldestPage = cache.keys().next().value;
-            if (oldestPage === undefined) {
-                return;
-            }
-            cache.delete(oldestPage);
-        }
-    }
-
-    function rememberPairedBoundedMapEntries<T, U>(
-        primaryCache: Map<number, T>,
-        secondaryCache: Map<number, U>,
+    function rememberPageResult(
         pageNumber: number,
-        primaryChanges: T,
-        secondaryChanges: U
+        changes: DiffSideChange[],
+        counterpartChanges?: DiffSideChange[]
     ): void {
-        primaryCache.delete(pageNumber);
-        secondaryCache.delete(pageNumber);
-        primaryCache.set(pageNumber, primaryChanges);
-        secondaryCache.set(pageNumber, secondaryChanges);
-        while (primaryCache.size > maximumCachedPageResults) {
-            const oldestPage = primaryCache.keys().next().value;
+        pageResults.delete(pageNumber);
+        pageResults.set(pageNumber, { changes, counterpartChanges });
+        while (pageResults.size > maximumCachedPageResults) {
+            const oldestPage = pageResults.keys().next().value;
             if (oldestPage === undefined) {
                 return;
             }
-            primaryCache.delete(oldestPage);
-            secondaryCache.delete(oldestPage);
+            pageResults.delete(oldestPage);
         }
     }
 
@@ -888,7 +853,7 @@ import {
                 regions: [fullPageRegion()]
             }];
         }
-        return pageResults.get(pageNumber);
+        return pageResults.get(pageNumber)?.changes;
     }
 
     function navigateChange(message: DiffNavigateMessage): void {
@@ -1072,10 +1037,9 @@ import {
     function cachedComparison(
         pageNumber: number
     ): { originalChanges: DiffSideChange[]; modifiedChanges: DiffSideChange[] } | undefined {
-        const modifiedChanges = pageResults.get(pageNumber);
-        const originalChanges = counterpartPageResults.get(pageNumber);
-        return modifiedChanges !== undefined && originalChanges !== undefined
-            ? { originalChanges, modifiedChanges }
+        const cached = pageResults.get(pageNumber);
+        return cached?.counterpartChanges !== undefined
+            ? { originalChanges: cached.counterpartChanges, modifiedChanges: cached.changes }
             : undefined;
     }
 

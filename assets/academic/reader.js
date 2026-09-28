@@ -3,9 +3,9 @@
 (function () {
     const vscode = acquireVsCodeApi();
     const pdfjsAdapter = window.academicPdfJsAdapter;
-    const initialMouseNavigation = readMouseNavigationConfig();
-    let mouseNavigationEnabled = initialMouseNavigation.enabled;
-    let mouseButtonMapping = initialMouseNavigation.mapping;
+    const initialConfiguration = readInitialConfiguration();
+    let mouseNavigationEnabled = initialConfiguration.mouseNavigationEnabled;
+    let mouseButtonMapping = initialConfiguration.mouseButtonMapping;
     let syncTexMode = "off";
     window.addEventListener("academic-pdf-viewer-ready", () => {
         vscode.postMessage({ type: "webview.ready" });
@@ -20,7 +20,7 @@
     window.addEventListener("mousedown", handleMouseNavigation, true);
     window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
     window.addEventListener("contextmenu", handleSyncTexContextMenu, true);
-    configureSyncTexMode(readSyncTexConfig());
+    configureSyncTexMode(initialConfiguration.syncTexMode);
     window.addEventListener("academic-pdf-synctex-configure", event => {
         const mode = event.detail;
         if (mode === "off" || mode === "doubleclick" || mode === "rightclick") {
@@ -407,37 +407,25 @@
         }
         handleSyncTexPointer(event, "rightClick");
     }
-    function readSyncTexConfig() {
-        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
-        try {
-            const settings = JSON.parse(value || "{}");
-            return settings.syncTexMode === "off" || settings.syncTexMode === "rightclick"
-                ? settings.syncTexMode
-                : "doubleclick";
-        }
-        catch {
-            return "doubleclick";
-        }
-    }
     function consumeMouseNavigation(event) {
         if (mouseNavigationEnabled && mouseNavigationDirection(event)) {
             consumeMouseEvent(event);
         }
     }
-    function readMouseNavigationConfig() {
+    function readInitialConfiguration() {
         const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
-        if (!value) {
-            return { enabled: true, mapping: "standard" };
-        }
         try {
-            const settings = JSON.parse(value);
+            const settings = JSON.parse(value || "{}");
             return {
-                enabled: settings.mouseNavigationEnabled !== false,
-                mapping: settings.mouseButtonMapping === "swapped" ? "swapped" : "standard"
+                mouseNavigationEnabled: settings.mouseNavigationEnabled !== false,
+                mouseButtonMapping: settings.mouseButtonMapping === "swapped" ? "swapped" : "standard",
+                syncTexMode: settings.syncTexMode === "off" || settings.syncTexMode === "rightclick"
+                    ? settings.syncTexMode
+                    : "doubleclick"
             };
         }
         catch {
-            return { enabled: true, mapping: "standard" };
+            return { mouseNavigationEnabled: true, mouseButtonMapping: "standard", syncTexMode: "doubleclick" };
         }
     }
     function mouseNavigationDirection(event) {

@@ -308,6 +308,8 @@ npx @vscode/vsce ls --tree
 npx @vscode/vsce package
 ```
 
+Packaging automatically cleans and rebuilds the extension and webview assets; a separate `npm run build` is unnecessary. Nested npm script banners are suppressed during packaging, while compiler diagnostics remain visible.
+
 PDF.js maintenance is explicit and separate from ordinary builds:
 
 ```bash

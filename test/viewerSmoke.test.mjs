@@ -112,8 +112,8 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         )), true);
     });
 
-    await t.test("scales PDF link borders with the page without changing their style", async t => {
-        const borderPage = await browser.newPage({ deviceScaleFactor: 2 });
+    await t.test("centers stronger PDF link borders on their rectangles without moving click targets", async t => {
+        const borderPage = await browser.newPage({ deviceScaleFactor: 1.25 });
         t.after(() => borderPage.close());
         const errors = [];
         borderPage.on("pageerror", error => errors.push(error.message));
@@ -140,7 +140,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
             await borderPage.locator('.annotationLayer .linkAnnotation[data-annotation-id="6R"]').waitFor();
 
             // Return to the initial zoom and rotate to catch cumulative scaling or recreation bugs.
-            for (const [scale, rotation] of [[0.75, 0], [1.5, 0], [3, 90], [0.75, 0]]) {
+            for (const [scale, rotation] of [[0.75, 0], [1.25, 0], [1.5, 0], [3, 90], [1.5, 180], [1.25, 270], [0.75, 0]]) {
                 await borderPage.evaluate(({ scale, rotation }) => {
                     const viewer = window.PDFViewerApplication.pdfViewer;
                     viewer.currentScaleValue = String(scale);
@@ -152,26 +152,58 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 });
                 const borders = await borderPage.locator(".annotationLayer .linkAnnotation").evaluateAll(elements =>
                     elements.map(element => {
-                        const style = getComputedStyle(element);
+                        const frame = element.querySelector(".academic-link-border") || element;
+                        const style = getComputedStyle(frame);
+                        const rect = element.getBoundingClientRect();
+                        const frameRect = frame.getBoundingClientRect();
+                        const anchorRect = element.querySelector("a").getBoundingClientRect();
                         return {
                             width: parseFloat(style.borderBottomWidth),
                             topWidth: parseFloat(style.borderTopWidth),
                             style: style.borderBottomStyle,
-                            color: style.borderBottomColor
+                            color: style.borderBottomColor,
+                            clickOffsets: ["left", "top", "right", "bottom"].map(side => anchorRect[side] - rect[side]),
+                            strokeOffsets: [
+                                frameRect.left + parseFloat(style.borderLeftWidth) / 2 - rect.left,
+                                frameRect.top + parseFloat(style.borderTopWidth) / 2 - rect.top,
+                                frameRect.right - parseFloat(style.borderRightWidth) / 2 - rect.right,
+                                frameRect.bottom - parseFloat(style.borderBottomWidth) / 2 - rect.bottom
+                            ]
                         };
                     })
                 );
                 const unit = scale * 4 / 3 * userUnit;
                 assert.equal(borders.length, 5);
                 for (const [index, width, style] of [[0, 1, "solid"], [1, 2, "dashed"], [2, 1, "solid"]]) {
-                    assert.equal(borders[index].width, width * unit,
+                    assert(Math.abs(borders[index].width - width * unit * 1.5) < 1,
                         `link ${index}, zoom ${scale}, rotation ${rotation}, UserUnit ${userUnit}`);
                     assert.equal(borders[index].style, style);
                     assert.equal(borders[index].color, "rgb(0, 255, 0)");
+                    const offsets = index === 2 ? [borders[index].strokeOffsets[3]] : borders[index].strokeOffsets;
+                    assert(offsets.every(offset => Math.abs(offset) < 0.6), `stroke alignment: ${JSON.stringify(borders[index])}`);
+                    assert(borders[index].clickOffsets.every(offset => Math.abs(offset) < 0.05),
+                        `click rectangle: ${JSON.stringify(borders[index])}`);
                 }
                 assert.equal(borders[2].topWidth, 0, "underline must remain bottom-only");
                 assert.equal(borders[3].width, 0, "zero-width link must stay borderless");
                 assert.equal(borders[4].width, 0, "transparent link must stay borderless");
+                const coordinateErrors = await borderPage.evaluate(async () => {
+                    const view = window.PDFViewerApplication.pdfViewer.getPageView(0);
+                    const canvas = view.div.querySelector(".canvasWrapper").getBoundingClientRect();
+                    const annotations = await view.pdfPage.getAnnotations();
+                    return annotations.filter(annotation => annotation.subtype === "Link").flatMap(annotation => {
+                        const rect = view.div.querySelector(`[data-annotation-id="${annotation.id}"]`).getBoundingClientRect();
+                        const [x1, y1] = view.viewport.convertToViewportPoint(annotation.rect[0], annotation.rect[1]);
+                        const [x2, y2] = view.viewport.convertToViewportPoint(annotation.rect[2], annotation.rect[3]);
+                        return [rect.left - canvas.left - Math.min(x1, x2), rect.top - canvas.top - Math.min(y1, y2),
+                            rect.right - canvas.left - Math.max(x1, x2), rect.bottom - canvas.top - Math.max(y1, y2)];
+                    });
+                });
+                assert(coordinateErrors.every(error => Math.abs(error) < 0.1), `PDF coordinates: ${coordinateErrors}`);
+                await borderPage.evaluate(() => {
+                    window.academicPdfJsAdapter.scaleLinkBorders(window.PDFViewerApplication.pdfViewer.getPageView(0));
+                });
+                assert.equal(await borderPage.locator(".academic-link-border").count(), 3, "repeated updates must not duplicate borders");
             }
         }
         assert.deepEqual(errors, []);
@@ -197,14 +229,18 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
             window.postMessage({ type: "linkPreview.configure", enabled: true, resolutionScale: 0 }, "*");
         });
         const openPreview = async () => {
-            await previewPage.evaluate(() => {
+            await previewPage.waitForFunction(() => {
                 const link = document.querySelector(".academic-citation-link");
+                if (!link) {
+                    return false;
+                }
                 const rect = link.getBoundingClientRect();
                 link.dispatchEvent(new PointerEvent("pointermove", {
                     bubbles: true, clientX: rect.x + rect.width / 2,
                     clientY: rect.y + rect.height / 2, ctrlKey: true
                 }));
                 window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control", bubbles: true }));
+                return true;
             });
             await waitForPreview(previewPage);
             await previewPage.waitForFunction(() => {

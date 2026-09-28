@@ -124,34 +124,34 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
     class CitationPreviewController {
         _app: PdfJsApplication;
         _eventBus: PdfJsEventBus;
-        _pdfDocument: PdfJsDocument | null;
-        _pendingPointerMoveFrame: number | null;
-        _hoverDelayer: HoverDelayer;
-        _previewCache: Map<string, ImagePreview>;
-        _previewCacheBytes: number;
-        _pendingPreviewEncodings: Map<string, PendingPreviewEncoding>;
-        _textCache: Map<string, string>;
-        _pageCache: Map<number, Promise<PdfJsPage>>;
-        _annotationCache: Map<number, Promise<PdfJsAnnotation[]>>;
-        _textContentCache: Map<number, Promise<PdfJsTextContent>>;
-        _pageRenderIds: Map<number, number>;
-        _documentGeneration: number;
-        _overlayLinks: WeakMap<HTMLElement, PreviewLink>;
-        _pageOverlays: Map<HTMLElement, Set<HTMLElement>>;
-        _pageLayers: Set<HTMLElement>;
-        _previewRequestId: number;
+        _pdfDocument: PdfJsDocument | null = null;
+        _pendingPointerMoveFrame: number | null = null;
+        _hoverDelayer: HoverDelayer = new HoverDelayer();
+        _previewCache: Map<string, ImagePreview> = new Map();
+        _previewCacheBytes: number = 0;
+        _pendingPreviewEncodings: Map<string, PendingPreviewEncoding> = new Map();
+        _textCache: Map<string, string> = new Map();
+        _pageCache: Map<number, Promise<PdfJsPage>> = new Map();
+        _annotationCache: Map<number, Promise<PdfJsAnnotation[]>> = new Map();
+        _textContentCache: Map<number, Promise<PdfJsTextContent>> = new Map();
+        _pageRenderIds: Map<number, number> = new Map();
+        _documentGeneration: number = 0;
+        _overlayLinks: WeakMap<HTMLElement, PreviewLink> = new WeakMap();
+        _pageOverlays: Map<HTMLElement, Set<HTMLElement>> = new Map();
+        _pageLayers: Set<HTMLElement> = new Set();
+        _previewRequestId: number = 0;
         _popup: HTMLDivElement;
-        _scaleRenderTimer: Timer;
-        _suppressedOpenTimer: Timer;
-        _closeTimer: Timer;
-        _suppressHoverUntil: number;
-        _activeRenderTask: PdfJsRenderTask | null;
+        _scaleRenderTimer: Timer = null;
+        _suppressedOpenTimer: Timer = null;
+        _closeTimer: Timer = null;
+        _suppressHoverUntil: number = 0;
+        _activeRenderTask: PdfJsRenderTask | null = null;
         _debug: boolean;
         _enabled: boolean;
         _resolutionScale: number;
-        _controlPressed: boolean;
-        _hoveredPreview: HoveredPreview | null;
-        _pointerPosition: { x: number; y: number } | null;
+        _controlPressed: boolean = false;
+        _hoveredPreview: HoveredPreview | null = null;
+        _pointerPosition: { x: number; y: number } | null = null;
         _displayedImage: ImagePreview | null = null;
         _previewGeneration = 0;
         _refreshTimer: Timer = null;
@@ -162,34 +162,10 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             const initialConfiguration = readInitialConfiguration();
             this._app = app;
             this._eventBus = app.eventBus;
-            this._pdfDocument = null;
-            this._pendingPointerMoveFrame = null;
-            this._hoverDelayer = new HoverDelayer();
-            this._previewCache = new Map();
-            this._previewCacheBytes = 0;
-            this._pendingPreviewEncodings = new Map();
-            this._textCache = new Map();
-            this._pageCache = new Map();
-            this._annotationCache = new Map();
-            this._textContentCache = new Map();
-            this._pageRenderIds = new Map();
-            this._documentGeneration = 0;
-            this._overlayLinks = new WeakMap();
-            this._pageOverlays = new Map();
-            this._pageLayers = new Set();
-            this._previewRequestId = 0;
             this._popup = this._createPopup();
-            this._scaleRenderTimer = null;
-            this._suppressedOpenTimer = null;
-            this._closeTimer = null;
-            this._suppressHoverUntil = 0;
-            this._activeRenderTask = null;
             this._debug = initialConfiguration.debug;
             this._enabled = initialConfiguration.enabled;
             this._resolutionScale = initialConfiguration.resolutionScale;
-            this._controlPressed = false;
-            this._hoveredPreview = null;
-            this._pointerPosition = null;
         }
 
         initialize(): void {
@@ -446,19 +422,9 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _getPageAnnotations(pageNumber: number): Promise<PdfJsAnnotation[]> {
-            const cached = getCachedEntry(this._annotationCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._getPage(pageNumber)
-                .then((page: PdfJsPage): Promise<PdfJsAnnotation[]> => page.getAnnotations({ intent: "display" }));
-            rememberBoundedEntry(this._annotationCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._annotationCache.get(pageNumber) === promise) {
-                    this._annotationCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._annotationCache, pageNumber, () => (
+                this._getPage(pageNumber).then(page => page.getAnnotations({ intent: "display" }))
+            ));
         }
 
         _appendOverlay(pageView: PdfJsPageView, annotation: InternalLinkAnnotation): void {
@@ -1026,34 +992,15 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _getPageTextContent(pageNumber: number): Promise<PdfJsTextContent> {
-            const cached = getCachedEntry(this._textContentCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._getPage(pageNumber)
-                .then((page: PdfJsPage): Promise<PdfJsTextContent> => page.getTextContent());
-            rememberBoundedEntry(this._textContentCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._textContentCache.get(pageNumber) === promise) {
-                    this._textContentCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._textContentCache, pageNumber, () => (
+                this._getPage(pageNumber).then(page => page.getTextContent())
+            ));
         }
 
         _getPage(pageNumber: number): Promise<PdfJsPage> {
-            const cached = getCachedEntry(this._pageCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._pdfDocument!.getPage(pageNumber);
-            rememberBoundedEntry(this._pageCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._pageCache.get(pageNumber) === promise) {
-                    this._pageCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._pageCache, pageNumber, () => (
+                this._pdfDocument!.getPage(pageNumber)
+            ));
         }
 
         _getPreviewDisplayWidth(): number {
@@ -1390,6 +1337,21 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
             cache.delete(oldestKey);
         }
+    }
+
+    function getCachedPromise<T>(cache: Map<number, Promise<T>>, pageNumber: number, load: () => Promise<T>): Promise<T> {
+        const cached = getCachedEntry(cache, pageNumber);
+        if (cached) {
+            return cached;
+        }
+        const promise = load();
+        rememberBoundedEntry(cache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
+        void promise.catch(() => {
+            if (cache.get(pageNumber) === promise) {
+                cache.delete(pageNumber);
+            }
+        });
+        return promise;
     }
 
     function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {

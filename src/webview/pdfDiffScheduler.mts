@@ -6,7 +6,7 @@ export interface ScheduledPageComparison {
 export class PageComparisonScheduler {
     private generation = 0;
     private activeComparisons = 0;
-    private readonly queuedPages = new Map<number, number>();
+    private readonly queuedPages = new Set<number>();
     private readonly maximumConcurrentComparisons: number;
     private readonly maximumQueuedPages: number;
 
@@ -37,7 +37,7 @@ export class PageComparisonScheduler {
 
     enqueue(pageNumber: number): void {
         this.queuedPages.delete(pageNumber);
-        this.queuedPages.set(pageNumber, this.generation);
+        this.queuedPages.add(pageNumber);
         while (this.queuedPages.size > this.maximumQueuedPages) {
             const oldestPage = this.queuedPages.keys().next().value;
             if (oldestPage === undefined) {
@@ -55,20 +55,11 @@ export class PageComparisonScheduler {
         if (this.atCapacity) {
             return undefined;
         }
-        while (this.queuedPages.size > 0) {
-            const next = this.queuedPages.entries().next().value as [number, number] | undefined;
-            if (!next) {
-                return undefined;
-            }
-            const [pageNumber, generation] = next;
-            this.queuedPages.delete(pageNumber);
-            if (generation !== this.generation) {
-                continue;
-            }
-            this.activeComparisons += 1;
-            return { pageNumber, generation };
+        const pageNumber = this.queuedPages.values().next().value;
+        if (pageNumber === undefined) {
+            return undefined;
         }
-        return undefined;
+        return this.startImmediately(pageNumber);
     }
 
     startImmediately(pageNumber: number): ScheduledPageComparison | undefined {

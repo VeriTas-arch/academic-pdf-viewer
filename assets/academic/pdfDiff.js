@@ -26,7 +26,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     let navigationGeneration = 0;
     let scanGeneration = 0;
     const pageResults = new Map();
-    const counterpartPageResults = new Map();
     const pendingPages = new Map();
     const activePageTasks = new Set();
     let removedPageRange = null;
@@ -258,7 +257,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     }
     function resetPageResults() {
         pageResults.clear();
-        counterpartPageResults.clear();
         pendingPages.clear();
         removedPageRange = null;
         clearSelectedChange();
@@ -382,10 +380,8 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             }
             pageResults.delete(pageNumber);
             pageResults.set(pageNumber, cached);
-            const counterpart = counterpartPageResults.get(pageNumber);
+            const counterpart = cached.counterpartChanges;
             if (counterpart !== undefined) {
-                counterpartPageResults.delete(pageNumber);
-                counterpartPageResults.set(pageNumber, counterpart);
                 postExtensionMessage({
                     type: "diff.pageResult",
                     sessionId: currentSessionId,
@@ -449,13 +445,13 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             if (!enabled || !pageScheduler.isCurrent(currentGeneration)) {
                 return undefined;
             }
-            rememberComputedPageResult(pageNumber, result);
+            rememberPageResult(pageNumber, sideChanges(result, "modified"), sideChanges(result, "original"));
             applyPageResult(pageNumber);
             postExtensionMessage({
                 type: "diff.pageResult",
                 sessionId: currentSessionId,
                 pageNumber,
-                originalChanges: counterpartPageResults.get(pageNumber) ?? []
+                originalChanges: pageResults.get(pageNumber)?.counterpartChanges ?? []
             });
             reportDebug("diffComputed", {
                 fingerprint: modifiedFingerprint,
@@ -533,35 +529,15 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             strategy: "page"
         };
     }
-    function rememberPageResult(pageNumber, changes) {
-        rememberBoundedMapEntry(pageResults, pageNumber, changes);
-    }
-    function rememberComputedPageResult(pageNumber, result) {
-        rememberPairedBoundedMapEntries(pageResults, counterpartPageResults, pageNumber, sideChanges(result, "modified"), sideChanges(result, "original"));
-    }
-    function rememberBoundedMapEntry(cache, pageNumber, changes) {
-        cache.delete(pageNumber);
-        cache.set(pageNumber, changes);
-        while (cache.size > maximumCachedPageResults) {
-            const oldestPage = cache.keys().next().value;
+    function rememberPageResult(pageNumber, changes, counterpartChanges) {
+        pageResults.delete(pageNumber);
+        pageResults.set(pageNumber, { changes, counterpartChanges });
+        while (pageResults.size > maximumCachedPageResults) {
+            const oldestPage = pageResults.keys().next().value;
             if (oldestPage === undefined) {
                 return;
             }
-            cache.delete(oldestPage);
-        }
-    }
-    function rememberPairedBoundedMapEntries(primaryCache, secondaryCache, pageNumber, primaryChanges, secondaryChanges) {
-        primaryCache.delete(pageNumber);
-        secondaryCache.delete(pageNumber);
-        primaryCache.set(pageNumber, primaryChanges);
-        secondaryCache.set(pageNumber, secondaryChanges);
-        while (primaryCache.size > maximumCachedPageResults) {
-            const oldestPage = primaryCache.keys().next().value;
-            if (oldestPage === undefined) {
-                return;
-            }
-            primaryCache.delete(oldestPage);
-            secondaryCache.delete(oldestPage);
+            pageResults.delete(oldestPage);
         }
     }
     function sideChanges(result, side) {
@@ -747,7 +723,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                     regions: [fullPageRegion()]
                 }];
         }
-        return pageResults.get(pageNumber);
+        return pageResults.get(pageNumber)?.changes;
     }
     function navigateChange(message) {
         if (!enabled || message.sessionId !== currentSessionId || !config.diffRole) {
@@ -890,10 +866,9 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         return result ? cachedComparison(pageNumber) : undefined;
     }
     function cachedComparison(pageNumber) {
-        const modifiedChanges = pageResults.get(pageNumber);
-        const originalChanges = counterpartPageResults.get(pageNumber);
-        return modifiedChanges !== undefined && originalChanges !== undefined
-            ? { originalChanges, modifiedChanges }
+        const cached = pageResults.get(pageNumber);
+        return cached?.counterpartChanges !== undefined
+            ? { originalChanges: cached.counterpartChanges, modifiedChanges: cached.changes }
             : undefined;
     }
     function isCurrentScan(sessionId, currentScanGeneration) {

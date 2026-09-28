@@ -47,34 +47,34 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
     class CitationPreviewController {
         _app;
         _eventBus;
-        _pdfDocument;
-        _pendingPointerMoveFrame;
-        _hoverDelayer;
-        _previewCache;
-        _previewCacheBytes;
-        _pendingPreviewEncodings;
-        _textCache;
-        _pageCache;
-        _annotationCache;
-        _textContentCache;
-        _pageRenderIds;
-        _documentGeneration;
-        _overlayLinks;
-        _pageOverlays;
-        _pageLayers;
-        _previewRequestId;
+        _pdfDocument = null;
+        _pendingPointerMoveFrame = null;
+        _hoverDelayer = new HoverDelayer();
+        _previewCache = new Map();
+        _previewCacheBytes = 0;
+        _pendingPreviewEncodings = new Map();
+        _textCache = new Map();
+        _pageCache = new Map();
+        _annotationCache = new Map();
+        _textContentCache = new Map();
+        _pageRenderIds = new Map();
+        _documentGeneration = 0;
+        _overlayLinks = new WeakMap();
+        _pageOverlays = new Map();
+        _pageLayers = new Set();
+        _previewRequestId = 0;
         _popup;
-        _scaleRenderTimer;
-        _suppressedOpenTimer;
-        _closeTimer;
-        _suppressHoverUntil;
-        _activeRenderTask;
+        _scaleRenderTimer = null;
+        _suppressedOpenTimer = null;
+        _closeTimer = null;
+        _suppressHoverUntil = 0;
+        _activeRenderTask = null;
         _debug;
         _enabled;
         _resolutionScale;
-        _controlPressed;
-        _hoveredPreview;
-        _pointerPosition;
+        _controlPressed = false;
+        _hoveredPreview = null;
+        _pointerPosition = null;
         _displayedImage = null;
         _previewGeneration = 0;
         _refreshTimer = null;
@@ -84,34 +84,10 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             const initialConfiguration = readInitialConfiguration();
             this._app = app;
             this._eventBus = app.eventBus;
-            this._pdfDocument = null;
-            this._pendingPointerMoveFrame = null;
-            this._hoverDelayer = new HoverDelayer();
-            this._previewCache = new Map();
-            this._previewCacheBytes = 0;
-            this._pendingPreviewEncodings = new Map();
-            this._textCache = new Map();
-            this._pageCache = new Map();
-            this._annotationCache = new Map();
-            this._textContentCache = new Map();
-            this._pageRenderIds = new Map();
-            this._documentGeneration = 0;
-            this._overlayLinks = new WeakMap();
-            this._pageOverlays = new Map();
-            this._pageLayers = new Set();
-            this._previewRequestId = 0;
             this._popup = this._createPopup();
-            this._scaleRenderTimer = null;
-            this._suppressedOpenTimer = null;
-            this._closeTimer = null;
-            this._suppressHoverUntil = 0;
-            this._activeRenderTask = null;
             this._debug = initialConfiguration.debug;
             this._enabled = initialConfiguration.enabled;
             this._resolutionScale = initialConfiguration.resolutionScale;
-            this._controlPressed = false;
-            this._hoveredPreview = null;
-            this._pointerPosition = null;
         }
         initialize() {
             const refresh = () => this._schedulePreviewRefresh();
@@ -353,19 +329,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             this._openHoveredPreview(true);
         }
         _getPageAnnotations(pageNumber) {
-            const cached = getCachedEntry(this._annotationCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._getPage(pageNumber)
-                .then((page) => page.getAnnotations({ intent: "display" }));
-            rememberBoundedEntry(this._annotationCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._annotationCache.get(pageNumber) === promise) {
-                    this._annotationCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._annotationCache, pageNumber, () => (this._getPage(pageNumber).then(page => page.getAnnotations({ intent: "display" }))));
         }
         _appendOverlay(pageView, annotation) {
             const rect = viewportRect(pageView.viewport, annotation.rect);
@@ -867,33 +831,10 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             return getCachedEntry(this._previewCache, key);
         }
         _getPageTextContent(pageNumber) {
-            const cached = getCachedEntry(this._textContentCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._getPage(pageNumber)
-                .then((page) => page.getTextContent());
-            rememberBoundedEntry(this._textContentCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._textContentCache.get(pageNumber) === promise) {
-                    this._textContentCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._textContentCache, pageNumber, () => (this._getPage(pageNumber).then(page => page.getTextContent())));
         }
         _getPage(pageNumber) {
-            const cached = getCachedEntry(this._pageCache, pageNumber);
-            if (cached) {
-                return cached;
-            }
-            const promise = this._pdfDocument.getPage(pageNumber);
-            rememberBoundedEntry(this._pageCache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
-            void promise.catch(() => {
-                if (this._pageCache.get(pageNumber) === promise) {
-                    this._pageCache.delete(pageNumber);
-                }
-            });
-            return promise;
+            return getCachedPromise(this._pageCache, pageNumber, () => (this._pdfDocument.getPage(pageNumber)));
         }
         _getPreviewDisplayWidth() {
             const content = this._popup.querySelector(".academic-citation-popup__image, .academic-citation-popup__preview > .academic-citation-popup__loading");
@@ -1190,6 +1131,20 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             }
             cache.delete(oldestKey);
         }
+    }
+    function getCachedPromise(cache, pageNumber, load) {
+        const cached = getCachedEntry(cache, pageNumber);
+        if (cached) {
+            return cached;
+        }
+        const promise = load();
+        rememberBoundedEntry(cache, pageNumber, promise, MAX_DOCUMENT_CACHE_ENTRIES);
+        void promise.catch(() => {
+            if (cache.get(pageNumber) === promise) {
+                cache.delete(pageNumber);
+            }
+        });
+        return promise;
     }
     function canvasToPngBlob(canvas) {
         return new Promise((resolve, reject) => {
