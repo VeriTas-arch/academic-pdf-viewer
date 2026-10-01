@@ -5,9 +5,7 @@
 <h1 align="center">Academic PDF Viewer</h1>
 
 <p align="center">
-  <strong>Read papers. Inspect references. Review PDF revisions.</strong>
-  <br>
-  <sub>An academic PDF reader inside VS Code, powered by PDF.js.</sub>
+  <em>Read papers, inspect references, and review PDF revisions inside VS Code.</em>
 </p>
 
 <p align="center">
@@ -17,43 +15,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases"><strong>Download Preview VSIX →</strong></a>
-</p>
-
-<p align="center">
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases">Download Preview</a>
+  ·
   <a href="#install-and-start-reading">Get started</a>
   ·
-  <a href="#preview-internal-references">Link previews</a>
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md">SyncTeX guide</a>
   ·
-  <a href="#review-pdf-revisions-preview">Git PDF review</a>
-  ·
-  <a href="#shortcuts-and-commands">Shortcuts</a>
-  ·
-  <a href="#integrate-with-synctex">SyncTeX</a>
-  ·
-  <a href="#settings">Settings</a>
+  <a href="./CHANGELOG.md">Release notes</a>
 </p>
-
-<br>
-
-<p align="center">
-  <img
-    src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/snapshot.png"
-    alt="Previewing the destination of a figure link inside an academic PDF"
-    width="100%"
-  >
-  <br>
-  <sub><strong>Link previews</strong> · Hold <kbd>Ctrl</kbd> over an embedded reference to inspect its destination.</sub>
-</p>
-
-<hr>
 
 ## Install and start reading
 
-<blockquote>
-  <p><strong>Preview build · VS Code 1.134+</strong><br>
-  Enable Proposed API access for <code>customEditorDiffs</code>, including when using the extension as an ordinary PDF reader.</p>
-</blockquote>
+> **Preview build · VS Code 1.134+**
+>
+> Enable Proposed API access for `customEditorDiffs`, including when using the extension as an ordinary PDF reader.
 
 1. Download the `.vsix` from [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases).
 2. Run **Extensions: Install from VSIX...** in VS Code and select the file.
@@ -68,7 +43,7 @@
 Use the PDF.js toolbar for search, zoom, outline, page navigation, text selection, printing, and download.
 
 <details>
-<summary><strong>More installation options</strong> — command line &amp; persistent API access</summary>
+<summary>Command-line installation and persistent Proposed API access</summary>
 
 Install or update from PowerShell:
 
@@ -90,7 +65,17 @@ Fully restart VS Code afterward. Insiders is not required. Proposed APIs can cha
 
 ## Preview internal references
 
-For PDFs with embedded links to citations, figures, equations, or sections:
+Inspect embedded citation, figure, equation, and section links without leaving your reading position.
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/snapshot.png"
+    alt="Previewing the destination of a figure link inside an academic PDF"
+    width="100%"
+  >
+  <br>
+  <sub>Preview a linked destination while keeping the current page in view.</sub>
+</p>
 
 1. Hold <kbd>Ctrl</kbd> while hovering over a linked reference.
 2. Read the destination preview; move into the popup to scroll it while holding Control.
@@ -100,6 +85,8 @@ PDFs without internal link annotations remain readable but cannot provide previe
 
 ## Review PDF revisions *(Preview)*
 
+After [Preview installation](#install-and-start-reading), open a changed or staged PDF from Source Control for side-by-side comparison. Badges distinguish `HEAD`, `Index`, and `Working Tree` when available.
+
 <p align="center">
   <img
     src="https://raw.githubusercontent.com/VeriTas-arch/academic-pdf-viewer/main/image/git_diff.png"
@@ -107,10 +94,8 @@ PDFs without internal link annotations remain readable but cannot provide previe
     width="100%"
   >
   <br>
-  <sub><strong>Git PDF review</strong> · Removed regions on the left; inserted or replaced regions on the right.</sub>
+  <sub>Removed regions on the left; inserted or replaced regions on the right.</sub>
 </p>
-
-After [Preview installation](#install-and-start-reading), open a changed or staged PDF from Source Control for side-by-side comparison. Badges distinguish `HEAD`, `Index`, and `Working Tree` when available.
 
 - Toggle highlights and move between semantic changes using the title-bar controls.
 - Scroll positions stay synchronized; zoom remains independent on each side.
@@ -120,22 +105,17 @@ Pages are compared on demand, so navigating across many uncached or complex page
 
 ## Shortcuts and commands
 
-<table width="100%">
-  <thead>
-    <tr><th align="left">Action</th><th align="left">Default shortcut</th><th align="left">Availability</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>Back / forward</td><td>Mouse Back / Forward<br><kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd></td><td>Any viewer tab</td></tr>
-    <tr><td>Zoom around pointer</td><td><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Wheel</kbd></td><td>Any viewer tab</td></tr>
-    <tr><td>Preview internal link</td><td>Hold <kbd>Ctrl</kbd> while hovering</td><td>PDFs with internal links</td></tr>
-    <tr><td>Toggle diff highlights</td><td><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd></td><td>Active PDF diff</td></tr>
-  </tbody>
-</table>
+| Action | Default shortcut | Availability |
+| --- | --- | --- |
+| Back / forward | Mouse Back / Forward or <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd> | Any viewer tab |
+| Zoom around pointer | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Wheel</kbd> | Any viewer tab |
+| Preview internal link | Hold <kbd>Ctrl</kbd> while hovering | PDFs with internal links |
+| Toggle diff highlights | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Active PDF diff |
 
 `PDF: Reload`, `PDF: Toggle Link Preview`, and `PDF Diff: Previous Change` / `PDF Diff: Next Change` are available in the Command Palette when applicable. Assign custom bindings in VS Code's Keyboard Shortcuts editor.
 
 <details>
-<summary><strong>Navigation preferences</strong> — mouse buttons, shortcuts &amp; sidebar</summary>
+<summary>Navigation and sidebar preferences</summary>
 
 Under **Academic PDF Viewer › Navigation**, enable Alt shortcuts and mouse side buttons independently, or change the mouse mapping from **Standard** to **Swapped**. `PDF: Navigate Back` and `PDF: Navigate Forward` remain available for custom bindings when the default Alt shortcuts are disabled.
 
@@ -151,50 +131,27 @@ For local TeX projects, enable `academicPdfViewer.tex.bridge.enabled` in a trust
 - Double-click the PDF for inverse search by default; choose `rightclick` or `off` with `academicPdfViewer.tex.synctex`.
 - The target PDF defaults to a sibling file with the same base name. Set `academicPdfViewer.tex.bridge.pdfPath` for a different output location, or `academicPdfViewer.tex.bridge.executable` if the CLI is outside `PATH`.
 
-<p><a href="https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md"><strong>SyncTeX guide →</strong></a><br>
-Configuration, precision limits, and the complete extension API. ConTeXt <code>mtxrun</code>, remote, and virtual-workspace integrations should use that API.</p>
+See the [SyncTeX guide](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md) for configuration, precision limits, and the complete extension API. ConTeXt `mtxrun`, remote, and virtual-workspace integrations should use that API.
 
 ## Settings
 
 Find all options under **Academic PDF Viewer** in VS Code Settings. The names below use the `academicPdfViewer.` prefix.
 
-<table width="100%">
-  <thead>
-    <tr><th align="left">Setting</th><th align="left">Default &amp; behavior</th></tr>
-  </thead>
-  <tbody>
-    <tr><td><code>linkPreview.enabled</code></td><td><code>true</code> · Control-hover previews. <code>PDF: Toggle Link Preview</code> changes this for the current window.</td></tr>
-    <tr><td><code>linkPreview.resolutionScale</code></td><td><code>0</code> · Automatic screen-density adaptation, with at least 2 image pixels per CSS pixel. <code>1</code>–<code>4</code> select fixed density without changing popup size.</td></tr>
-    <tr><td><code>tex.synctex</code></td><td><code>doubleclick</code> · Inverse SyncTeX trigger: <code>off</code>, <code>doubleclick</code>, or <code>rightclick</code>.</td></tr>
-    <tr><td><code>tex.bridge.enabled</code></td><td><code>false</code> · Enables the local SyncTeX bridge in trusted workspaces.</td></tr>
-  </tbody>
-</table>
+| Setting | Default | Description |
+| --- | --- | --- |
+| `linkPreview.enabled` | `true` | Enables Control-hover previews. `PDF: Toggle Link Preview` changes this for the current window. |
+| `linkPreview.resolutionScale` | `0` | Automatic screen-density adaptation, with at least 2 image pixels per CSS pixel. `1`–`4` select fixed density without changing popup size. |
+| `tex.synctex` | `doubleclick` | Inverse SyncTeX trigger: `off`, `doubleclick`, or `rightclick`. |
+| `tex.bridge.enabled` | `false` | Enables the local SyncTeX bridge in trusted workspaces. |
 
 Higher preview densities use more memory and rendering time; large previews remain subject to pixel limits. Existing explicit values from `1` to `4` keep fixed-density behavior; set `0` for automatic adaptation.
 
 ## Troubleshooting and safety
 
-<blockquote>
-  <p>If PDF diffs stop opening after a VS Code update, check Proposed API access for <code>ovolab-veritas.academic-pdf-viewer</code> and fully restart VS Code.</p>
-</blockquote>
-
-<sub>PDF JavaScript evaluation remains disabled.</sub>
+If PDF diffs stop opening after a VS Code update, check Proposed API access for `ovolab-veritas.academic-pdf-viewer` and fully restart VS Code. PDF JavaScript evaluation remains disabled.
 
 ## Project links
 
-<table width="100%">
-  <tr>
-    <td width="33%" align="center" valign="top">
-      <a href="./CHANGELOG.md"><strong>Release notes</strong></a><br>
-      <sub>Version history &amp; changes</sub>
-    </td>
-    <td width="34%" align="center" valign="top">
-      <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/development.md"><strong>Development</strong></a><br>
-      <sub>Node.js 24.x · tests · fixtures<br>Packaging &amp; PDF.js maintenance</sub>
-    </td>
-    <td width="33%" align="center" valign="top">
-      <a href="./LICENSE"><strong>MIT License</strong></a><br>
-      <sub>License terms</sub>
-    </td>
-  </tr>
-</table>
+- [Release notes](./CHANGELOG.md)
+- [Development guide](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/development.md): Node.js 24.x setup, tests, manual fixtures, packaging, and PDF.js maintenance.
+- [MIT License](./LICENSE)
