@@ -19,7 +19,7 @@
   ·
   <a href="#install-and-start-reading">Get started</a>
   ·
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md">SyncTeX guide</a>
+  <a href="#advanced">Advanced</a>
   ·
   <a href="./CHANGELOG.md">Release notes</a>
 </p>
@@ -123,17 +123,9 @@ Under **Academic PDF Viewer › Navigation**, enable Alt shortcuts and mouse sid
 
 </details>
 
-## Integrate with SyncTeX
+## Advanced
 
-For local TeX projects, enable `academicPdfViewer.tex.bridge.enabled` in a trusted workspace. The bridge uses a MiKTeX `synctex.exe`-compatible `view`/`edit` CLI and requires a matching `.synctex` or `.synctex.gz` file.
-
-- From a `.tex` editor, run **TeX: SyncTeX Forward Search** using the title bar, context menu, or Command Palette. No default keybinding is assigned.
-- Double-click the PDF for inverse search by default; choose `rightclick` or `off` with `academicPdfViewer.tex.synctex`.
-- The target PDF defaults to a sibling file with the same base name. Set `academicPdfViewer.tex.bridge.pdfPath` for a different output location, or `academicPdfViewer.tex.bridge.executable` if the CLI is outside `PATH`.
-
-See the [SyncTeX guide](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md) for configuration, precision limits, and the complete extension API. ConTeXt `mtxrun`, remote, and virtual-workspace integrations should use that API.
-
-## Settings
+### Settings
 
 Find all options under **Academic PDF Viewer** in VS Code Settings. The names below use the `academicPdfViewer.` prefix.
 
@@ -145,6 +137,19 @@ Find all options under **Academic PDF Viewer** in VS Code Settings. The names be
 | `tex.bridge.enabled` | `false` | Enables the local SyncTeX bridge in trusted workspaces. |
 
 Higher preview densities use more memory and rendering time; large previews remain subject to pixel limits. Existing explicit values from `1` to `4` keep fixed-density behavior; set `0` for automatic adaptation.
+
+<details>
+<summary>SyncTeX integration for TeX projects</summary>
+
+For local TeX projects, enable `academicPdfViewer.tex.bridge.enabled` in a trusted workspace. The bridge uses a MiKTeX `synctex.exe`-compatible `view`/`edit` CLI and requires a matching `.synctex` or `.synctex.gz` file.
+
+- From a `.tex` editor, run **TeX: SyncTeX Forward Search** using the title bar, context menu, or Command Palette. No default keybinding is assigned.
+- Double-click the PDF for inverse search by default; choose `rightclick` or `off` with `academicPdfViewer.tex.synctex`.
+- The target PDF defaults to a sibling file with the same base name. Set `academicPdfViewer.tex.bridge.pdfPath` for a different output location, or `academicPdfViewer.tex.bridge.executable` if the CLI is outside `PATH`.
+
+See the [SyncTeX guide](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/docs/synctex.md) for configuration, precision limits, and the complete extension API. ConTeXt `mtxrun`, remote, and virtual-workspace integrations should use that API.
+
+</details>
 
 ## Troubleshooting and safety
 

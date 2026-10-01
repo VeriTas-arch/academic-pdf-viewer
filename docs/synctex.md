@@ -98,4 +98,4 @@ that text. Integrations may pass those fields to SyncTeX's content hint and use
 them to recover a source column when the SyncTeX producer reports `Column:-1`;
 the fields are absent when no reliable text-layer hit is available.
 
-[Back to README](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/README.md#integrate-with-synctex)
+[Back to README](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/README.md#advanced)
