@@ -521,6 +521,9 @@
             }
             completedDocumentLoadId = message.loadId;
             completedDocumentAvailable = available;
+            window.dispatchEvent(new CustomEvent("academic-pdf-document-loaded", {
+                detail: { loadId: message.loadId, available },
+            }));
             drainSyncTexForward();
         };
         const queueSyncTexForward = (message: SyncTexForwardMessage): void => {

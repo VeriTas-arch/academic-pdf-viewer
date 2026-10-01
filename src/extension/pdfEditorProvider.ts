@@ -48,6 +48,7 @@ interface PanelState {
     postedDocumentLoadId?: number;
     pendingSyncTexForward?: PendingSyncTexForward;
     pendingSyncTexContextMenu?: PendingSyncTexContextMenu;
+    reloadCancellation?: vscode.CancellationTokenSource;
 }
 
 function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
@@ -78,6 +79,7 @@ interface DiffPairSession {
     modifiedInfo: DiffPanelInfo;
     highlightsEnabled: boolean;
     sessionId?: number;
+    restoredLoadIds?: readonly [number, number];
 }
 
 export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<PdfDocument> {
@@ -101,7 +103,20 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         private readonly logger?: DevLogger,
     ) {
         this.viewerHtml = readViewerHtml(context);
-        context.subscriptions.push(this.inverseSyncTexEmitter);
+        context.subscriptions.push(this, this.inverseSyncTexEmitter);
+    }
+
+    dispose(): void {
+        for (const panel of this.panelStates.keys()) {
+            this.cancelReload(panel);
+        }
+        for (const timer of this.navigationKeyLocks.values()) {
+            clearTimeout(timer);
+        }
+        this.navigationKeyLocks.clear();
+        this.panelStates.clear();
+        this.diffSessionsByPanel.clear();
+        this.activePanel = undefined;
     }
 
     async openCustomDocument(
@@ -160,6 +175,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             for (const disposable of panelDisposables) {
                 disposable.dispose();
             }
+            this.cancelReload(panel);
             this.panelStates.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
@@ -399,13 +415,20 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             ? [session.originalPanel, session.modifiedPanel]
             : [panel];
         const loadId = this.beginDocumentLoad(reloadPanels);
+        const cancellation = new vscode.CancellationTokenSource();
+        for (const reloadPanel of reloadPanels) {
+            const state = this.panelStates.get(reloadPanel);
+            if (state) {
+                state.reloadCancellation = cancellation;
+            }
+        }
 
         try {
             if (session && modifiedDocument) {
                 const { originalDocument, originalPanel, modifiedPanel } = session;
                 const [originalData, modifiedData] = await Promise.all([
-                    readPdfData(originalDocument.uri, this.logger),
-                    readPdfData(modifiedDocument.uri, this.logger),
+                    readPdfData(originalDocument.uri, this.logger, cancellation.token),
+                    readPdfData(modifiedDocument.uri, this.logger, cancellation.token),
                 ]);
                 if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
                     return;
@@ -427,7 +450,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 return;
             }
 
-            const data = await readPdfData(document.uri, this.logger);
+            const data = await readPdfData(document.uri, this.logger, cancellation.token);
             if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
                 return;
             }
@@ -439,6 +462,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             }
             const detail = error instanceof Error ? error.message : String(error);
             void vscode.window.showErrorMessage(`Unable to reload PDF: ${detail}`);
+        } finally {
+            cancellation.cancel();
+            for (const reloadPanel of reloadPanels) {
+                const state = this.panelStates.get(reloadPanel);
+                if (state?.reloadCancellation === cancellation) {
+                    state.reloadCancellation = undefined;
+                }
+            }
+            cancellation.dispose();
         }
     }
 
@@ -517,7 +549,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             state.ready = true;
             state.pendingSyncTexContextMenu = undefined;
             this.postSyncTexConfiguration(panel, this.getSyncTexMode(document.uri));
-            void this.postDocument(panel, document, false).catch(() => undefined);
+            const loadId = this.beginDocumentLoad([panel]);
+            void this.postDocument(panel, document, false, loadId)
+                .then(() => this.restoreDiffHighlights(panel, loadId))
+                .catch(() => undefined);
         } else if (message.type === 'synctex.forwardResult') {
             const pending = state.pendingSyncTexForward;
             if (!pending
@@ -615,13 +650,20 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 changes: sanitizePdfDiffChanges(message.changes),
             } satisfies ExtensionToWebviewMessage);
         } else if (message.type === 'diff.scroll') {
+            if (!state.ready || state.latestDocumentLoadId !== message.loadId
+                || state.postedDocumentLoadId !== message.loadId) {
+                return;
+            }
             const session = this.diffSessionsByPanel.get(panel);
             const targetPanel = session && panel === session.modifiedPanel
                 ? session.originalPanel
                 : session?.modifiedPanel;
-            if (targetPanel) {
+            const targetState = targetPanel && this.panelStates.get(targetPanel);
+            if (targetPanel && targetState?.ready && targetState.postedDocumentLoadId !== undefined
+                && targetState.postedDocumentLoadId === targetState.latestDocumentLoadId) {
                 void targetPanel.webview.postMessage({
                     type: 'diff.applyScroll',
+                    loadId: targetState.postedDocumentLoadId,
                     pageNumber: message.pageNumber,
                     pageRatio: message.pageRatio,
                     documentRatio: message.documentRatio,
@@ -705,6 +747,27 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
     }
 
+    private async restoreDiffHighlights(panel: vscode.WebviewPanel, loadId: number): Promise<void> {
+        if (!this.isCurrentDocumentLoad([panel], loadId)) {
+            return;
+        }
+        const session = this.diffSessionsByPanel.get(panel);
+        if (!session?.highlightsEnabled) {
+            return;
+        }
+        const original = this.panelStates.get(session.originalPanel);
+        const modified = this.panelStates.get(session.modifiedPanel);
+        const originalId = original?.postedDocumentLoadId;
+        const modifiedId = modified?.postedDocumentLoadId;
+        if (!original?.ready || !modified?.ready || originalId === undefined || modifiedId === undefined
+            || originalId !== original.latestDocumentLoadId || modifiedId !== modified.latestDocumentLoadId
+            || (session.restoredLoadIds?.[0] === originalId && session.restoredLoadIds[1] === modifiedId)) {
+            return;
+        }
+        session.restoredLoadIds = [originalId, modifiedId];
+        await this.setDiffHighlightsForSession(session, true);
+    }
+
     private forgetDiffPanel(panel: vscode.WebviewPanel): void {
         const session = this.diffSessionsByPanel.get(panel);
         if (!session) {
@@ -745,12 +808,23 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             if (!state) {
                 continue;
             }
+            this.cancelReload(panel);
             state.latestDocumentLoadId = loadId;
             state.postedDocumentLoadId = undefined;
             state.pendingSyncTexContextMenu = undefined;
             this.cancelPostedSyncTexForward(panel);
         }
         return loadId;
+    }
+
+    private cancelReload(panel: vscode.WebviewPanel): void {
+        const state = this.panelStates.get(panel);
+        const cancellation = state?.reloadCancellation;
+        if (cancellation) {
+            state!.reloadCancellation = undefined;
+            cancellation.cancel();
+            cancellation.dispose();
+        }
     }
 
     private isCurrentDocumentLoad(panels: vscode.WebviewPanel[], loadId: number): boolean {

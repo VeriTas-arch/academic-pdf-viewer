@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, sep } from 'node:path';
 import * as vscode from 'vscode';
 
@@ -6,6 +7,8 @@ import type { DevLogFields, DevLogger } from './devLogger';
 import { assertPdfSize, MAX_PDF_BYTES } from './pdfSizeLimits';
 
 const gitRootCache = new Map<string, string>();
+const GIT_TIMEOUT_MS = 60_000;
+const GIT_METADATA_MAX_BYTES = 1024 * 1024;
 
 export async function readPdfData(
     uri: vscode.Uri,
@@ -69,8 +72,10 @@ async function readGitBlob(
     uri: vscode.Uri,
     token?: vscode.CancellationToken,
 ): Promise<Uint8Array> {
-    const query = JSON.parse(uri.query) as Record<string, unknown>;
-    if (typeof query.path !== 'string' || typeof query.ref !== 'string') {
+    const query: unknown = JSON.parse(uri.query);
+    if (query === null || typeof query !== 'object' || Array.isArray(query)
+        || !('path' in query) || typeof query.path !== 'string' || !isAbsolute(query.path)
+        || !('ref' in query) || typeof query.ref !== 'string') {
         throw new Error(`Invalid Git URI: ${uri.toString()}`);
     }
 
@@ -104,7 +109,16 @@ async function resolveGitObjectName(
 ): Promise<string | undefined> {
     if (ref === '~' || ref === '') {
         const entry = await runGit(['ls-files', '--stage', '-z', '--', gitPath], repositoryRoot, token);
-        return entry.length > 0 ? `:${gitPath}` : undefined;
+        if (entry.length === 0) {
+            return undefined;
+        }
+        for (const record of entry.toString('utf8').split('\0')) {
+            const match = /^\d+ ([0-9a-f]{40,64}) 0\t([\s\S]*)$/i.exec(record);
+            if (match?.[2] === gitPath) {
+                return match[1];
+            }
+        }
+        throw new Error(`Git index has no resolved PDF entry: ${gitPath}`);
     }
 
     const resolvedRef = (await runGit([
@@ -117,14 +131,40 @@ async function resolveGitObjectName(
         throw new Error(`Git resolved ref output was invalid: ${resolvedRef}`);
     }
     const entry = await runGit(['ls-tree', '-z', resolvedRef, '--', gitPath], repositoryRoot, token);
-    return entry.length > 0 ? `${resolvedRef}:${gitPath}` : undefined;
+    if (entry.length === 0) {
+        return undefined;
+    }
+    const match = /^\d+ blob ([0-9a-f]{40,64})\t([\s\S]*)\0$/i.exec(entry.toString('utf8'));
+    if (match?.[2] !== gitPath) {
+        throw new Error(`Git revision has no PDF blob entry: ${gitPath}`);
+    }
+    return match[1];
 }
 
 async function getGitRepositoryRoot(
     path: string,
     token?: vscode.CancellationToken,
 ): Promise<string> {
-    const workspacePath = dirname(path);
+    let workspacePath = dirname(path);
+    for (;;) {
+        throwIfCancellationRequested(token);
+        try {
+            if ((await stat(workspacePath)).isDirectory()) {
+                break;
+            }
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+                throw error;
+            }
+        }
+        const parent = dirname(workspacePath);
+        if (parent === workspacePath) {
+            throw new Error(`No existing directory for Git PDF: ${path}`);
+        }
+        workspacePath = parent;
+    }
+    throwIfCancellationRequested(token);
     const cachedRoot = gitRootCache.get(workspacePath);
     if (cachedRoot !== undefined) {
         return cachedRoot;
@@ -148,10 +188,13 @@ function runGit(
     const configuredGitPath = vscode.workspace.getConfiguration('git').get<string>('path');
     return new Promise((resolve, reject) => {
         let cancellationListener: vscode.Disposable | undefined;
-        const child = execFile(configuredGitPath || 'git', args, {
+        const child = execFile(configuredGitPath || 'git', ['--literal-pathspecs', ...args], {
             cwd,
             encoding: null,
-            maxBuffer: MAX_PDF_BYTES,
+            maxBuffer: args[0] === 'cat-file' && args[1] === 'blob'
+                ? MAX_PDF_BYTES : GIT_METADATA_MAX_BYTES,
+            timeout: GIT_TIMEOUT_MS,
+            windowsHide: true,
         }, (error, stdout, stderr) => {
             cancellationListener?.dispose();
             if (token?.isCancellationRequested) {
@@ -168,6 +211,9 @@ function runGit(
         cancellationListener = token?.onCancellationRequested(() => {
             child.kill();
         });
+        if (token?.isCancellationRequested) {
+            child.kill();
+        }
     });
 }
 

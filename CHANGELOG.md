@@ -2,6 +2,26 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.3.2] - 2026-10-01
+
+### Changed
+
+- Updated bundled PDF.js to 6.3.289 using the checksum-verified vendor workflow, retaining offline resources and disabled PDF scripting.
+- Added a timeout and smaller metadata-output budget for Git subprocesses, and hide their windows on Windows.
+
+### Fixed
+
+- Read historical and indexed PDFs even when their parent directories have been deleted; resolve literal filenames to immutable Git blob IDs and distinguish missing entries from unresolved merges.
+- Cancel superseded PDF reloads, cancel both diff reads when either side closes or fails, and clean up pending reloads and navigation timers on provider disposal.
+- Cancel superseded SyncTeX processes and pending requests when bridge configuration changes or the bridge is disposed; suppress late results and capture the forward-search cursor before asynchronous work.
+- Scope synchronized diff scrolling to the current document load and ignore anchors while a replacement document is loading, independently of highlight visibility.
+- Restore enabled diff highlights after hidden webviews are recreated and wait for the current PDF to load before starting comparisons.
+
+### Tests
+
+- Added regression coverage for Git paths and process cancellation, reload and SyncTeX lifecycles, workspace trust, production HTML/CSP, delayed scroll messages, and resource cleanup across repeated reloads and closing.
+- Reused the production HTML/CSP generator in browser smoke tests.
+
 ## [1.3.1] - 2026-09-27
 
 ### Changed

@@ -1,0 +1,4 @@
+# Preserve whitespace in upstream PDF.js assets and license texts.
+assets/pdfviewer/lib/** -whitespace
+# This stylesheet is maintained by the extension.
+assets/pdfviewer/lib/pdf.css !whitespace

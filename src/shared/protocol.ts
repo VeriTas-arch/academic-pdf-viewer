@@ -30,7 +30,7 @@ export type ExtensionToWebviewMessage =
     }
     | { type: 'diff.applyPage'; sessionId: number; pageNumber: number; changes: PdfDiffChange[] }
     | { type: 'diff.setRemovedPageRange'; sessionId: number; fromPage: number; toPage: number }
-    | { type: 'diff.applyScroll'; pageNumber: number; pageRatio: number; documentRatio: number }
+    | { type: 'diff.applyScroll'; loadId: number; pageNumber: number; pageRatio: number; documentRatio: number }
     | { type: 'diff.navigate'; sessionId: number; direction: DiffNavigationDirection }
     | {
         type: 'diff.scanForChange';
@@ -180,7 +180,7 @@ export type WebviewToExtensionMessage =
         index: number;
         changes: PdfDiffChange[];
     }
-    | { type: 'diff.scroll'; pageNumber: number; pageRatio: number; documentRatio: number }
+    | { type: 'diff.scroll'; loadId: number; pageNumber: number; pageRatio: number; documentRatio: number }
     | {
         type: 'pdf.debug';
         event: PdfDebugEvent;
@@ -256,7 +256,8 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
                 && isPdfDiffChanges(value.changes)
                 && value.changes.length > value.index;
         case 'diff.scroll':
-            return isPositiveInteger(value.pageNumber)
+            return isPositiveInteger(value.loadId)
+                && isPositiveInteger(value.pageNumber)
                 && isNormalizedNumber(value.pageRatio)
                 && isNormalizedNumber(value.documentRatio);
         case 'pdf.debug':

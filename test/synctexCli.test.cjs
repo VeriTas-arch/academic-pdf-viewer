@@ -7,6 +7,7 @@ const {
     querySyncTexForward,
     querySyncTexInverse,
     resolveSourceColumn,
+    runSyncTexProcess,
     syncTexTextHint,
 } = require('../src/extension/synctexCli.ts');
 
@@ -17,7 +18,29 @@ test('marks an earlier SyncTeX operation stale when a newer one begins', () => {
 
     const secondIsCurrent = tracker.begin();
     assert.equal(firstIsCurrent(), false);
+    assert.equal(firstIsCurrent.signal.aborted, true);
     assert.equal(secondIsCurrent(), true);
+});
+
+test('cancelling a SyncTeX tracker invalidates its final request', () => {
+    const tracker = createLatestRequestTracker();
+    const isCurrent = tracker.begin();
+    tracker.cancel();
+    assert.equal(isCurrent(), false);
+    assert.equal(isCurrent.signal.aborted, true);
+    assert.equal(tracker.begin()(), true);
+});
+
+test('terminates an in-flight SyncTeX process when its request is aborted', async t => {
+    const controller = new AbortController();
+    const pending = runSyncTexProcess({
+        executable: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+        cwd: process.cwd(), signal: controller.signal,
+    });
+    const rejected = assert.rejects(pending, error => error.name === 'AbortError');
+    const timer = setTimeout(() => controller.abort(), 30);
+    t.after(() => { clearTimeout(timer); controller.abort(); });
+    await rejected;
 });
 
 test('queries forward SyncTeX through the injected runner and converts its line box', async () => {

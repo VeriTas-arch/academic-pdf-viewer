@@ -90,6 +90,8 @@ import {
     let config: ViewerConfig;
     let enabled = false;
     let latestDocumentLoadId = 0;
+    let documentReady = false;
+    let pendingDiffEnable: DiffEnableMessage | null = null;
     let currentSessionId = 0;
     let modifiedDocumentReady = false;
     let modifiedFingerprint = "";
@@ -122,6 +124,18 @@ import {
     window.addEventListener("load", () => {
         config = loadConfig();
         initializeStatus();
+        window.addEventListener("academic-pdf-document-loaded", event => {
+            const detail = (event as CustomEvent<{ loadId: number; available: boolean }>).detail;
+            if (detail.loadId === latestDocumentLoadId) {
+                documentReady = detail.available;
+                lastSentScrollAnchor = null;
+                if (documentReady && pendingDiffEnable) {
+                    const message = pendingDiffEnable;
+                    pendingDiffEnable = null;
+                    void enableDiff(message);
+                }
+            }
+        });
         window.addEventListener("message", event => {
             if (!window.academicExtensionMessages.isMessage(event.data)) {
                 return;
@@ -194,6 +208,8 @@ import {
             return;
         }
         latestDocumentLoadId = message.loadId;
+        documentReady = false;
+        pendingDiffEnable = null;
         pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
@@ -215,6 +231,7 @@ import {
             return;
         }
         currentSessionId = message.sessionId;
+        pendingDiffEnable = null;
         const currentComparisonGeneration = ++comparisonGeneration;
         pageScheduler.invalidate();
         navigationGeneration += 1;
@@ -238,6 +255,13 @@ import {
         }
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
+            return;
+        }
+
+        // PDF.js configures its Worker when the main document opens. A restored
+        // diff can arrive before that, so defer comparison until this load settles.
+        if (!message.modifiedIsEmptyRevision && !documentReady) {
+            pendingDiffEnable = message;
             return;
         }
 
@@ -298,6 +322,7 @@ import {
             return;
         }
         currentSessionId = message.sessionId;
+        pendingDiffEnable = null;
         comparisonGeneration += 1;
         pageScheduler.invalidate();
         navigationGeneration += 1;
@@ -1130,7 +1155,7 @@ import {
             } else if (config.diffRole === "original") {
                 requestApplyComparisonPages(true);
             }
-            if (applyingRemoteScroll) {
+            if (applyingRemoteScroll || !documentReady) {
                 return;
             }
             const anchor = readScrollAnchor();
@@ -1138,7 +1163,7 @@ import {
                 return;
             }
             lastSentScrollAnchor = anchor;
-            postExtensionMessage({ type: "diff.scroll", ...anchor });
+            postExtensionMessage({ type: "diff.scroll", loadId: latestDocumentLoadId, ...anchor });
         });
     }
 
@@ -1197,7 +1222,7 @@ import {
     }
 
     function applySynchronizedScroll(message: DiffApplyScrollMessage): void {
-        if (!config.diffRole) {
+        if (!config.diffRole || !documentReady || message.loadId !== latestDocumentLoadId) {
             return;
         }
         const viewer = window.PDFViewerApplication.pdfViewer;

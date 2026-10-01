@@ -1,11 +1,11 @@
 # PDF.js vendor
 
 The runtime files under `lib/build` and `lib/web` come from the official PDF.js
-6.2.108 generic distribution:
+6.3.289 generic distribution:
 
-- Release: <https://github.com/mozilla/pdf.js/releases/tag/v6.2.108>
-- Archive: `pdfjs-6.2.108-dist.zip`
-- SHA-256: `7bf642d59582b475e8c48447da9b02b0108fad9742d7c2a35cb4ed6dd45e95ba`
+- Release: <https://github.com/mozilla/pdf.js/releases/tag/v6.3.289>
+- Archive: `pdfjs-6.3.289-dist.zip`
+- SHA-256: `98c5832ffe7af4edd59853476a478c0d4d4d76dd49c1701f4c86f7182725cdf9`
 
 `lib/pdf.css` is an extension-owned integration file and is not part of the
 upstream archive. Source maps and these unused scripting/debug assets are omitted:

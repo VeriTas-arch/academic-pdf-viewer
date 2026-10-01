@@ -46,7 +46,8 @@
                     && isPositiveInteger(value.toPage)
                     && value.fromPage <= value.toPage;
             case "diff.applyScroll":
-                return isPositiveInteger(value.pageNumber)
+                return isPositiveInteger(value.loadId)
+                    && isPositiveInteger(value.pageNumber)
                     && isNormalizedNumber(value.pageRatio)
                     && isNormalizedNumber(value.documentRatio);
             case "diff.navigate":

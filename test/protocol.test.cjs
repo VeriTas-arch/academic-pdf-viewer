@@ -87,6 +87,7 @@ test('accepts supported webview messages', () => {
     }), true);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
+        loadId: 1,
         pageNumber: 2,
         pageRatio: 0.45,
         documentRatio: 0.4,
@@ -113,6 +114,14 @@ test('accepts supported webview messages', () => {
         durationMs: 180,
         sizeBytes: 120_000,
     }), true);
+});
+
+test('scroll messages require a positive document load identity', () => {
+    const message = { type: 'diff.scroll', pageNumber: 1, pageRatio: 0.5, documentRatio: 0.5 };
+    for (const loadId of [undefined, 0, -1, NaN, '1']) {
+        assert.equal(isWebviewToExtensionMessage({ ...message, loadId }), false);
+    }
+    assert.equal(isWebviewToExtensionMessage({ ...message, loadId: 1 }), true);
 });
 
 test('rejects malformed and unsupported webview messages', () => {
@@ -183,18 +192,21 @@ test('rejects malformed and unsupported webview messages', () => {
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
+        loadId: 1,
         pageNumber: 2,
         pageRatio: 1.1,
         documentRatio: 0.4,
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
+        loadId: 1,
         pageNumber: 0,
         pageRatio: 0.5,
         documentRatio: 0.4,
     }), false);
     assert.equal(isWebviewToExtensionMessage({
         type: 'diff.scroll',
+        loadId: 1,
         pageNumber: 2,
         pageRatio: 0.5,
         documentRatio: Number.NaN,

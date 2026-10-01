@@ -12,6 +12,7 @@ import {
     runSyncTexProcess,
     syncTexTextHint,
     type SyncTexRunner,
+    type LatestRequestGuard,
 } from './synctexCli';
 
 export const SYNCTEX_FORWARD_FROM_CURSOR_COMMAND = 'academicPdfViewer.tex.synctexForwardFromCursor';
@@ -35,11 +36,14 @@ export function registerSyncTexCliBridge(
     const output = vscode.window.createOutputChannel('Academic PDF Viewer SyncTeX');
     const forwardRequests = createLatestRequestTracker();
     const inverseRequests = createLatestRequestTracker();
+    let disposed = false;
     const runner: SyncTexRunner = async request => {
         output.appendLine(formatCommand(request.executable, request.args));
         const result = await processRunner(request);
-        appendProcessOutput(output, result.stdout);
-        appendProcessOutput(output, result.stderr);
+        if (!disposed && !request.signal?.aborted) {
+            appendProcessOutput(output, result.stdout);
+            appendProcessOutput(output, result.stderr);
+        }
         return result;
     };
 
@@ -51,8 +55,24 @@ export function registerSyncTexCliBridge(
     };
 
     context.subscriptions.push(
+        {
+            dispose: () => {
+                disposed = true;
+                forwardRequests.cancel();
+                inverseRequests.cancel();
+            },
+        },
         output,
+        vscode.workspace.onDidChangeConfiguration(event => {
+            if (event.affectsConfiguration('academicPdfViewer.tex.bridge')) {
+                forwardRequests.cancel();
+                inverseRequests.cancel();
+            }
+        }),
         vscode.commands.registerCommand(SYNCTEX_FORWARD_FROM_CURSOR_COMMAND, async () => {
+            if (disposed) {
+                return false;
+            }
             const isCurrent = forwardRequests.begin();
             try {
                 return await forwardFromCursor(viewer, runner, output, isCurrent);
@@ -64,7 +84,7 @@ export function registerSyncTexCliBridge(
             }
         }),
         viewer.onDidRequestInverseSyncTex(event => {
-            if (!isBridgeEnabled(vscode.Uri.parse(event.pdfUri, true))) {
+            if (disposed || !isBridgeEnabled(vscode.Uri.parse(event.pdfUri, true))) {
                 return;
             }
             const isCurrent = inverseRequests.begin();
@@ -81,7 +101,7 @@ async function forwardFromCursor(
     viewer: SyncTexViewer,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
-    isCurrent: () => boolean,
+    isCurrent: LatestRequestGuard,
 ): Promise<boolean> {
     const editor = vscode.window.activeTextEditor;
     if (!editor
@@ -99,6 +119,7 @@ async function forwardFromCursor(
     const sourcePath = sourceUri.fsPath;
     const pdfPath = resolvePdfPath(sourceUri, configuration.pdfPath);
     const pdfUri = vscode.Uri.file(pdfPath);
+    const position = editor.selection.active;
     const pdfStat = await vscode.workspace.fs.stat(pdfUri);
     if ((pdfStat.type & vscode.FileType.File) === 0) {
         throw new Error(`The configured SyncTeX PDF is not a file: ${pdfPath}`);
@@ -107,7 +128,6 @@ async function forwardFromCursor(
         return false;
     }
 
-    const position = editor.selection.active;
     const result = await querySyncTexForward(
         runner,
         configuration.executable,
@@ -115,6 +135,7 @@ async function forwardFromCursor(
         pdfPath,
         position.line + 1,
         position.character + 1,
+        isCurrent.signal,
     );
     if (!isCurrent()) {
         return false;
@@ -144,7 +165,7 @@ async function inverseToSource(
     event: SyncTexInverseEvent,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
-    isCurrent: () => boolean,
+    isCurrent: LatestRequestGuard,
 ): Promise<void> {
     ensureTrustedWorkspace();
     const pdfUri = vscode.Uri.parse(event.pdfUri, true);
@@ -162,6 +183,7 @@ async function inverseToSource(
         event.x,
         event.y,
         textHint,
+        isCurrent.signal,
     );
     if (!isCurrent()) {
         return;

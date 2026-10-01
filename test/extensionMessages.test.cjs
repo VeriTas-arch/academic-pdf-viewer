@@ -60,7 +60,7 @@ test('accepts supported extension-to-webview messages', () => {
         },
         { type: 'diff.applyPage', sessionId: 1, pageNumber: 1, changes: [change] },
         { type: 'diff.setRemovedPageRange', sessionId: 1, fromPage: 2, toPage: 4 },
-        { type: 'diff.applyScroll', pageNumber: 1, pageRatio: 0.25, documentRatio: 0.5 },
+        { type: 'diff.applyScroll', loadId: 1, pageNumber: 1, pageRatio: 0.25, documentRatio: 0.5 },
         { type: 'diff.navigate', sessionId: 1, direction: 'next' },
         {
             type: 'diff.scanForChange',
@@ -81,6 +81,13 @@ test('accepts supported extension-to-webview messages', () => {
         { type: 'linkPreview.configure', enabled: true, resolutionScale: 2 },
     ]) {
         assert.equal(isMessage(message), true, message.type);
+    }
+});
+
+test('scroll application requires a positive document load identity', () => {
+    const message = { type: 'diff.applyScroll', pageNumber: 1, pageRatio: 0.5, documentRatio: 0.5 };
+    for (const loadId of [undefined, 0, -1, NaN, '1']) {
+        assert.equal(isMessage({ ...message, loadId }), false);
     }
 });
 

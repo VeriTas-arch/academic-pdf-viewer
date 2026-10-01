@@ -13,6 +13,7 @@ manual-tests/**
 src/**
 scripts/**
 .gitignore
+.gitattributes
 .markdownlint.json
 note.md
 image/snapshot.png

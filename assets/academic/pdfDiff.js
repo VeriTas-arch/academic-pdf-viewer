@@ -15,6 +15,8 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     let config;
     let enabled = false;
     let latestDocumentLoadId = 0;
+    let documentReady = false;
+    let pendingDiffEnable = null;
     let currentSessionId = 0;
     let modifiedDocumentReady = false;
     let modifiedFingerprint = "";
@@ -46,6 +48,18 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     window.addEventListener("load", () => {
         config = loadConfig();
         initializeStatus();
+        window.addEventListener("academic-pdf-document-loaded", event => {
+            const detail = event.detail;
+            if (detail.loadId === latestDocumentLoadId) {
+                documentReady = detail.available;
+                lastSentScrollAnchor = null;
+                if (documentReady && pendingDiffEnable) {
+                    const message = pendingDiffEnable;
+                    pendingDiffEnable = null;
+                    void enableDiff(message);
+                }
+            }
+        });
         window.addEventListener("message", event => {
             if (!window.academicExtensionMessages.isMessage(event.data)) {
                 return;
@@ -126,6 +140,8 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return;
         }
         latestDocumentLoadId = message.loadId;
+        documentReady = false;
+        pendingDiffEnable = null;
         pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
@@ -147,6 +163,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return;
         }
         currentSessionId = message.sessionId;
+        pendingDiffEnable = null;
         const currentComparisonGeneration = ++comparisonGeneration;
         pageScheduler.invalidate();
         navigationGeneration += 1;
@@ -170,6 +187,12 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         }
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
+            return;
+        }
+        // PDF.js configures its Worker when the main document opens. A restored
+        // diff can arrive before that, so defer comparison until this load settles.
+        if (!message.modifiedIsEmptyRevision && !documentReady) {
+            pendingDiffEnable = message;
             return;
         }
         if (message.modifiedIsEmptyRevision) {
@@ -228,6 +251,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return;
         }
         currentSessionId = message.sessionId;
+        pendingDiffEnable = null;
         comparisonGeneration += 1;
         pageScheduler.invalidate();
         navigationGeneration += 1;
@@ -946,7 +970,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             else if (config.diffRole === "original") {
                 requestApplyComparisonPages(true);
             }
-            if (applyingRemoteScroll) {
+            if (applyingRemoteScroll || !documentReady) {
                 return;
             }
             const anchor = readScrollAnchor();
@@ -954,7 +978,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 return;
             }
             lastSentScrollAnchor = anchor;
-            postExtensionMessage({ type: "diff.scroll", ...anchor });
+            postExtensionMessage({ type: "diff.scroll", loadId: latestDocumentLoadId, ...anchor });
         });
     }
     function readScrollAnchor() {
@@ -1002,7 +1026,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             && Math.abs(first.documentRatio - second.documentRatio) < 0.0005;
     }
     function applySynchronizedScroll(message) {
-        if (!config.diffRole) {
+        if (!config.diffRole || !documentReady || message.loadId !== latestDocumentLoadId) {
             return;
         }
         const viewer = window.PDFViewerApplication.pdfViewer;

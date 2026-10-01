@@ -2,7 +2,7 @@
     "name": "academic-pdf-viewer",
     "displayName": "Academic PDF Viewer",
     "description": "A VS Code PDF reader for academic papers.",
-    "version": "1.3.1",
+    "version": "1.3.2",
     "icon": "image/icon.png",
     "publisher": "ovolab-veritas",
     "repository": {
@@ -302,7 +302,7 @@
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/extensionMessages.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/webviewState.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs",
+        "test": "node --test test/protocol.test.cjs test/extensionMessages.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/webviewState.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs test/pdfDataSource.test.cjs test/pdfEditorProvider.test.cjs test/synctexCliBridge.test.cjs test/viewerHtml.test.cjs",
         "test:extension": "node test/extensionHost/run.mjs",
         "test:viewer": "node --test test/viewerSmoke.test.mjs"
     },

@@ -10,6 +10,7 @@ export interface SyncTexRunRequest {
     executable: string;
     args: string[];
     cwd: string;
+    signal?: AbortSignal;
 }
 
 export interface SyncTexRunResult {
@@ -43,16 +44,34 @@ export type SourceColumnResolution = {
 };
 
 export interface LatestRequestTracker {
-    begin(): () => boolean;
+    begin(): LatestRequestGuard;
+    cancel(): void;
+}
+
+export interface LatestRequestGuard {
+    (): boolean;
+    readonly signal: AbortSignal;
 }
 
 /** Returns guards that remain current only until the next request begins. */
 export function createLatestRequestTracker(): LatestRequestTracker {
     let generation = 0;
+    let controller: AbortController | undefined;
     return {
         begin: () => {
+            controller?.abort();
+            controller = new AbortController();
+            const signal = controller.signal;
             const requestGeneration = ++generation;
-            return () => requestGeneration === generation;
+            return Object.assign(
+                () => requestGeneration === generation && !signal.aborted,
+                { signal },
+            );
+        },
+        cancel: () => {
+            ++generation;
+            controller?.abort();
+            controller = undefined;
         },
     };
 }
@@ -67,9 +86,14 @@ export const runSyncTexProcess: SyncTexRunner = request => new Promise((resolve,
             maxBuffer: SYNCTEX_MAX_OUTPUT_BYTES,
             timeout: SYNCTEX_TIMEOUT_MS,
             windowsHide: true,
+            signal: request.signal,
         },
         (error, stdout, stderr) => {
             if (error) {
+                if (request.signal?.aborted) {
+                    reject(error);
+                    return;
+                }
                 reject(new Error(stderr.trim() || stdout.trim() || error.message));
                 return;
             }
@@ -85,11 +109,13 @@ export async function querySyncTexForward(
     pdfPath: string,
     line: number,
     column: number,
+    signal?: AbortSignal,
 ): Promise<SyncTexForwardResult> {
     const result = await runner({
         executable,
         args: ['view', '-i', `${line}:${column}:${sourcePath}`, '-o', pdfPath],
         cwd: path.dirname(sourcePath),
+        ...(signal ? { signal } : {}),
     });
     const fields = parseSyncTexFields(result.stdout);
     const pageNumber = finiteField(fields, 'Page');
@@ -116,6 +142,7 @@ export async function querySyncTexInverse(
     x: number,
     y: number,
     textHint?: SyncTexTextHint,
+    signal?: AbortSignal,
 ): Promise<SyncTexInverseResult> {
     const args = ['edit', '-o', `${pageNumber}:${x}:${y}:${pdfPath}`];
     if (textHint) {
@@ -125,6 +152,7 @@ export async function querySyncTexInverse(
         executable,
         args,
         cwd: path.dirname(pdfPath),
+        ...(signal ? { signal } : {}),
     });
     const fields = parseSyncTexFields(result.stdout);
     const input = fields.get('Input');

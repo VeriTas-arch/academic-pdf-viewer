@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { dirname, extname, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const viewerPath = resolve(projectRoot, "assets/pdfviewer/lib/web/viewer.html");
+const { loadSource } = createRequire(import.meta.url)("./helpers/extensionSource.cjs");
 const fixturePath = "/test/fixtures/viewer-smoke.pdf";
 
 test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, async t => {
@@ -1928,6 +1929,167 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
         await reloadPage.close();
     });
 
+    await t.test("defers restored comparisons until the current main document opens", async t => {
+        const restoredPage = await browser.newPage();
+        t.after(() => restoredPage.close());
+        await restoredPage.goto(`${origin}/__viewer_diff_test__.html`);
+        await restoredPage.waitForFunction(() => window.__academicTestMessages.some(m => m.type === "webview.ready"));
+        await restoredPage.evaluate(async path => {
+            const application = window.PDFViewerApplication;
+            const open = application.open.bind(application);
+            application.open = async options => {
+                await new Promise(resolve => { window.__resumeRestoredOpen = resolve; });
+                return open(options);
+            };
+            window.__earlyComparisonLoads = 0;
+            const getDocument = window.pdfjsLib.getDocument;
+            window.pdfjsLib = { ...window.pdfjsLib, getDocument: options => {
+                window.__earlyComparisonLoads += 1;
+                return getDocument(options);
+            } };
+            const data = new Uint8Array(await (await fetch(path)).arrayBuffer());
+            window.postMessage({ type: "document.load", loadId: 1, data: data.slice().buffer,
+                isEmptyRevision: false, fingerprint: "restored-main", preserveView: false }, "*");
+            window.postMessage({ type: "diff.setEnabled", enabled: true, sessionId: 1, role: "modified",
+                originalData: data.slice().buffer, originalFingerprint: "restored-original",
+                originalIsEmptyRevision: false, modifiedIsEmptyRevision: false }, "*");
+        }, fixturePath);
+        await restoredPage.waitForFunction(() => typeof window.__resumeRestoredOpen === "function");
+        assert.equal(await restoredPage.evaluate(() => window.__earlyComparisonLoads), 0);
+        await restoredPage.evaluate(() => window.__resumeRestoredOpen());
+        await restoredPage.waitForFunction(() => window.__academicTestDebug.some(
+            m => m.event === "diffComputed" && m.fingerprint === "restored-main"
+        ), undefined, { timeout: 10_000 });
+        assert.equal(await restoredPage.evaluate(() => window.__earlyComparisonLoads), 1);
+        assert.equal(await restoredPage.evaluate(() => window.__academicTestDebug.some(m => m.event === "diffFailed")), false);
+    });
+
+    await t.test("isolates scroll anchors across document reloads with highlights disabled", async t => {
+        const scrollPage = await browser.newPage({ viewport: { width: 900, height: 500 } });
+        scrollPage.setDefaultTimeout(5_000);
+        t.after(() => scrollPage.close());
+        await scrollPage.addInitScript(() => {
+            window.__completedLoads = [];
+            window.addEventListener("academic-pdf-document-loaded", event => window.__completedLoads.push(event.detail));
+        });
+        await scrollPage.goto(`${origin}/__viewer_original_diff_test__.html`);
+        await scrollPage.waitForFunction(() => window.__academicTestMessages.some(m => m.type === "webview.ready"));
+        const load = async loadId => {
+            await scrollPage.evaluate(async ({ loadId, path }) => {
+                const data = await (await fetch(path)).arrayBuffer();
+                window.postMessage({ type: "document.load", loadId, data, isEmptyRevision: false,
+                    fingerprint: `scroll-${loadId}`, preserveView: true }, "*");
+            }, { loadId, path: fixturePath });
+        };
+        const completed = loadId => scrollPage.waitForFunction(id =>
+            window.__completedLoads.some(load => load.loadId === id && load.available), loadId);
+        const frames = () => scrollPage.evaluate(() => new Promise(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const apply = (loadId, pageNumber) => scrollPage.evaluate(({ loadId, pageNumber }) => {
+            window.postMessage({ type: "diff.applyScroll", loadId, pageNumber,
+                pageRatio: 0, documentRatio: pageNumber === 1 ? 0 : 0.8 }, "*");
+        }, { loadId, pageNumber });
+        const position = () => scrollPage.evaluate(() => window.PDFViewerApplication.pdfViewer.container.scrollTop);
+        await load(1);
+        await completed(1);
+        const initial = await position();
+        await apply(99, 2);
+        await frames();
+        assert.equal(await position(), initial);
+        await apply(1, 2);
+        await frames();
+        assert(await position() > initial + 50);
+        await load(2);
+        await completed(2);
+        const reloaded = await position();
+        await apply(1, 1);
+        await frames();
+        assert.equal(await position(), reloaded);
+        await apply(2, 1);
+        await frames();
+        assert((await position()) <= 2);
+        const pausedPosition = await position();
+        await scrollPage.evaluate(() => {
+            const application = window.PDFViewerApplication;
+            const originalOpen = application.open.bind(application);
+            application.open = async options => {
+                await new Promise(resolve => { window.__resumeOpen = resolve; });
+                return originalOpen(options);
+            };
+        });
+        await load(3);
+        await scrollPage.waitForFunction(() => typeof window.__resumeOpen === "function");
+        const before = await scrollPage.evaluate(() => window.__academicTestMessages.filter(m => m.type === "diff.scroll").length);
+        await apply(3, 2);
+        await frames();
+        assert.equal(await position(), pausedPosition);
+        await scrollPage.evaluate(() => { window.PDFViewerApplication.pdfViewer.container.scrollTop = 100; });
+        await frames();
+        assert.equal(await scrollPage.evaluate(() => window.__academicTestMessages.filter(m => m.type === "diff.scroll").length), before);
+        await scrollPage.evaluate(() => window.__resumeOpen());
+        await completed(3);
+        await scrollPage.evaluate(() => { window.PDFViewerApplication.pdfViewer.container.scrollTop += 50; });
+        await scrollPage.waitForFunction(() => window.__academicTestMessages.some(m => m.type === "diff.scroll" && m.loadId === 3));
+    });
+
+    await t.test("releases preview URLs, canvases and old Workers through repeated reload and close", async t => {
+        const resourcePage = await browser.newPage({ viewport: { width: 900, height: 900 } });
+        resourcePage.setDefaultTimeout(5_000);
+        t.after(() => resourcePage.close());
+        const workers = new Set();
+        resourcePage.on("worker", worker => {
+            workers.add(worker);
+            worker.on("close", () => workers.delete(worker));
+        });
+        await resourcePage.addInitScript(() => {
+            window.__liveUrls = new Set();
+            window.__previewCanvases = [];
+            const create = URL.createObjectURL.bind(URL);
+            const revoke = URL.revokeObjectURL.bind(URL);
+            URL.createObjectURL = blob => {
+                const url = create(blob);
+                window.__liveUrls.add(url);
+                return url;
+            };
+            URL.revokeObjectURL = url => { window.__liveUrls.delete(url); revoke(url); };
+            const toBlob = HTMLCanvasElement.prototype.toBlob;
+            HTMLCanvasElement.prototype.toBlob = function (...args) {
+                window.__previewCanvases.push(this);
+                return toBlob.apply(this, args);
+            };
+            window.__completedLoads = [];
+            window.addEventListener("academic-pdf-document-loaded", event => window.__completedLoads.push(event.detail));
+        });
+        await resourcePage.goto(`${origin}/__viewer_test__.html`);
+        await resourcePage.waitForFunction(() => window.__academicTestMessages.some(m => m.type === "webview.ready"));
+        for (let loadId = 1; loadId <= 4; loadId++) {
+            await resourcePage.evaluate(async ({ loadId, path }) => {
+                const data = await (await fetch(path)).arrayBuffer();
+                window.postMessage({ type: "document.load", loadId, data, isEmptyRevision: false,
+                    fingerprint: `resource-${loadId}`, preserveView: false }, "*");
+            }, { loadId, path: fixturePath });
+            await resourcePage.waitForFunction(id => window.__completedLoads.some(load => load.loadId === id && load.available), loadId);
+            await resourcePage.waitForFunction(() => window.__liveUrls.size === 1);
+            const encoded = await resourcePage.evaluate(() => window.__academicTestDebug.filter(m => m.event === "linkPreviewEncoded").length);
+            const link = resourcePage.locator(".academic-citation-link").first();
+            await link.waitFor();
+            const rect = await link.boundingBox();
+            assert(rect);
+            await resourcePage.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            await resourcePage.keyboard.down("Control");
+            await waitForPreview(resourcePage);
+            await resourcePage.waitForFunction(count => window.__academicTestDebug.filter(m => m.event === "linkPreviewEncoded").length > count, encoded);
+            await resourcePage.keyboard.up("Control");
+            await resourcePage.waitForFunction(() => window.__previewCanvases.every(canvas => canvas.width === 0 && canvas.height === 0));
+            assert.equal(await resourcePage.evaluate(() => window.__liveUrls.size), 2);
+            assert.equal(workers.size, 1);
+        }
+        await resourcePage.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+        assert.equal(await resourcePage.evaluate(() => window.__liveUrls.size), 0);
+        await resourcePage.close();
+        assert.equal(workers.size, 0);
+    });
+
     await t.test("keeps the latest of back-to-back document loads", async () => {
         const reloadPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
         const reloadPageErrors = [];
@@ -2071,51 +2233,24 @@ async function browserLaunchOptions() {
 }
 
 async function buildViewerHtml(configOverrides = {}) {
-    let html = await readFile(viewerPath, "utf8");
-    html = html.replace(/\s*<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?\/>\s*/i, "\n");
-    const markers = [
-        '<link rel="resource" type="application/l10n" href="locale/locale.json" />',
-        '<script src="../build/pdf.mjs" type="module"></script>',
-        '<link rel="stylesheet" href="viewer.css" />',
-        '<script src="viewer.mjs" type="module"></script>'
-    ];
-    for (const marker of markers) {
-        assert(html.includes(marker), `Missing PDF.js viewer marker: ${marker}`);
-        html = html.replace(marker, "");
-    }
-    const config = escapeHtmlAttribute(JSON.stringify({
-        cMapUrl: "/assets/pdfviewer/lib/web/cmaps/",
+    const { readViewerHtml, renderViewerHtml } = loadSource("extension/viewerHtml.ts", {
+        Uri: { joinPath: (_root, ...parts) => ({ toString: () => `/${parts.join("/")}` }) }
+    });
+    const source = readViewerHtml({ asAbsolutePath: relative => resolve(projectRoot, relative) });
+    const html = renderViewerHtml(source, {}, {
+        cspSource: "'self'", asWebviewUri: value => value
+    }, {
         debug: true,
-        iccUrl: "/assets/pdfviewer/lib/web/iccs/",
-        imageResourcesPath: "/assets/pdfviewer/lib/web/images/",
-        standardFontDataUrl: "/assets/pdfviewer/lib/web/standard_fonts/",
-        wasmUrl: "/assets/pdfviewer/lib/web/wasm/",
-        workerSrc: "/assets/pdfviewer/lib/build/pdf.worker.mjs",
         linkPreviewEnabled: true,
         linkPreviewResolutionScale: 1,
         mouseNavigationEnabled: true,
         mouseButtonMapping: "standard",
         defaultSidebar: "pages",
+        syncTexMode: "doubleclick",
         ...configOverrides
-    }));
-    const head = `
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:;">
-<meta id="pdf-preview-config" data-config="${config}">
-<link rel="resource" type="application/l10n" href="/assets/pdfviewer/lib/web/locale/locale.json">
-<link rel="stylesheet" href="/assets/pdfviewer/lib/web/viewer.css">
-<link rel="stylesheet" href="/assets/pdfviewer/lib/pdf.css">
-<link rel="stylesheet" href="/assets/academic/reader.css">
-<link rel="stylesheet" href="/assets/academic/citationPreview.css">
-<script src="/test/viewer/harnessPrelude.js"></script>
-<script src="/assets/academic/extensionMessages.js"></script>
-<script src="/assets/academic/pdfjsAdapter.js"></script>
-<script src="/assets/academic/pdfViewerBootstrap.js"></script>
-<script src="/assets/pdfviewer/lib/build/pdf.mjs" type="module"></script>
-<script src="/assets/pdfviewer/lib/web/viewer.mjs" type="module"></script>
-<script src="/assets/academic/reader.js"></script>
-<script src="/assets/academic/citationPreview.js" type="module"></script>
-<script src="/assets/academic/pdfDiff.js" type="module"></script>`;
-    return html.replace("<title>PDF.js viewer</title>", `${head}\n<title>Academic PDF Viewer test</title>`);
+    });
+    // The extension HTML and CSP remain intact; only the VS Code API is simulated.
+    return html.replace(/(?=<script\s)/, '<script src="/test/viewer/harnessPrelude.js"></script>\n');
 }
 
 async function serveRequest(
@@ -2174,9 +2309,6 @@ function contentType(path) {
     })[extname(path)] || "application/octet-stream";
 }
 
-function escapeHtmlAttribute(value) {
-    return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function createLinkBorderPdf(userUnit) {
     const borders = [
