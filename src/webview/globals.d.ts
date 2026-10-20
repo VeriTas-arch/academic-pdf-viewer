@@ -147,7 +147,6 @@ interface AcademicPdfJsAdapter {
     getViewer(): PdfJsViewer | null;
     getViewerContainer(viewer?: PdfJsViewer | null): HTMLElement | null;
     getToolbarHost(): HTMLElement | null;
-    getPageViews(viewer: PdfJsViewer): PdfJsPageView[];
     scaleLinkBorders(pageView: PdfJsPageView): void;
     getCapabilities(
         document?: PdfJsDocument | null,

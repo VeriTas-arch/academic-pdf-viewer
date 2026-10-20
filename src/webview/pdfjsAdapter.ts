@@ -78,17 +78,6 @@
             return document.getElementById("toolbarViewerLeft");
         },
 
-        getPageViews(viewer: PdfJsViewer): PdfJsPageView[] {
-            const pages: PdfJsPageView[] = [];
-            for (let index = 0; index < viewer.pagesCount; index++) {
-                const page = viewer.getPageView(index);
-                if (page) {
-                    pages.push(page);
-                }
-            }
-            return pages;
-        },
-
         scaleLinkBorders(pageView: PdfJsPageView): void {
             const layer = pageView.div.querySelector<HTMLElement>(".annotationLayer");
             if (!layer) {

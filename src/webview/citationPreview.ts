@@ -96,49 +96,21 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
     const CLOSE_DELAY_MS = 180;
     const pdfjsAdapter = window.academicPdfJsAdapter;
 
-    class HoverDelayer {
-        _openTimer: Timer;
-
-        constructor() {
-            this._openTimer = null;
-        }
-
-        open(callback: () => void): void {
-            this.cancelOpen();
-            this._openTimer = setTimeout(() => {
-                this._openTimer = null;
-                callback();
-            }, OPEN_DELAY_MS);
-        }
-
-        cancelOpen(): void {
-            if (!this._openTimer) {
-                return;
-            }
-            clearTimeout(this._openTimer);
-            this._openTimer = null;
-        }
-
-    }
-
     class CitationPreviewController {
         _app: PdfJsApplication;
         _eventBus: PdfJsEventBus;
         _pdfDocument: PdfJsDocument | null = null;
         _pendingPointerMoveFrame: number | null = null;
-        _hoverDelayer: HoverDelayer = new HoverDelayer();
+        _openTimer: Timer = null;
         _previewCache: Map<string, ImagePreview> = new Map();
         _previewCacheBytes: number = 0;
         _pendingPreviewEncodings: Map<string, PendingPreviewEncoding> = new Map();
         _textCache: Map<string, string> = new Map();
-        _pageCache: Map<number, Promise<PdfJsPage>> = new Map();
         _annotationCache: Map<number, Promise<PdfJsAnnotation[]>> = new Map();
         _textContentCache: Map<number, Promise<PdfJsTextContent>> = new Map();
         _pageRenderIds: Map<number, number> = new Map();
         _documentGeneration: number = 0;
-        _overlayLinks: WeakMap<HTMLElement, PreviewLink> = new WeakMap();
-        _pageOverlays: Map<HTMLElement, Set<HTMLElement>> = new Map();
-        _pageLayers: Set<HTMLElement> = new Set();
+        _pageOverlays = new Map<HTMLElement, { layer: HTMLElement; links: Map<HTMLElement, PreviewLink> }>();
         _previewRequestId: number = 0;
         _popup: HTMLDivElement;
         _scaleRenderTimer: Timer = null;
@@ -194,7 +166,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 this._hidePopup();
                 this._clearPreviewCache();
                 this._textCache.clear();
-                this._pageCache.clear();
                 this._annotationCache.clear();
                 this._textContentCache.clear();
                 this._pageRenderIds.clear();
@@ -293,12 +264,23 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                     this._showPopup(hovered.anchor, hovered.link);
                 }
             };
+            this._cancelOpen();
             if (immediate) {
-                this._hoverDelayer.cancelOpen();
                 open();
             } else {
-                this._hoverDelayer.open(open);
+                this._openTimer = setTimeout(() => {
+                    this._openTimer = null;
+                    open();
+                }, OPEN_DELAY_MS);
             }
+        }
+
+        _cancelOpen(): void {
+            if (this._openTimer === null) {
+                return;
+            }
+            clearTimeout(this._openTimer);
+            this._openTimer = null;
         }
 
         _scheduleSuppressedOpen(hovered: HoveredPreview, delayMs: number): void {
@@ -375,7 +357,9 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             if (!this._enabled) {
                 return;
             }
-            for (const pageView of pdfjsAdapter.getPageViews(this._app.pdfViewer)) {
+            const viewer = this._app.pdfViewer;
+            for (let index = 0; index < viewer.pagesCount; index++) {
+                const pageView = viewer.getPageView(index);
                 if (pageView && pageView.renderingState === 3) {
                     this._renderPage(pageView.id);
                 }
@@ -423,7 +407,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
         _getPageAnnotations(pageNumber: number): Promise<PdfJsAnnotation[]> {
             return getCachedPromise(this._annotationCache, pageNumber, () => (
-                this._getPage(pageNumber).then(page => page.getAnnotations({ intent: "display" }))
+                this._pdfDocument!.getPage(pageNumber).then(page => page.getAnnotations({ intent: "display" }))
             ));
         }
 
@@ -432,7 +416,14 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             if (!rect || rect.width <= 0 || rect.height <= 0) {
                 return;
             }
-            const layer = this._ensurePageLayer(pageView.div);
+            let pageOverlay = this._pageOverlays.get(pageView.div);
+            if (!pageOverlay) {
+                const layer = document.createElement("div");
+                layer.className = "academic-citation-layer";
+                pageView.div.append(layer);
+                pageOverlay = { layer, links: new Map() };
+                this._pageOverlays.set(pageView.div, pageOverlay);
+            }
 
             const overlay = document.createElement("button");
             overlay.type = "button";
@@ -447,8 +438,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 rect,
                 dest: annotation.dest
             };
-            this._overlayLinks.set(overlay, link);
-            this._trackPageOverlay(pageView.div, overlay);
+            pageOverlay.links.set(overlay, link);
             overlay.addEventListener("click", (event: MouseEvent) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -456,7 +446,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 this._app.pdfLinkService.goToDestination(link.dest);
             });
 
-            layer.append(overlay);
+            pageOverlay.layer.append(overlay);
         }
 
     _syncHoveredPreviewAtPointer(): boolean {
@@ -484,25 +474,21 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 break;
             }
         }
-        const overlays = page ? this._pageOverlays.get(page) : null;
+        const overlays = page ? this._pageOverlays.get(page)?.links : undefined;
         const pageRect = page && !directAnchor ? page.getBoundingClientRect() : null;
         let anchor = directAnchor;
         if (!anchor && overlays) {
             if (!pageRect) {
                 return this._setHoveredPreview(null);
             }
-            for (const candidate of overlays) {
-                const link = this._overlayLinks.get(candidate);
-                if (!link) {
-                    continue;
-                }
+            for (const [candidate, link] of overlays) {
                 if (containsClientPointInPage(pageRect, link.rect, x, y)) {
                     anchor = candidate;
                     break;
                 }
             }
         }
-        const link = anchor && this._overlayLinks.get(anchor);
+        const link = anchor && overlays?.get(anchor);
         if (anchor && link) {
             this._cancelClose();
             return this._setHoveredPreview({ anchor, link });
@@ -653,7 +639,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
             this._previewRequestId++;
             this._cancelActiveRenderTask();
-            this._hoverDelayer.cancelOpen();
+            this._cancelOpen();
             this._cancelSuppressedOpen();
             this._cancelClose();
             this._cancelPendingPointerMoveFrame();
@@ -804,7 +790,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 return cachedText;
             }
 
-            const page = await this._getPage(destination.pageNumber);
+            const page = await this._pdfDocument!.getPage(destination.pageNumber);
             const viewport = page.getViewport({ scale: 1 });
             const targetY = destination.pdfY !== null && Number.isFinite(destination.pdfY)
                 ? viewport.convertToViewportPoint(destination.pdfX || 0, destination.pdfY)[1]
@@ -821,7 +807,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             const key = imagePreviewKey(destination);
             const pdfDocument = this._pdfDocument;
             const generation = this._previewGeneration;
-            const page = await this._getPage(destination.pageNumber);
+            const page = await this._pdfDocument!.getPage(destination.pageNumber);
             const baseViewport = page.getViewport({ scale: 1 });
             const baseTextBounds = await this._getPageTextBounds(destination.pageNumber, baseViewport);
             if (requestId !== this._previewRequestId || generation !== this._previewGeneration) {
@@ -993,13 +979,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
 
         _getPageTextContent(pageNumber: number): Promise<PdfJsTextContent> {
             return getCachedPromise(this._textContentCache, pageNumber, () => (
-                this._getPage(pageNumber).then(page => page.getTextContent())
-            ));
-        }
-
-        _getPage(pageNumber: number): Promise<PdfJsPage> {
-            return getCachedPromise(this._pageCache, pageNumber, () => (
-                this._pdfDocument!.getPage(pageNumber)
+                this._pdfDocument!.getPage(pageNumber).then(page => page.getTextContent())
             ));
         }
 
@@ -1099,40 +1079,19 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         _clearAllOverlays(): void {
-            for (const layer of this._pageLayers) {
+            for (const { layer } of this._pageOverlays.values()) {
                 layer.remove();
             }
-            this._pageLayers.clear();
             this._pageOverlays.clear();
         }
 
         _clearPageOverlays(pageDiv: HTMLElement): void {
-            const layer = pageDiv.querySelector(".academic-citation-layer");
-            if (layer) {
-                layer.textContent = "";
-                pageDiv.append(layer);
+            const overlay = this._pageOverlays.get(pageDiv);
+            if (overlay) {
+                overlay.layer.textContent = "";
+                pageDiv.append(overlay.layer);
+                overlay.links.clear();
             }
-            this._pageOverlays.delete(pageDiv);
-        }
-
-        _trackPageOverlay(pageDiv: HTMLElement, overlay: HTMLElement): void {
-            let overlays = this._pageOverlays.get(pageDiv);
-            if (!overlays) {
-                overlays = new Set();
-                this._pageOverlays.set(pageDiv, overlays);
-            }
-            overlays.add(overlay);
-        }
-
-        _ensurePageLayer(pageDiv: HTMLElement): HTMLElement {
-            let layer = pageDiv.querySelector<HTMLElement>(".academic-citation-layer");
-            if (!layer) {
-                layer = document.createElement("div");
-                layer.className = "academic-citation-layer";
-                pageDiv.append(layer);
-            }
-            this._pageLayers.add(layer);
-            return layer;
         }
     }
 

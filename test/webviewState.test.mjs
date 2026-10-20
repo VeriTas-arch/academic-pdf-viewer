@@ -110,3 +110,54 @@ test('reader parses initial settings once and retains defaults for invalid setti
     assert.equal(configurationReads, 1);
     assert.deepEqual({ ...initialConfiguration }, JSON.parse(configuration));
 });
+
+test('SyncTeX pointer lookup only reads the clicked page in a long document', () => {
+    const context = loadWebview('reader', ['getSyncTexPointer']);
+    class Element {
+        dataset = {};
+        closest() { return null; }
+        setAttribute() {}
+        getBoundingClientRect() { return { left: 10, top: 20 }; }
+        clientLeft = 1;
+        clientTop = 2;
+        clientWidth = 200;
+        clientHeight = 300;
+    }
+    context.Element = context.HTMLElement = Element;
+    context.document.elementsFromPoint = () => [];
+    const page = new Element();
+    page.dataset.pageNumber = '10000';
+    const child = new Element();
+    const pageView = {
+        id: 10000,
+        div: page,
+        viewport: {
+            convertToPdfPoint: (x, y) => [x + 10, 320 - y],
+            viewBox: [10, 20, 210, 320],
+            userUnit: 2,
+        },
+    };
+    const reads = [];
+    context.window.academicPdfJsAdapter.getViewer = () => ({
+        pagesCount: 10000,
+        getPageView(index) { reads.push(index); return index === 9999 ? pageView : undefined; },
+    });
+    const event = {
+        target: child,
+        clientX: 61,
+        clientY: 92,
+        composedPath: () => [child, page, context.document, context.window],
+    };
+    assert.deepEqual({ ...context.getSyncTexPointer(event) }, { pageNumber: 10000, x: 100, y: 140 });
+    assert.deepEqual(reads, [9999]);
+
+    // A page number on an unrelated element must not be treated as a PDF page.
+    const impostor = new Element();
+    impostor.dataset.pageNumber = '10000';
+    assert.equal(context.getSyncTexPointer({ ...event, composedPath: () => [impostor] }), undefined);
+    assert.equal(context.getSyncTexPointer({ ...event, clientX: 5 }), undefined);
+    child.closest = () => page;
+    reads.length = 0;
+    assert.equal(context.getSyncTexPointer(event), undefined);
+    assert.deepEqual(reads, []);
+});

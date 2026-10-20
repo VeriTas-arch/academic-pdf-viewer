@@ -174,3 +174,51 @@ test('restores enabled highlights after both hidden diff webviews become ready a
         assert.equal(controls[0].enabled, true);
     }
 });
+
+test('diff results only forward from the current modified panel and strip extra fields', async t => {
+    const f = await fixture(t, async () => new Uint8Array([2]));
+    const second = await f.open('modified.pdf');
+    const session = pair(f, second);
+    session.sessionId = 7;
+    const changes = [{ regions: [{ left: 0, top: 0, width: 0.2, height: 0.1, extra: true }], extra: true }];
+    const result = { type: 'diff.pageResult', sessionId: 7, pageNumber: 1, originalChanges: changes };
+    const range = { type: 'diff.removedPageRange', sessionId: 7, fromPage: 2, toPage: 3 };
+    for (const message of [result, range]) {
+        f.first.received.fire(message);
+        second.received.fire({ ...message, sessionId: 6 });
+    }
+    assert.deepEqual(f.first.messages, []);
+    assert.deepEqual(second.messages, []);
+
+    second.received.fire(result);
+    second.received.fire(range);
+    assert.deepEqual(f.first.messages, [
+        { type: 'diff.applyPage', sessionId: 7, pageNumber: 1,
+            changes: [{ regions: [{ left: 0, top: 0, width: 0.2, height: 0.1 }] }] },
+        { type: 'diff.setRemovedPageRange', sessionId: 7, fromPage: 2, toPage: 3 },
+    ]);
+    f.first.messages.length = 0;
+    f.first.dispose();
+    second.received.fire(result);
+    assert.deepEqual(f.first.messages, []);
+});
+
+test('diff navigation results route to the requested side only from the current modified panel', async t => {
+    const f = await fixture(t, async () => new Uint8Array([2]));
+    const second = await f.open('modified.pdf');
+    pair(f, second).sessionId = 7;
+    const result = { type: 'diff.navigationResult', sessionId: 7, requestId: 1,
+        pageNumber: 2, index: 0, changes: [{ regions: [{ left: 0, top: 0, width: 1, height: 1 }] }] };
+    for (const role of ['original', 'modified']) {
+        f.first.received.fire({ ...result, role });
+        second.received.fire({ ...result, role, sessionId: 6 });
+    }
+    assert.deepEqual(f.first.messages, []);
+    assert.deepEqual(second.messages, []);
+    for (const role of ['original', 'modified']) {
+        second.received.fire({ ...result, role });
+    }
+    const expected = [{ ...result, type: 'diff.revealChange' }];
+    assert.deepEqual(f.first.messages, expected);
+    assert.deepEqual(second.messages, expected);
+});

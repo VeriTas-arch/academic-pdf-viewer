@@ -115,15 +115,9 @@
             && a.pdfLeft === b.pdfLeft
             && a.pdfTop === b.pdfTop;
     }
-    function getViewer() {
-        return pdfjsAdapter.getViewer();
-    }
-    function getContainer() {
-        return pdfjsAdapter.getViewerContainer();
-    }
     function captureLocation() {
-        const viewer = getViewer();
-        const container = getContainer();
+        const viewer = pdfjsAdapter.getViewer();
+        const container = pdfjsAdapter.getViewerContainer(viewer);
         if (!viewer || !container) {
             return null;
         }
@@ -138,8 +132,8 @@
         });
     }
     function restoreLocation(location) {
-        const viewer = getViewer();
-        const container = getContainer();
+        const viewer = pdfjsAdapter.getViewer();
+        const container = pdfjsAdapter.getViewerContainer();
         if (!viewer || !container || !location) {
             return;
         }
@@ -180,7 +174,7 @@
             && typeof viewer.scrollPageIntoView === "function";
     }
     function finishRestore(location) {
-        const container = getContainer();
+        const container = pdfjsAdapter.getViewerContainer();
         if (!container) {
             restoring = false;
             return;
@@ -286,12 +280,12 @@
     }
     const syncTexPageContext = JSON.stringify({ webviewSection: "pdfPage" });
     function setSyncTexPageContexts() {
-        const viewer = getViewer();
+        const viewer = pdfjsAdapter.getViewer();
         if (!viewer) {
             return;
         }
-        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
-            pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
+        for (let index = 0; index < viewer.pagesCount; index++) {
+            viewer.getPageView(index)?.div.setAttribute("data-vscode-context", syncTexPageContext);
         }
     }
     function isInteractivePointerTarget(target) {
@@ -341,13 +335,20 @@
     }
     /** Resolves the PDF position under a pointer event. */
     function getSyncTexPointer(event) {
-        const viewer = getViewer();
+        const viewer = pdfjsAdapter.getViewer();
         if (!viewer || isInteractivePointerTarget(event.target)) {
             return undefined;
         }
-        const eventPath = event.composedPath();
-        for (const pageView of pdfjsAdapter.getPageViews(viewer)) {
-            if (!eventPath.includes(pageView.div)) {
+        for (const element of event.composedPath()) {
+            if (!(element instanceof HTMLElement)) {
+                continue;
+            }
+            const pageNumber = Number(element.dataset.pageNumber);
+            if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > viewer.pagesCount) {
+                continue;
+            }
+            const pageView = viewer.getPageView(pageNumber - 1);
+            if (!pageView || pageView.div !== element) {
                 continue;
             }
             pageView.div.setAttribute("data-vscode-context", syncTexPageContext);
@@ -552,7 +553,7 @@
         if (!point || Math.abs(delta) < 0.001) {
             return;
         }
-        const viewer = getViewer();
+        const viewer = pdfjsAdapter.getViewer();
         if (!viewer || viewer.isInPresentationMode || document.visibilityState === "hidden") {
             return;
         }

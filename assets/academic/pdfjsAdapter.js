@@ -42,16 +42,6 @@
         getToolbarHost() {
             return document.getElementById("toolbarViewerLeft");
         },
-        getPageViews(viewer) {
-            const pages = [];
-            for (let index = 0; index < viewer.pagesCount; index++) {
-                const page = viewer.getPageView(index);
-                if (page) {
-                    pages.push(page);
-                }
-            }
-            return pages;
-        },
         scaleLinkBorders(pageView) {
             const layer = pageView.div.querySelector(".annotationLayer");
             if (!layer) {

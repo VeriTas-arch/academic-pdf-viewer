@@ -97,7 +97,7 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
                 && adapter.getViewerContainer(viewer) === document.getElementById("viewerContainer")
                 && adapter.getToolbarHost() === document.getElementById("toolbarViewerLeft")
                 && viewer !== null
-                && adapter.getPageViews(viewer).length === 2;
+                && viewer.pagesCount === 2;
         }), true);
         assert.deepEqual(await page.evaluate(() => window.academicPdfJsAdapter.getCapabilities()), {
             viewer: true,
@@ -450,6 +450,42 @@ test("bundled PDF.js viewer preserves extension behavior", { timeout: 60_000 }, 
     const box = await link.boundingBox();
     assert(box);
     const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+    await t.test("reuses the preview layer after page redraw without querying it for each link", async () => {
+        const result = await link.evaluate(async anchor => {
+            const pageDiv = anchor.closest(".page");
+            const layer = pageDiv.querySelector(".academic-citation-layer");
+            const linkCount = layer.children.length;
+            const querySelector = pageDiv.querySelector;
+            let layerQueries = 0;
+            pageDiv.querySelector = function (selector) {
+                if (selector === ".academic-citation-layer") layerQueries++;
+                return querySelector.call(this, selector);
+            };
+            try {
+                for (let index = 0; index < 2; index++) {
+                    // PDF.js can detach custom layers while repainting a page.
+                    layer.remove();
+                    window.PDFViewerApplication.eventBus.dispatch("pagerendered", {
+                        pageNumber: Number(pageDiv.dataset.pageNumber)
+                    });
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+                }
+                return {
+                    layerQueries,
+                    sameLayer: querySelector.call(pageDiv, ".academic-citation-layer") === layer,
+                    layers: pageDiv.querySelectorAll(".academic-citation-layer").length,
+                    sameLinkCount: layer.children.length === linkCount,
+                    replacedLinks: !layer.contains(anchor)
+                };
+            } finally {
+                delete pageDiv.querySelector;
+            }
+        });
+        assert.deepEqual(result, {
+            layerQueries: 0, sameLayer: true, layers: 1, sameLinkCount: true, replacedLinks: true
+        });
+    });
 
     await t.test("opens a preview when Control is pressed over the link glyph", async () => {
         await page.mouse.move(target.x, target.y);
