@@ -26,7 +26,6 @@ export interface PageDiffResult {
     changes: PageDiffChange[];
     originalRegions: DiffRegion[];
     modifiedRegions: DiffRegion[];
-    changedPixels: number;
     strategy: DiffStrategy;
 }
 
@@ -131,26 +130,20 @@ const minimumPairedRegionHeightRatio = 0.6;
 
 export function compareRasters(original: RasterPage, modified: RasterPage): PageDiffResult {
     if (original.width !== modified.width || original.height !== modified.height) {
-        return symmetricResult([fullPageRegion()], -1, "page");
+        return symmetricResult([fullPageRegion()], "page");
     }
 
     const components: DifferenceComponent[] = [];
     let previousRuns: DifferenceRun[] = [];
-    let changedPixels = 0;
     let totalRuns = 0;
     for (let y = 0; y < modified.height; y += 1) {
         const currentRuns = collectChangedRuns(original, modified, y);
-        changedPixels += currentRuns.reduce((sum, run) => sum + run.changedPixels, 0);
         totalRuns += currentRuns.length;
         if (totalRuns > maximumRunsPerPage) {
-            return symmetricResult([fullPageRegion()], -1, "page");
+            return symmetricResult([fullPageRegion()], "page");
         }
         connectRuns(currentRuns, previousRuns, y, components);
         previousRuns = currentRuns;
-    }
-
-    if (changedPixels === 0) {
-        return symmetricResult([], changedPixels, "raster");
     }
 
     let pixelRegions = components
@@ -164,7 +157,7 @@ export function compareRasters(original: RasterPage, modified: RasterPage): Page
             changedPixels: component.changedPixels
         }));
     if (pixelRegions.length === 0) {
-        return symmetricResult([], changedPixels, "raster");
+        return symmetricResult([], "raster");
     }
 
     pixelRegions = pixelRegions.length <= maximumComponentsToMerge
@@ -178,7 +171,7 @@ export function compareRasters(original: RasterPage, modified: RasterPage): Page
         modified.width,
         modified.height
     ));
-    return symmetricResult(regions, changedPixels, "raster");
+    return symmetricResult(regions, "raster");
 }
 
 export function compareTextTokens(
@@ -230,7 +223,7 @@ export function mergeTextAndRasterResults(
         )
     }));
     if (visualChanges.length === 0) {
-        return { ...textResult, changedPixels: rasterResult.changedPixels };
+        return textResult;
     }
 
     const visualOriginalRegions = visualChanges.flatMap(change => change.originalRegions);
@@ -243,7 +236,6 @@ export function mergeTextAndRasterResults(
         changes: [...textResult.changes, ...visualChanges],
         originalRegions: [...textResult.originalRegions, ...visualOriginalRegions],
         modifiedRegions: [...textResult.modifiedRegions, ...visualModifiedRegions],
-        changedPixels: rasterResult.changedPixels,
         strategy: "text"
     };
 }
@@ -393,7 +385,6 @@ function textResult(
         changes: normalizedChanges,
         originalRegions,
         modifiedRegions,
-        changedPixels: -1,
         strategy: "text"
     };
 }
@@ -568,7 +559,6 @@ function resizePixelRegionHeight(region: PixelRegion, pixelHeight: number): Pixe
 
 function symmetricResult(
     regions: DiffRegion[],
-    changedPixels: number,
     strategy: "page" | "raster"
 ): PageDiffResult {
     const changes = regions.map((region, index) => ({
@@ -582,7 +572,6 @@ function symmetricResult(
         changes,
         originalRegions: regions,
         modifiedRegions: regions,
-        changedPixels,
         strategy
     };
 }

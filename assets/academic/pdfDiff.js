@@ -11,16 +11,15 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     const maximumQueuedPages = eagerComparisonPageLimit;
     const comparisonPrefetchRadius = 3;
     const pdfjsAdapter = window.academicPdfJsAdapter;
+    const { post } = window.academicExtensionMessages;
     const pageScheduler = new PageComparisonScheduler(maximumConcurrentPageComparisons, maximumQueuedPages);
-    let config;
+    const config = window.academicViewerConfiguration;
     let enabled = false;
     let latestDocumentLoadId = 0;
     let documentReady = false;
     let pendingDiffEnable = null;
     let currentSessionId = 0;
     let modifiedDocumentReady = false;
-    let modifiedFingerprint = "";
-    let originalFingerprint = "";
     let originalIsEmptyRevision = false;
     let originalLoadingTask = null;
     let originalDocument = null;
@@ -46,7 +45,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     let textMetricsContext;
     const pageDiffLayers = new Map();
     window.addEventListener("load", () => {
-        config = loadConfig();
         initializeStatus();
         window.addEventListener("academic-pdf-document-loaded", event => {
             const detail = event.detail;
@@ -60,11 +58,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 }
             }
         });
-        window.addEventListener("message", event => {
-            if (!window.academicExtensionMessages.isMessage(event.data)) {
-                return;
-            }
-            const message = event.data;
+        window.academicExtensionMessages.subscribe(message => {
             if (message.type === "document.load") {
                 handleDocumentLoad(message);
             }
@@ -72,7 +66,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 void enableDiff(message);
             }
             else if (message.type === "diff.setEnabled") {
-                disableDiff(message);
+                disableDiff(message.sessionId);
             }
             else if (message.type === "diff.applyPage") {
                 applyForwardedPage(message);
@@ -127,14 +121,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             });
         });
     }, { once: true });
-    function loadConfig() {
-        const element = document.getElementById("pdf-preview-config");
-        const value = element?.getAttribute("data-config");
-        if (!value) {
-            throw new Error("Could not load PDF diff configuration.");
-        }
-        return JSON.parse(value);
-    }
     function handleDocumentLoad(message) {
         if (message.loadId <= latestDocumentLoadId) {
             return;
@@ -145,7 +131,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         pageScheduler.invalidate();
         navigationGeneration += 1;
         scanGeneration += 1;
-        modifiedFingerprint = message.fingerprint;
         modifiedDocumentReady = false;
         lastSentScrollAnchor = null;
         if (config.diffRole === "modified" || !enabled) {
@@ -177,14 +162,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             }
             return;
         }
-        if (message.modifiedIsEmptyRevision) {
-            originalFingerprint = "";
-            originalIsEmptyRevision = false;
-        }
-        else {
-            originalFingerprint = message.originalFingerprint;
-            originalIsEmptyRevision = message.originalIsEmptyRevision;
-        }
+        originalIsEmptyRevision = !message.modifiedIsEmptyRevision && message.originalIsEmptyRevision;
         await disposeOriginalDocument();
         if (!enabled || comparisonGeneration !== currentComparisonGeneration) {
             return;
@@ -202,7 +180,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             requestScheduledComparisonPages();
             return;
         }
-        const startedAt = performance.now();
         try {
             const loadingTask = pdfjsLib.getDocument({
                 data: new Uint8Array(message.originalData),
@@ -225,7 +202,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             originalDocument = documentProxy;
             const modifiedPages = window.PDFViewerApplication.pdfDocument?.numPages ?? 0;
             if (documentProxy.numPages > modifiedPages) {
-                postExtensionMessage({
+                post({
                     type: "diff.removedPageRange",
                     sessionId: currentSessionId,
                     fromPage: modifiedPages + 1,
@@ -238,19 +215,14 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             if (comparisonGeneration !== currentComparisonGeneration) {
                 return;
             }
-            reportDebug("diffFailed", {
-                fingerprint: modifiedFingerprint,
-                originalFingerprint,
-                durationMs: elapsedSince(startedAt),
-                error: getErrorMessage(error)
-            });
+            failComparison(error);
         }
     }
-    function disableDiff(message) {
-        if (message.sessionId < currentSessionId) {
+    function disableDiff(sessionId) {
+        if (sessionId < currentSessionId) {
             return;
         }
-        currentSessionId = message.sessionId;
+        currentSessionId = sessionId;
         pendingDiffEnable = null;
         comparisonGeneration += 1;
         pageScheduler.invalidate();
@@ -260,22 +232,21 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         resetPageResults();
         void disposeOriginalDocument();
     }
+    function failComparison(error) {
+        console.error("Could not compare PDF revisions.", error);
+        disableDiff(currentSessionId);
+        post({ type: "diff.failed", sessionId: currentSessionId });
+    }
     async function disposeOriginalDocument() {
         const loadingTask = originalLoadingTask;
         originalLoadingTask = null;
         originalDocument = null;
         if (loadingTask) {
-            const startedAt = performance.now();
             try {
                 await loadingTask.destroy();
             }
             catch (error) {
-                reportDebug("diffFailed", {
-                    fingerprint: modifiedFingerprint,
-                    originalFingerprint,
-                    durationMs: elapsedSince(startedAt),
-                    error: getErrorMessage(error)
-                });
+                console.error("Could not close the original PDF revision.", error);
             }
         }
     }
@@ -329,11 +300,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     }
     function scheduleComparisonPages(reapplyCached = true) {
         const viewer = pdfjsAdapter.getViewer();
-        const container = pdfjsAdapter.getViewerContainer(viewer);
         if (!viewer) {
             return;
         }
-        const range = comparisonPageRange(viewer, container);
+        const range = comparisonPageRange(viewer);
         if (!range) {
             return;
         }
@@ -344,7 +314,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             }
         }
     }
-    function comparisonPageRange(viewer, container) {
+    function comparisonPageRange(viewer) {
         if (viewer.pagesCount < 1) {
             return null;
         }
@@ -355,8 +325,8 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         let lastIndex = viewer.pagesCount <= eagerComparisonPageLimit
             ? viewer.pagesCount - 1
             : Math.min(viewer.pagesCount - 1, currentIndex + comparisonPrefetchRadius);
-        if (container && viewer.pagesCount > eagerComparisonPageLimit) {
-            const containerRect = container.getBoundingClientRect();
+        if (viewer.pagesCount > eagerComparisonPageLimit) {
+            const containerRect = viewer.container.getBoundingClientRect();
             for (let index = currentIndex - 1; index >= 0; index -= 1) {
                 const pageView = viewer.getPageView(index);
                 if (!pageView || pageView.div.getBoundingClientRect().bottom <= containerRect.top) {
@@ -376,11 +346,10 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
     }
     function applyComparisonPages(onlyMissing = false) {
         const viewer = pdfjsAdapter.getViewer();
-        const container = pdfjsAdapter.getViewerContainer(viewer);
         if (!viewer) {
             return;
         }
-        const range = comparisonPageRange(viewer, container);
+        const range = comparisonPageRange(viewer);
         if (!range) {
             return;
         }
@@ -406,7 +375,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             pageResults.set(pageNumber, cached);
             const counterpart = cached.counterpartChanges;
             if (counterpart !== undefined) {
-                postExtensionMessage({
+                post({
                     type: "diff.pageResult",
                     sessionId: currentSessionId,
                     pageNumber,
@@ -423,7 +392,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         requestDrainPageQueue();
     }
     function requestDrainPageQueue() {
-        if (comparisonDrainFrame !== null) {
+        if (comparisonDrainFrame !== null || pageScheduler.queuedCount === 0) {
             return;
         }
         comparisonDrainFrame = window.requestAnimationFrame(() => {
@@ -432,11 +401,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         });
     }
     function drainPageQueue() {
-        while (!pageScheduler.atCapacity && pageScheduler.queuedCount > 0) {
-            const scheduled = pageScheduler.startNext();
-            if (!scheduled) {
-                return;
-            }
+        for (let scheduled = pageScheduler.startNext(); scheduled; scheduled = pageScheduler.startNext()) {
             if (!enabled
                 || !modifiedDocumentReady
                 || !pageScheduler.isCurrent(scheduled.generation)
@@ -463,42 +428,26 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         return task;
     }
     async function computeAndApplyPage(pageNumber, currentGeneration) {
-        const startedAt = performance.now();
         try {
             const result = await computePageDiff(pageNumber);
             if (!enabled || !pageScheduler.isCurrent(currentGeneration)) {
                 return undefined;
             }
-            rememberPageResult(pageNumber, sideChanges(result, "modified"), sideChanges(result, "original"));
+            const originalChanges = sideChanges(result, "original");
+            rememberPageResult(pageNumber, sideChanges(result, "modified"), originalChanges);
             applyPageResult(pageNumber);
-            postExtensionMessage({
+            post({
                 type: "diff.pageResult",
                 sessionId: currentSessionId,
                 pageNumber,
-                originalChanges: pageResults.get(pageNumber)?.counterpartChanges ?? []
-            });
-            reportDebug("diffComputed", {
-                fingerprint: modifiedFingerprint,
-                originalFingerprint,
-                pageNumber,
-                durationMs: elapsedSince(startedAt),
-                strategy: result.strategy,
-                regions: result.originalRegions.length + result.modifiedRegions.length,
-                changedPixels: result.changedPixels
+                originalChanges
             });
             return result;
         }
         catch (error) {
-            if (!pageScheduler.isCurrent(currentGeneration)) {
-                return undefined;
+            if (pageScheduler.isCurrent(currentGeneration)) {
+                failComparison(error);
             }
-            reportDebug("diffFailed", {
-                fingerprint: modifiedFingerprint,
-                originalFingerprint,
-                pageNumber,
-                durationMs: elapsedSince(startedAt),
-                error: getErrorMessage(error)
-            });
             return undefined;
         }
     }
@@ -510,7 +459,13 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (pageNumber > modifiedDocument.numPages) {
             return pageChangeResult("delete");
         }
-        if (originalIsEmptyRevision || !originalDocument || pageNumber > originalDocument.numPages) {
+        if (originalIsEmptyRevision) {
+            return pageChangeResult("insert");
+        }
+        if (!originalDocument) {
+            throw new Error("The original PDF is not loaded.");
+        }
+        if (pageNumber > originalDocument.numPages) {
             return pageChangeResult("insert");
         }
         const [originalPage, modifiedPage] = await Promise.all([
@@ -525,7 +480,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         }
         const largestDimension = Math.max(modifiedViewport.width, modifiedViewport.height);
         const scale = Math.min(maxRenderScale, maxRenderDimension / largestDimension);
-        const textResult = await comparePageText(originalPage, modifiedPage, scale, pageNumber);
+        const textResult = await comparePageText(originalPage, modifiedPage, scale);
         const [originalRaster, modifiedRaster] = await Promise.all([
             renderPage(originalPage, scale),
             renderPage(modifiedPage, scale)
@@ -549,7 +504,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 }],
             originalRegions,
             modifiedRegions,
-            changedPixels: -1,
             strategy: "page"
         };
     }
@@ -578,22 +532,23 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        if (!context) {
-            throw new Error("Could not create a canvas for PDF comparison.");
+        try {
+            const context = canvas.getContext("2d", { willReadFrequently: true });
+            if (!context) {
+                throw new Error("Could not create a canvas for PDF comparison.");
+            }
+            await page.render({
+                canvasContext: context,
+                viewport,
+                background: "rgb(255, 255, 255)"
+            }).promise;
+            return { width, height, pixels: context.getImageData(0, 0, width, height).data };
         }
-        await page.render({
-            canvasContext: context,
-            viewport,
-            background: "rgb(255, 255, 255)"
-        }).promise;
-        const pixels = context.getImageData(0, 0, width, height).data;
-        canvas.width = 0;
-        canvas.height = 0;
-        return { width, height, pixels };
+        finally {
+            canvas.width = canvas.height = 0;
+        }
     }
-    async function comparePageText(originalPage, modifiedPage, scale, pageNumber) {
-        const startedAt = performance.now();
+    async function comparePageText(originalPage, modifiedPage, scale) {
         try {
             const [originalContent, modifiedContent] = await Promise.all([
                 originalPage.getTextContent(),
@@ -612,13 +567,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return compareTextTokens(originalTokens, modifiedTokens, originalViewport.width, originalViewport.height, modifiedViewport.width, modifiedViewport.height);
         }
         catch (error) {
-            reportDebug("diffTextFallback", {
-                fingerprint: modifiedFingerprint,
-                originalFingerprint,
-                pageNumber,
-                durationMs: elapsedSince(startedAt),
-                error: getErrorMessage(error)
-            });
+            console.warn("Could not compare PDF text. Falling back to page rendering.", error);
             return null;
         }
     }
@@ -776,7 +725,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             if (unresolvedPage === undefined) {
                 return;
             }
-            postExtensionMessage({
+            post({
                 type: "diff.navigationRequest",
                 sessionId: currentSessionId,
                 requestId,
@@ -838,7 +787,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             return;
         }
         if (forwardResult) {
-            postExtensionMessage({
+            post({
                 type: "diff.navigationResult",
                 sessionId: request.sessionId,
                 requestId: request.requestId,
@@ -853,41 +802,31 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         }
     }
     async function ensurePageComparison(pageNumber, sessionId, currentScanGeneration) {
-        const cached = cachedComparison(pageNumber);
-        if (cached) {
-            return cached;
-        }
-        const pending = pendingPages.get(pageNumber);
-        if (pending) {
-            await pending;
-            return isCurrentScan(sessionId, currentScanGeneration)
-                ? cachedComparison(pageNumber)
-                : undefined;
+        if (!modifiedDocumentReady || (!originalDocument && !originalIsEmptyRevision)) {
+            return undefined;
         }
         pageScheduler.removeQueued(pageNumber);
-        while (pageScheduler.atCapacity) {
-            const activeTasks = [...activePageTasks];
-            if (activeTasks.length === 0) {
-                return undefined;
+        while (isCurrentScan(sessionId, currentScanGeneration)) {
+            const cached = cachedComparison(pageNumber);
+            if (cached) {
+                return cached;
             }
-            await Promise.race(activeTasks);
-            if (!isCurrentScan(sessionId, currentScanGeneration)) {
-                return undefined;
+            const pending = pendingPages.get(pageNumber);
+            if (pending) {
+                await pending;
+                return isCurrentScan(sessionId, currentScanGeneration) ? cachedComparison(pageNumber) : undefined;
             }
-            const completed = cachedComparison(pageNumber);
-            if (completed) {
-                return completed;
+            const scheduled = pageScheduler.startImmediately(pageNumber);
+            if (scheduled) {
+                const result = await startPageComparison(scheduled);
+                return result ? cachedComparison(pageNumber) : undefined;
             }
+            if (!activePageTasks.size) {
+                break;
+            }
+            await Promise.race(activePageTasks);
         }
-        if (!isCurrentScan(sessionId, currentScanGeneration)) {
-            return undefined;
-        }
-        const scheduled = pageScheduler.startImmediately(pageNumber);
-        if (!scheduled) {
-            return undefined;
-        }
-        const result = await startPageComparison(scheduled);
-        return result ? cachedComparison(pageNumber) : undefined;
+        return undefined;
     }
     function cachedComparison(pageNumber) {
         const cached = pageResults.get(pageNumber);
@@ -928,7 +867,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
         if (!config.diffRole) {
             return;
         }
-        const toolbar = pdfjsAdapter.getToolbarHost();
+        const toolbar = document.getElementById("toolbarViewerLeft");
         if (!toolbar) {
             return;
         }
@@ -948,9 +887,6 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             ?? (config.diffRole === "original" ? "Original" : "Modified");
         statusElement.textContent = `${label} · Highlights ${enabled ? "on" : "off"}`;
         statusElement.title = statusElement.textContent;
-    }
-    function postExtensionMessage(message) {
-        window.dispatchEvent(new CustomEvent("academic-pdf-message", { detail: message }));
     }
     function initializeScrollSync() {
         if (!config.diffRole) {
@@ -978,7 +914,7 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
                 return;
             }
             lastSentScrollAnchor = anchor;
-            postExtensionMessage({ type: "diff.scroll", loadId: latestDocumentLoadId, ...anchor });
+            post({ type: "diff.scroll", loadId: latestDocumentLoadId, ...anchor });
         });
     }
     function readScrollAnchor() {
@@ -1122,19 +1058,5 @@ import { PageComparisonScheduler, } from "./pdfDiffScheduler.mjs";
             marker.classList.remove("academicPdfDiffRegion--selected");
         }
         selectedMarkers = [];
-    }
-    function reportDebug(event, fields) {
-        if (!config.debug) {
-            return;
-        }
-        window.dispatchEvent(new CustomEvent("academic-pdf-debug", {
-            detail: { type: "pdf.debug", event, ...fields }
-        }));
-    }
-    function elapsedSince(startedAt) {
-        return Math.round(performance.now() - startedAt);
-    }
-    function getErrorMessage(error) {
-        return error instanceof Error ? error.message : String(error);
     }
 }());

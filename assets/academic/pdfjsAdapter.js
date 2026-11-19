@@ -36,12 +36,6 @@
         getViewer() {
             return window.PDFViewerApplication?.pdfViewer ?? null;
         },
-        getViewerContainer(viewer = adapter.getViewer()) {
-            return viewer?.container ?? document.getElementById("viewerContainer");
-        },
-        getToolbarHost() {
-            return document.getElementById("toolbarViewerLeft");
-        },
         scaleLinkBorders(pageView) {
             const layer = pageView.div.querySelector(".annotationLayer");
             if (!layer) {
@@ -78,19 +72,6 @@
                     link.append(frame);
                 }
             }
-        },
-        getCapabilities(document = adapter.getApplication()?.pdfDocument ?? null, viewer = adapter.getViewer()) {
-            const privateDocument = document;
-            const privateViewer = viewer;
-            return {
-                viewer: viewer !== null,
-                viewerContainer: adapter.getViewerContainer(viewer) !== null,
-                toolbarHost: adapter.getToolbarHost() !== null,
-                location: privateViewer?._location !== undefined,
-                fingerprintOverride: privateDocument?._pdfInfo !== undefined,
-                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function",
-                sidebarView: getViewsManager() !== null
-            };
         },
         getPdfLocation(viewer) {
             const location = viewer._location;

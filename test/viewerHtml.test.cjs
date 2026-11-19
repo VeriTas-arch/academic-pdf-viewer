@@ -12,7 +12,7 @@ test('production viewer HTML restricts resources and escapes configuration attri
     const html = renderViewerHtml(raw, {}, {
         cspSource: 'https://local.webview', asWebviewUri: value => value,
     }, {
-        debug: false, diffRole: 'modified', diffLabel: label,
+        diffRole: 'modified', diffLabel: label,
         linkPreviewEnabled: true, linkPreviewResolutionScale: 0,
         mouseNavigationEnabled: true, mouseButtonMapping: 'standard',
         defaultSidebar: 'pages', syncTexMode: 'doubleclick',

@@ -1,10 +1,10 @@
 {
     "schemaVersion": 1,
-    "version": "6.3.289",
-    "tag": "v6.3.289",
-    "asset": "pdfjs-6.3.289-dist.zip",
-    "releaseUrl": "https://github.com/mozilla/pdf.js/releases/tag/v6.3.289",
-    "sha256": "98c5832ffe7af4edd59853476a478c0d4d4d76dd49c1701f4c86f7182725cdf9",
+    "version": "6.5.438",
+    "tag": "v6.5.438",
+    "asset": "pdfjs-6.5.438-dist.zip",
+    "releaseUrl": "https://github.com/mozilla/pdf.js/releases/tag/v6.5.438",
+    "sha256": "fcbe9ba21d9911843e3502adc178a7f549a524a4055f887bedc942e5490c6ba1",
     "excludeSourceMaps": true,
     "excludedPaths": [
         "build/pdf.sandbox.mjs",

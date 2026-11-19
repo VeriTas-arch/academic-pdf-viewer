@@ -44,32 +44,19 @@ export type SourceColumnResolution = {
 };
 
 export interface LatestRequestTracker {
-    begin(): LatestRequestGuard;
+    begin(): AbortSignal;
     cancel(): void;
 }
 
-export interface LatestRequestGuard {
-    (): boolean;
-    readonly signal: AbortSignal;
-}
-
-/** Returns guards that remain current only until the next request begins. */
 export function createLatestRequestTracker(): LatestRequestTracker {
-    let generation = 0;
     let controller: AbortController | undefined;
     return {
         begin: () => {
             controller?.abort();
             controller = new AbortController();
-            const signal = controller.signal;
-            const requestGeneration = ++generation;
-            return Object.assign(
-                () => requestGeneration === generation && !signal.aborted,
-                { signal },
-            );
+            return controller.signal;
         },
         cancel: () => {
-            ++generation;
             controller?.abort();
             controller = undefined;
         },

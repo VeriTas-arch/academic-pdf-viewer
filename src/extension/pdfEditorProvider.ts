@@ -1,7 +1,10 @@
+import { basename } from 'node:path';
 import * as vscode from 'vscode';
 
 import {
     DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
+    PDF_RANGE_CHUNK_BYTES,
+    PDF_RANGE_CONCURRENCY,
     isWebviewToExtensionMessage,
     normalizeLinkPreviewResolutionScale,
     sanitizePdfDiffChanges,
@@ -15,13 +18,17 @@ import {
     type SyncTexMode,
     type WebviewToExtensionMessage,
 } from '../shared/protocol';
-import type { DevLogger } from './devLogger';
-import { describePdfUri, readPdfData } from './pdfDataSource';
-import { logPdfDebugMessage } from './pdfDebug';
+import { openPdfRangeFile, preparePdfData, readPdfData, type PdfDataSource, type PdfRangeFile } from './pdfDataSource';
 import { assertPdfDiffPairSize } from './pdfSizeLimits';
 import { readViewerHtml, renderViewerHtml } from './viewerHtml';
 
 export const PDF_VIEW_TYPE = 'academicPdfViewer.pdf';
+const minimumRemoteRangeSize = 1024 * 1024;
+const workbenchCommands = {
+    'workbench.openFile': 'workbench.action.files.openFile',
+    'workbench.quickOpen': 'workbench.action.quickOpen',
+    'workbench.showCommands': 'workbench.action.showCommands',
+} as const;
 
 interface PendingSyncTexContextMenu {
     pageNumber: number;
@@ -43,6 +50,8 @@ interface PendingSyncTexForward {
 interface PanelState {
     document: PdfDocument;
     ready: boolean;
+    startingDocument?: boolean;
+    ranges: Map<number, { file: PdfRangeFile; lastRequestId: number; inFlight: number }>;
     latestDocumentLoadId?: number;
     postedDocumentLoadId?: number;
     pendingSyncTexForward?: PendingSyncTexForward;
@@ -50,16 +59,23 @@ interface PanelState {
     reloadCancellation?: vscode.CancellationTokenSource;
 }
 
-function copyToArrayBuffer(data: Uint8Array): ArrayBuffer {
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+    if (data.buffer instanceof ArrayBuffer && data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
+        return data.buffer;
+    }
     const copy = new ArrayBuffer(data.byteLength);
     new Uint8Array(copy).set(data);
     return copy;
 }
 
 class PdfDocument implements vscode.CustomDocument {
+    pendingData?: Promise<Uint8Array>;
+    data?: Uint8Array;
+
     constructor(
         public readonly uri: vscode.Uri,
-        public data: Uint8Array,
+        public size: number,
+        public source?: PdfDataSource,
     ) { }
 
     dispose(): void { }
@@ -91,6 +107,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     private nextDocumentLoadId = 1;
     private nextSyncTexRequestId = 1;
     private activePanel: vscode.WebviewPanel | undefined;
+    private readonly diffContext = new Map<string, boolean>();
     private readonly viewerHtml: string;
     private readonly inverseSyncTexEmitter = new vscode.EventEmitter<SyncTexInverseEvent>();
 
@@ -99,7 +116,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly logger?: DevLogger,
+        private readonly diffEnabled = false,
     ) {
         this.viewerHtml = readViewerHtml(context);
         context.subscriptions.push(this, this.inverseSyncTexEmitter);
@@ -108,6 +125,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     dispose(): void {
         for (const panel of this.panelStates.keys()) {
             this.cancelReload(panel);
+            this.closeRange(panel);
         }
         for (const timer of this.navigationKeyLocks.values()) {
             clearTimeout(timer);
@@ -123,21 +141,44 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         _openContext: vscode.CustomDocumentOpenContext,
         token: vscode.CancellationToken,
     ): Promise<PdfDocument> {
-        const data = await readPdfData(uri, this.logger, token);
-        return new PdfDocument(uri, data);
+        const source = await preparePdfData(uri, token);
+        return new PdfDocument(uri, source.size, source);
     }
 
-    async resolveCustomEditor(
+    private isRemoteFile(uri: vscode.Uri): boolean {
+        return uri.scheme === 'file' && !!vscode.env?.remoteName
+            && this.context.extension.extensionKind === vscode.ExtensionKind.Workspace;
+    }
+
+    private bufferDocument(document: PdfDocument, token?: vscode.CancellationToken): Promise<Uint8Array> {
+        if (document.data) {
+            return Promise.resolve(document.data);
+        }
+        if (!document.pendingData) {
+            const pending = readPdfData(document.uri, token, document.source).then(data => {
+                if (document.pendingData === pending) {
+                    document.data = data;
+                    document.size = data.byteLength;
+                    document.source = undefined;
+                }
+                return data;
+            }).finally(() => {
+                if (document.pendingData === pending) {
+                    document.pendingData = undefined;
+                }
+            });
+            document.pendingData = pending;
+        }
+        return document.pendingData;
+    }
+
+    resolveCustomEditor(
         document: PdfDocument,
         panel: vscode.WebviewPanel,
         token: vscode.CancellationToken,
-    ): Promise<void> {
+    ): void {
         throwIfCancellationRequested(token);
-        this.logger?.info('editor.resolve', {
-            ...describePdfUri(document.uri),
-            bytes: document.data.byteLength,
-        });
-        this.panelStates.set(panel, { document, ready: false });
+        this.panelStates.set(panel, { document, ready: false, ranges: new Map() });
         if (panel.active || !this.activePanel) {
             this.setActivePanel(panel);
         }
@@ -164,7 +205,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                     const state = this.panelStates.get(event.webviewPanel);
                     if (state) {
                         state.ready = false;
+                        state.startingDocument = false;
                     }
+                    this.closeRange(panel);
                     this.cancelPostedSyncTexForward(event.webviewPanel);
                 }
             }),
@@ -175,6 +218,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 disposable.dispose();
             }
             this.cancelReload(panel);
+            this.closeRange(panel);
             this.panelStates.delete(panel);
             this.forgetDiffPanel(panel);
             if (this.activePanel === panel) {
@@ -186,7 +230,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         panelDisposables.push(
             panel.webview.onDidReceiveMessage((message: unknown) => {
                 if (!isWebviewToExtensionMessage(message)) {
-                    this.logger?.warn('webview.message.rejected');
                     return;
                 }
                 this.handleWebviewMessage(message, panel, document);
@@ -198,7 +241,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             this.context.extensionUri,
             panel.webview,
             {
-                debug: this.logger !== undefined,
                 diffRole: this.diffPanelInfo(panel)?.role,
                 diffLabel: this.diffPanelInfo(panel)?.label,
                 linkPreviewEnabled: this.isLinkPreviewEnabled(document.uri),
@@ -218,15 +260,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     ): Promise<void> {
         throwIfCancellationRequested(token);
         assertPdfDiffPairSize(
-            documents.original.data.byteLength,
-            documents.modified.data.byteLength,
+            documents.original.data?.byteLength ?? documents.original.size,
+            documents.modified.data?.byteLength ?? documents.modified.size,
         );
-        this.logger?.info('diff.resolve', {
-            originalUri: documents.original.uri.toString(),
-            originalBytes: documents.original.data.byteLength,
-            modifiedUri: documents.modified.uri.toString(),
-            modifiedBytes: documents.modified.data.byteLength,
-        });
+        const [originalData, modifiedData] = await Promise.all([
+            this.bufferDocument(documents.original, token),
+            this.bufferDocument(documents.modified, token),
+        ]);
+        throwIfCancellationRequested(token);
+        assertPdfDiffPairSize(originalData.byteLength, modifiedData.byteLength);
         const session: DiffPairSession = {
             originalPanel: panels.original,
             modifiedPanel: panels.modified,
@@ -243,10 +285,13 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         };
         this.diffSessionsByPanel.set(panels.original, session);
         this.diffSessionsByPanel.set(panels.modified, session);
-        await Promise.all([
-            this.resolveCustomEditor(documents.original, panels.original, token),
-            this.resolveCustomEditor(documents.modified, panels.modified, token),
-        ]);
+        try {
+            this.resolveCustomEditor(documents.original, panels.original, token);
+            this.resolveCustomEditor(documents.modified, panels.modified, token);
+        } catch (error) {
+            this.forgetDiffPanel(panels.original);
+            throw error;
+        }
         this.refreshDiffContext();
     }
 
@@ -267,7 +312,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     ): Promise<boolean | undefined> {
         const { modifiedPanel, originalPanel, originalDocument } = session;
         const modifiedDocument = this.panelStates.get(modifiedPanel)?.document;
-        if (!this.isCurrentDiffPair(session) || !modifiedDocument) {
+        if (!this.isCurrentDiffPair(session) || !modifiedDocument?.data || !originalDocument.data) {
             return undefined;
         }
 
@@ -286,8 +331,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                     enabled: true,
                     sessionId,
                     role: 'modified',
-                    originalData: copyToArrayBuffer(originalDocument.data),
-                    originalFingerprint: originalDocument.uri.toString(),
+                    originalData: toArrayBuffer(originalDocument.data),
                     originalIsEmptyRevision: originalDocument.data.byteLength === 0,
                     modifiedIsEmptyRevision: false,
                 }
@@ -302,7 +346,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                     && originalDocument.data.byteLength > 0,
             }
             : { type: 'diff.setEnabled', enabled: false, sessionId };
-        const [originalDelivered, modifiedDelivered] = await Promise.all([
+        const delivery = await Promise.allSettled([
             originalPanel.webview.postMessage(originalMessage),
             modifiedPanel.webview.postMessage(modifiedMessage),
         ]);
@@ -310,8 +354,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             return session.highlightsEnabled;
         }
         if (!this.isCurrentDiffPair(session)
-            || !originalDelivered
-            || !modifiedDelivered) {
+            || delivery.some(result => result.status !== 'fulfilled' || !result.value)) {
             const disableMessage = {
                 type: 'diff.setEnabled',
                 enabled: false,
@@ -321,20 +364,19 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 originalPanel.webview.postMessage(disableMessage),
                 modifiedPanel.webview.postMessage(disableMessage),
             ]);
-            session.highlightsEnabled = false;
-            this.refreshDiffContext();
-            this.logger?.warn('visualDiff.toggle.notDelivered', { enabled });
+            if (session.sessionId === sessionId) {
+                session.highlightsEnabled = false;
+                this.refreshDiffContext();
+            }
+            const failure = delivery.find(result => result.status === 'rejected');
+            if (failure) {
+                throw failure.reason;
+            }
             return undefined;
         }
 
         session.highlightsEnabled = enabled;
         this.refreshDiffContext();
-        this.logger?.info('visualDiff.toggled', {
-            enabled,
-            sessionId,
-            originalUri: originalDocument.uri.toString(),
-            modifiedUri: this.panelStates.get(modifiedPanel)?.document.uri.toString(),
-        });
         return enabled;
     }
 
@@ -348,11 +390,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             || !session.highlightsEnabled) {
             return false;
         }
-        void panel.webview.postMessage({
+        this.notify(panel, {
             type: 'diff.navigate',
             sessionId,
             direction,
-        } satisfies ExtensionToWebviewMessage);
+        });
         return true;
     }
 
@@ -386,15 +428,15 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     navigate(direction: NavigationDirection): void {
-        if (this.navigationKeyLocks.has(direction)) {
-            this.armNavigationKeyFallbackRelease(direction);
+        const locked = this.navigationKeyLocks.has(direction);
+        this.armNavigationKeyFallbackRelease(direction);
+        const panel = this.activePanel;
+        if (locked || !panel) {
             return;
         }
-
-        this.armNavigationKeyFallbackRelease(direction);
-        void this.activePanel?.webview.postMessage({
+        this.notify(panel, {
             type: direction === 'back' ? 'navigation.back' : 'navigation.forward',
-        } satisfies ExtensionToWebviewMessage);
+        });
     }
 
     async reloadActive(): Promise<void> {
@@ -421,16 +463,24 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         try {
             if (session && modifiedDocument) {
                 const { originalDocument, originalPanel, modifiedPanel } = session;
+                const [originalSource, modifiedSource] = await Promise.all([
+                    preparePdfData(originalDocument.uri, cancellation.token),
+                    preparePdfData(modifiedDocument.uri, cancellation.token),
+                ]);
+                throwIfCancellationRequested(cancellation.token);
+                assertPdfDiffPairSize(originalSource.size, modifiedSource.size);
                 const [originalData, modifiedData] = await Promise.all([
-                    readPdfData(originalDocument.uri, this.logger, cancellation.token),
-                    readPdfData(modifiedDocument.uri, this.logger, cancellation.token),
+                    readPdfData(originalDocument.uri, cancellation.token, originalSource),
+                    readPdfData(modifiedDocument.uri, cancellation.token, modifiedSource),
                 ]);
                 if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
                     return;
                 }
                 assertPdfDiffPairSize(originalData.byteLength, modifiedData.byteLength);
                 originalDocument.data = originalData;
+                originalDocument.size = originalData.byteLength;
                 modifiedDocument.data = modifiedData;
+                modifiedDocument.size = modifiedData.byteLength;
                 this.beginDiffSession(session);
                 await Promise.all([
                     this.postDocument(originalPanel, originalDocument, true, loadId),
@@ -445,11 +495,24 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 return;
             }
 
-            const data = await readPdfData(document.uri, this.logger, cancellation.token);
+            let source: PdfDataSource | undefined;
+            if (this.isRemoteFile(document.uri)) {
+                source = await preparePdfData(document.uri, cancellation.token);
+                if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
+                    return;
+                }
+                if (source.size >= minimumRemoteRangeSize) {
+                    await this.postDocument(panel, document, true, loadId, source.size);
+                    return;
+                }
+            }
+            const data = await readPdfData(document.uri, cancellation.token, source);
             if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
                 return;
             }
+            document.pendingData = undefined;
             document.data = data;
+            document.size = data.byteLength;
             await this.postDocument(panel, document, true, loadId);
         } catch (error) {
             if (!this.isCurrentDocumentLoad(reloadPanels, loadId)) {
@@ -485,45 +548,39 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             : vscode.ConfigurationTarget.Global;
 
         await configuration.update(setting, !enabled, target);
-        this.refreshLinkPreviewConfiguration();
         return vscode.workspace.getConfiguration('academicPdfViewer', documentUri).get<boolean>(setting, true);
     }
 
     refreshLinkPreviewConfiguration(): void {
         for (const [panel, state] of this.panelStates) {
-            void panel.webview.postMessage({
+            this.notify(panel, {
                 type: 'linkPreview.configure',
                 enabled: this.isLinkPreviewEnabled(state.document.uri),
                 resolutionScale: this.getLinkPreviewResolutionScale(state.document.uri),
-            } satisfies ExtensionToWebviewMessage);
+            });
         }
     }
 
     refreshMouseNavigationConfiguration(): void {
+        const mouseButtonsEnabled = this.isMouseNavigationEnabled();
+        const mouseButtonMapping = this.getMouseButtonMapping();
         for (const panel of this.panelStates.keys()) {
-            void panel.webview.postMessage({
-                type: 'navigation.configure',
-                mouseButtonsEnabled: this.isMouseNavigationEnabled(),
-                mouseButtonMapping: this.getMouseButtonMapping(),
-            } satisfies ExtensionToWebviewMessage);
+            this.notify(panel, { type: 'navigation.configure', mouseButtonsEnabled, mouseButtonMapping });
         }
     }
 
     refreshSidebarConfiguration(): void {
+        const defaultSidebar = this.getDefaultSidebar();
         for (const panel of this.panelStates.keys()) {
-            void panel.webview.postMessage({
-                type: 'sidebar.configure',
-                defaultSidebar: this.getDefaultSidebar(),
-            } satisfies ExtensionToWebviewMessage);
+            this.notify(panel, { type: 'sidebar.configure', defaultSidebar });
         }
     }
 
     /** Applies the current SyncTeX trigger mode to all open PDF webviews. */
     refreshSyncTexConfiguration(): void {
         for (const [panel, state] of this.panelStates) {
-            const mode = this.getSyncTexMode(state.document.uri);
             state.pendingSyncTexContextMenu = undefined;
-            this.postSyncTexConfiguration(panel, mode);
+            this.notify(panel, { type: 'synctex.configure', mode: this.getSyncTexMode(state.document.uri) });
         }
     }
 
@@ -536,18 +593,35 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         if (!state) {
             return;
         }
-        if (message.type === 'webview.ready') {
-            this.logger?.info('webview.ready', {
-                ...describePdfUri(document.uri),
-                bytes: document.data.byteLength,
-            });
-            state.ready = true;
-            state.pendingSyncTexContextMenu = undefined;
-            this.postSyncTexConfiguration(panel, this.getSyncTexMode(document.uri));
+        if (message.type === 'webview.ready' || message.type === 'webview.documentReady') {
+            if (message.type === 'webview.ready') {
+                state.ready = true;
+                state.pendingSyncTexContextMenu = undefined;
+                this.notify(panel, { type: 'synctex.configure', mode: this.getSyncTexMode(document.uri) });
+                this.postPendingSyncTexForward(panel);
+            } else if (this.diffSessionsByPanel.has(panel)) {
+                return;
+            }
+            if (state.startingDocument) {
+                return;
+            }
+            state.startingDocument = true;
             const loadId = this.beginDocumentLoad([panel]);
-            void this.postDocument(panel, document, false, loadId)
-                .then(() => this.restoreDiffHighlights(panel, loadId))
-                .catch(() => undefined);
+            void this.postDocument(panel, document, false, loadId).then(
+                () => this.restoreDiffHighlights(panel, loadId).catch(error => {
+                    console.error('Could not restore PDF diff highlights.', error);
+                }),
+                error => {
+                    if (this.isCurrentDocumentLoad([panel], loadId)) {
+                        console.error('Could not open the PDF.', error);
+                        this.notify(panel, { type: 'document.loadError', loadId });
+                    }
+                },
+            );
+        } else if (message.type === 'document.rangeRequest') {
+            void this.replyToRange(panel, state, message);
+        } else if (message.type === 'document.rangeClose') {
+            this.closeRange(panel, message.loadId);
         } else if (message.type === 'synctex.forwardResult') {
             const pending = state.pendingSyncTexForward;
             if (!pending
@@ -556,17 +630,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 return;
             }
             state.pendingSyncTexForward = undefined;
-            const fields = {
-                requestId: message.requestId,
-                loadId: message.loadId,
-                status: message.status,
-                ...describePdfUri(document.uri),
-            };
-            if (message.status === 'applied') {
-                this.logger?.info('synctex.forward.applied', fields);
-            } else {
-                this.logger?.warn('synctex.forward.rejected', fields);
-            }
         } else if (message.type === 'synctex.inverseClear') {
             state.pendingSyncTexContextMenu = undefined;
         } else if (message.type === 'synctex.inverse') {
@@ -597,55 +660,63 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                         : {}),
                 } satisfies SyncTexInverseEvent);
             }
+        } else if (message.type === 'diff.failed') {
+            const session = this.diffSessionsByPanel.get(panel);
+            if (session?.modifiedPanel === panel && session.sessionId === message.sessionId) {
+                void this.setDiffHighlightsForSession(session, false).catch(error => {
+                    console.error('Could not disable PDF diff highlights.', error);
+                });
+                void vscode.window.showErrorMessage('Unable to compare the PDF revisions. PDF diff highlights were disabled.');
+            }
         } else if (message.type === 'diff.pageResult') {
             const session = this.currentDiffSession(panel, message.sessionId);
             if (!session || session.modifiedPanel !== panel) {
                 return;
             }
-            void session.originalPanel.webview.postMessage({
+            this.notify(session.originalPanel, {
                 type: 'diff.applyPage',
                 sessionId: message.sessionId,
                 pageNumber: message.pageNumber,
                 changes: sanitizePdfDiffChanges(message.originalChanges),
-            } satisfies ExtensionToWebviewMessage);
+            });
         } else if (message.type === 'diff.removedPageRange') {
             const session = this.currentDiffSession(panel, message.sessionId);
             if (!session || session.modifiedPanel !== panel) {
                 return;
             }
-            void session.originalPanel.webview.postMessage({
+            this.notify(session.originalPanel, {
                 type: 'diff.setRemovedPageRange',
                 sessionId: message.sessionId,
                 fromPage: message.fromPage,
                 toPage: message.toPage,
-            } satisfies ExtensionToWebviewMessage);
+            });
         } else if (message.type === 'diff.navigationRequest') {
             const session = this.currentDiffSession(panel, message.sessionId);
             if (!session || this.diffPanelInfo(panel)?.role !== message.role) {
                 return;
             }
-            void session.modifiedPanel.webview.postMessage({
+            this.notify(session.modifiedPanel, {
                 type: 'diff.scanForChange',
                 sessionId: message.sessionId,
                 requestId: message.requestId,
                 role: message.role,
                 direction: message.direction,
                 startPage: message.startPage,
-            } satisfies ExtensionToWebviewMessage);
+            });
         } else if (message.type === 'diff.navigationResult') {
             const session = this.currentDiffSession(panel, message.sessionId);
             if (!session || session.modifiedPanel !== panel) {
                 return;
             }
             const targetPanel = message.role === 'modified' ? session.modifiedPanel : session.originalPanel;
-            void targetPanel.webview.postMessage({
+            this.notify(targetPanel, {
                 type: 'diff.revealChange',
                 sessionId: message.sessionId,
                 requestId: message.requestId,
                 pageNumber: message.pageNumber,
                 index: message.index,
                 changes: sanitizePdfDiffChanges(message.changes),
-            } satisfies ExtensionToWebviewMessage);
+            });
         } else if (message.type === 'diff.scroll') {
             if (!state.ready || state.latestDocumentLoadId !== message.loadId
                 || state.postedDocumentLoadId !== message.loadId) {
@@ -658,34 +729,33 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             const targetState = targetPanel && this.panelStates.get(targetPanel);
             if (targetPanel && targetState?.ready && targetState.postedDocumentLoadId !== undefined
                 && targetState.postedDocumentLoadId === targetState.latestDocumentLoadId) {
-                void targetPanel.webview.postMessage({
+                this.notify(targetPanel, {
                     type: 'diff.applyScroll',
                     loadId: targetState.postedDocumentLoadId,
                     pageNumber: message.pageNumber,
                     pageRatio: message.pageRatio,
                     documentRatio: message.documentRatio,
-                } satisfies ExtensionToWebviewMessage);
+                });
             }
-        } else if (message.type === 'pdf.debug') {
-            logPdfDebugMessage(this.logger, document.uri, message);
         } else if (message.type === 'navigation.request') {
             if (!this.isMouseNavigationEnabled()) {
                 return;
             }
-            void panel.webview.postMessage({
-                type: message.direction === 'back'
-                    ? 'navigation.back'
-                    : 'navigation.forward',
-            } satisfies ExtensionToWebviewMessage);
+            this.notify(panel, { type: message.direction === 'back' ? 'navigation.back' : 'navigation.forward' });
         } else if (message.type === 'navigation.keyUp') {
             this.releaseNavigationKeyLock(message.direction);
-        } else if (message.type === 'workbench.openFile') {
-            void vscode.commands.executeCommand('workbench.action.files.openFile');
-        } else if (message.type === 'workbench.quickOpen') {
-            void vscode.commands.executeCommand('workbench.action.quickOpen');
-        } else if (message.type === 'workbench.showCommands') {
-            void vscode.commands.executeCommand('workbench.action.showCommands');
+        } else {
+            const command = workbenchCommands[message.type];
+            void vscode.commands.executeCommand(command).then(undefined, error => {
+                console.error(`Could not run ${command}.`, error);
+            });
         }
+    }
+
+    private notify(panel: vscode.WebviewPanel, message: ExtensionToWebviewMessage): void {
+        void panel.webview.postMessage(message).then(undefined, error => {
+            console.error(`Could not send ${message.type} to the PDF viewer.`, error);
+        });
     }
 
     private async postDocument(
@@ -693,43 +763,95 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         document: PdfDocument,
         preserveView: boolean,
         reservedLoadId?: number,
+        size = document.size,
     ): Promise<void> {
-        const startedAt = Date.now();
-        const data = copyToArrayBuffer(document.data);
         const loadId = reservedLoadId ?? this.beginDocumentLoad([panel]);
-
-        const fields = {
-            ...describePdfUri(document.uri),
-            bytes: document.data.byteLength,
-            isEmptyRevision: document.data.byteLength === 0,
-            preserveView,
-        };
+        let file: PdfRangeFile | undefined;
         try {
-            const delivered = await panel.webview.postMessage({
-                type: 'document.load',
-                loadId,
-                data,
-                isEmptyRevision: document.data.byteLength === 0,
-                fingerprint: document.uri.toString(),
-                preserveView,
-            } satisfies ExtensionToWebviewMessage);
-            const resultFields = { ...fields, delivered, durationMs: Date.now() - startedAt };
+            const fingerprint = document.uri.toString();
+            let message: Extract<ExtensionToWebviewMessage, { type: 'document.load' | 'document.loadRange' }>;
+            if (size >= minimumRemoteRangeSize && this.isRemoteFile(document.uri) && !this.diffSessionsByPanel.has(panel)) {
+                file = await openPdfRangeFile(document.uri);
+                const data = await file.read(0, Math.min(file.size, PDF_RANGE_CHUNK_BYTES));
+                message = { type: 'document.loadRange', loadId, size: file.size, data, fingerprint, preserveView,
+                    filename: basename(document.uri.fsPath) };
+            } else {
+                const data = await this.bufferDocument(document);
+                message = { type: 'document.load', loadId, data: toArrayBuffer(data),
+                    isEmptyRevision: data.byteLength === 0, fingerprint, preserveView };
+            }
+            const state = this.panelStates.get(panel);
+            if (state?.latestDocumentLoadId !== loadId || !panel.visible) {
+                return;
+            }
+            if (file) {
+                document.size = file.size;
+                if (preserveView) {
+                    document.pendingData = undefined;
+                    document.data = undefined;
+                    document.source = undefined;
+                }
+                // PDF.js may still need the previous load's bytes to save edited form fields.
+                state.ranges.set(loadId, { file, lastRequestId: 0, inFlight: 0 });
+                file = undefined;
+            }
+            const delivered = await panel.webview.postMessage(message);
             if (delivered) {
-                const state = this.panelStates.get(panel);
                 if (state?.latestDocumentLoadId === loadId) {
                     state.postedDocumentLoadId = loadId;
                     this.postPendingSyncTexForward(panel);
                 }
-                this.logger?.info('webview.document.posted', resultFields);
             } else {
-                this.logger?.warn('webview.document.notDelivered', resultFields);
+                this.closeRange(panel, loadId);
             }
         } catch (error) {
-            this.logger?.error('webview.document.failed', error, {
-                ...fields,
-                durationMs: Date.now() - startedAt,
-            });
+            this.closeRange(panel, loadId);
             throw error;
+        } finally {
+            await file?.close();
+        }
+    }
+
+    private closeRange(panel: vscode.WebviewPanel, loadId?: number): void {
+        const ranges = this.panelStates.get(panel)?.ranges;
+        if (!ranges) {
+            return;
+        }
+        for (const [id, { file }] of ranges) {
+            if (loadId === undefined || id === loadId) {
+                ranges.delete(id);
+                void file.close().catch(error => console.error('Could not close the PDF range file.', error));
+            }
+        }
+    }
+
+    private async replyToRange(
+        panel: vscode.WebviewPanel,
+        state: PanelState,
+        message: Extract<WebviewToExtensionMessage, { type: 'document.rangeRequest' }>,
+    ): Promise<void> {
+        const { loadId, requestId } = message;
+        const range = state.ranges.get(loadId);
+        if (!range || requestId <= range.lastRequestId
+            || range.inFlight >= PDF_RANGE_CONCURRENCY) {
+            return;
+        }
+        range.lastRequestId = requestId;
+        range.inFlight++;
+        try {
+            const data = await range.file.read(message.begin, message.length).finally(() => { range.inFlight--; });
+            if (state.ranges.has(loadId)) {
+                await panel.webview.postMessage({
+                    type: 'document.rangeData', loadId, requestId, data,
+                } satisfies ExtensionToWebviewMessage);
+            }
+        } catch (error) {
+            if (state.ranges.has(loadId)) {
+                console.error('Could not read the PDF range.', error);
+                this.closeRange(panel, loadId);
+                await panel.webview.postMessage({ type: 'document.rangeError', loadId })
+                    .then(undefined, () => undefined);
+            }
         }
     }
 
@@ -768,10 +890,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             sessionId,
         } satisfies ExtensionToWebviewMessage;
         if (originalPanel !== panel) {
-            void originalPanel.webview.postMessage(disableMessage);
+            this.notify(originalPanel, disableMessage);
         }
         if (modifiedPanel !== panel) {
-            void modifiedPanel.webview.postMessage(disableMessage);
+            this.notify(modifiedPanel, disableMessage);
         }
 
         this.diffSessionsByPanel.delete(originalPanel);
@@ -862,19 +984,22 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     private refreshDiffContext(): void {
+        if (!this.diffEnabled) {
+            return;
+        }
         const session = this.activePanel && this.diffSessionsByPanel.get(this.activePanel);
-        void Promise.all([
-            vscode.commands.executeCommand(
-                'setContext',
-                'academicPdfViewer.diffActive',
-                session !== undefined,
-            ),
-            vscode.commands.executeCommand(
-                'setContext',
-                'academicPdfViewer.diffHighlightsEnabled',
-                session?.highlightsEnabled ?? false,
-            ),
-        ]);
+        const next = {
+            'academicPdfViewer.diffActive': !!session,
+            'academicPdfViewer.diffHighlightsEnabled': session?.highlightsEnabled ?? false,
+        };
+        for (const [key, value] of Object.entries(next)) {
+            if (value !== (this.diffContext.get(key) ?? false)) {
+                this.diffContext.set(key, value);
+                void vscode.commands.executeCommand('setContext', key, value).then(undefined, error => {
+                    console.error('Could not update the PDF diff context.', error);
+                });
+            }
+        }
     }
 
     private armNavigationKeyFallbackRelease(direction: NavigationDirection): void {
@@ -928,7 +1053,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
     }
 
     /** Emits inverse SyncTeX for the position selected through the context menu. */
-    async inverseSyncTexFromContextMenu(): Promise<boolean> {
+    inverseSyncTexFromContextMenu(): boolean {
         const panel = this.activePanel;
         if (!panel || !panel.active) {
             return false;
@@ -994,13 +1119,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
             : matches.find(([panel]) => panel.visible)?.[0] ?? recentPanel ?? matches[0]?.[0];
     }
 
-    private postSyncTexConfiguration(panel: vscode.WebviewPanel, mode: SyncTexMode): void {
-        void panel.webview.postMessage({
-            type: 'synctex.configure',
-            mode,
-        } satisfies ExtensionToWebviewMessage);
-    }
-
     private postPendingSyncTexForward(panel: vscode.WebviewPanel): void {
         const state = this.panelStates.get(panel);
         const pending = state?.pendingSyncTexForward;
@@ -1038,10 +1156,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
                 && current.postedLoadId === loadId) {
                 current.postedLoadId = undefined;
             }
-            this.logger?.error('synctex.forward.failed', error, {
-                requestId: pending.requestId,
-                loadId,
-            });
+            console.error('Could not send the SyncTeX location.', error);
         });
     }
 
@@ -1053,11 +1168,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider<Pd
         }
 
         pending.postedLoadId = undefined;
-        void panel.webview.postMessage({
+        this.notify(panel, {
             type: 'synctex.forwardCancel',
             requestId: pending.requestId,
             loadId,
-        } satisfies ExtensionToWebviewMessage);
+        });
     }
 
     private getLinkPreviewResolutionScale(documentUri: vscode.Uri): number {

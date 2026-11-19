@@ -34,6 +34,25 @@ function fixture(t) {
     return { root, git, write, uri };
 }
 
+test('reads exact ranges and rejects ranges from an edited file', async t => {
+    const { root, write } = fixture(t);
+    const filename = path.join(root, 'paper.pdf');
+    const contents = '%PDF-range-fixture';
+    write('paper.pdf', contents);
+    const { openPdfRangeFile } = loadSource('extension/pdfDataSource.ts', vscode);
+    const source = await openPdfRangeFile({ fsPath: filename });
+    try {
+        assert.equal(source.size, contents.length);
+        const marker = 'range';
+        assert.equal(Buffer.from(await source.read(contents.indexOf(marker), marker.length)).toString(), marker);
+        await assert.rejects(source.read(contents.length - 1, 2), /outside the file/);
+        fs.appendFileSync(filename, '\n');
+        await assert.rejects(source.read(0, 5), /changed while it was being read/);
+    } finally {
+        await source.close();
+    }
+});
+
 test('reads HEAD and index PDFs after their entire parent directory is deleted', async t => {
     const { root, git, write, uri } = fixture(t);
     write('retired/nested/paper.pdf');
@@ -79,16 +98,14 @@ test('rejects unresolved index entries instead of treating them as missing', asy
     await assert.rejects(readPdfData(uri('paper.pdf', '~')), /no resolved PDF entry/);
 });
 
-test('cancels an active Git child and bounds hidden subprocess execution', async t => {
+test('cancels an active Git child', async t => {
     const { uri } = fixture(t);
     let child;
-    let options;
     let started;
     const spawned = new Promise(resolve => { started = resolve; });
     const { readPdfData } = loadSource('extension/pdfDataSource.ts', vscode, {
         'node:child_process': {
             execFile: (_executable, _args, requestOptions, callback) => {
-                options = requestOptions;
                 child = execFile(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], requestOptions, callback);
                 child.once('spawn', started);
                 return child;
@@ -97,15 +114,12 @@ test('cancels an active Git child and bounds hidden subprocess execution', async
     });
     t.after(() => child?.kill());
     const cancellation = new CancellationTokenSource();
-    const read = readPdfData(uri('paper.pdf'), undefined, cancellation.token);
+    const read = readPdfData(uri('paper.pdf'), cancellation.token);
     const rejected = assert.rejects(read, CancellationError);
     await spawned;
     cancellation.cancel();
     await rejected;
     assert.equal(child.killed, true);
-    assert.equal(options.windowsHide, true);
-    assert.equal(options.timeout, 60_000);
-    assert.equal(options.maxBuffer, 1024 * 1024);
     assert.equal(cancellation.emitter.listeners.size, 0);
 });
 

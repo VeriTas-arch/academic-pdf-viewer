@@ -44,6 +44,14 @@ npm run pdfjs:verify
 npm run pdfjs:update -- --version x.y.z
 ```
 
+The official release URL, archive digest and asset exclusions are recorded in [`vendor.json`](../assets/pdfviewer/vendor.json). The extension owns `assets/pdfviewer/lib/pdf.css`.
+
+## Remote PDF performance
+
+The ordinary reader opens remote disk PDFs of at least 1 MiB using byte ranges. The webview starts with a 64 KiB prefix. The remote extension host serves requests for the open file in binary messages of up to 512 KiB, with up to four reads in flight. Search can read ahead within one 512 KiB window. The local reader, virtual file systems and PDF diffs use the buffered path.
+
+Use VS Code 1.134 or later and a real Remote SSH workspace for manual acceptance. Compare first visible page, bytes sent before it renders, jump latency, search, and memory against the previous build on the same connection. The Webview Performance panel shows `Academic PDF Viewer: first page` from the start of processing a document load through its first render. Viewer and extension host errors are logged in their respective developer consoles. Try `main.pdf` and a large image-heavy PDF. Verify that reloading after a rebuild preserves the view, rapid reloads cancel superseded reads, and saving a complete PDF works after a partial open. The independent viewer suite exercises partial loading, form saving and replacement of a stalled load.
+
 See [AGENTS.md](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/AGENTS.md) for repository boundaries, the verification matrix, and PDF.js update requirements.
 
 [Back to README](https://github.com/VeriTas-arch/academic-pdf-viewer/blob/main/README.md)

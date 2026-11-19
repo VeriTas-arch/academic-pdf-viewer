@@ -18,8 +18,6 @@ scripts/**
 note.md
 image/snapshot.png
 image/git_diff.png
-assets/pdfviewer/lib/web/debugger.js
-assets/pdfviewer/lib/web/debugger.css
 tsconfig*.json
 **/eslint.config.mjs
 **/*.map

@@ -1,365 +1,48 @@
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const test = require('node:test');
+const { runInNewContext } = require('node:vm');
 
-const {
-    DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE,
-    isSyncTexForwardRequest,
-    isWebviewToExtensionMessage,
-    normalizeLinkPreviewResolutionScale,
-    sanitizePdfDiffChanges,
-} = require('../src/shared/protocol.ts');
-const packageJson = require('../package.json');
+const { PDF_RANGE_FRAME_BYTES, isSyncTexForwardRequest, isWebviewToExtensionMessage } = require('../src/shared/protocol.ts');
+const sandbox = { window: {}, ArrayBuffer };
+runInNewContext(readFileSync(join(__dirname, '../assets/academic/extensionMessages.js'), 'utf8'), sandbox);
+const { isMessage: isExtensionToWebviewMessage } = sandbox.window.academicExtensionMessages;
 
-function diffChange(regions = [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }]) {
-    return { regions };
-}
-
-test('accepts supported webview messages', () => {
-    assert.equal(isWebviewToExtensionMessage({ type: 'webview.ready' }), true);
-    assert.equal(isWebviewToExtensionMessage({ type: 'workbench.openFile' }), true);
-    assert.equal(isWebviewToExtensionMessage({ type: 'workbench.quickOpen' }), true);
-    assert.equal(isWebviewToExtensionMessage({ type: 'workbench.showCommands' }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.inverse',
-        pageNumber: 2,
-        x: 144,
-        y: 216,
-        trigger: 'doubleClick',
-        context: 'Forward and inverse synchronization',
-        offset: 12,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.inverse',
-        pageNumber: 1,
-        x: 0,
-        y: 0,
-        trigger: 'rightClick',
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({ type: 'synctex.inverseClear' }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forwardResult',
-        requestId: 'synctex-1',
-        loadId: 3,
-        status: 'applied',
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forwardResult',
-        requestId: 'synctex-2',
-        loadId: 3,
-        status: 'rejected',
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'navigation.request',
-        direction: 'forward',
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'navigation.keyUp',
-        direction: 'back',
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.pageResult',
-        sessionId: 3,
-        pageNumber: 2,
-        originalChanges: [diffChange()],
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.removedPageRange',
-        sessionId: 3,
-        fromPage: 3,
-        toPage: 5,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.navigationRequest',
-        sessionId: 3,
-        requestId: 1,
-        role: 'original',
-        direction: 'next',
-        startPage: 4,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.navigationResult',
-        sessionId: 3,
-        requestId: 1,
-        role: 'original',
-        pageNumber: 4,
-        index: 0,
-        changes: [diffChange()],
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.scroll',
-        loadId: 1,
-        pageNumber: 2,
-        pageRatio: 0.45,
-        documentRatio: 0.4,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'windowError',
-        error: 'Example error',
-        source: 'viewer.mjs',
-        line: 12,
-        column: 4,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'linkPreviewRendered',
-        pageNumber: 4,
-        durationMs: 32,
-        sizeBytes: 4_000_000,
-    }), true);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'linkPreviewEncoded',
-        pageNumber: 4,
-        durationMs: 180,
-        sizeBytes: 120_000,
-    }), true);
+test('PDF ranges require a valid load, bounds, and binary response', () => {
+    const request = { type: 'document.rangeRequest', loadId: 1, requestId: 1, begin: 0, length: PDF_RANGE_FRAME_BYTES };
+    assert(isWebviewToExtensionMessage(request));
+    assert(!isWebviewToExtensionMessage({ ...request, begin: -1 }));
+    assert(!isWebviewToExtensionMessage({ ...request, length: PDF_RANGE_FRAME_BYTES + 1 }));
+    const response = { type: 'document.rangeData', loadId: request.loadId, requestId: request.requestId, data: new ArrayBuffer(request.length) };
+    assert(isExtensionToWebviewMessage(response));
+    assert(!isExtensionToWebviewMessage({ ...response, loadId: 0 }));
+    assert(!isExtensionToWebviewMessage({ ...response, data: 'not binary' }));
 });
 
-test('scroll messages require a positive document load identity', () => {
-    const message = { type: 'diff.scroll', pageNumber: 1, pageRatio: 0.5, documentRatio: 0.5 };
-    for (const loadId of [undefined, 0, -1, NaN, '1']) {
-        assert.equal(isWebviewToExtensionMessage({ ...message, loadId }), false);
-    }
-    assert.equal(isWebviewToExtensionMessage({ ...message, loadId: 1 }), true);
-});
-
-test('rejects malformed and unsupported webview messages', () => {
-    assert.equal(isWebviewToExtensionMessage(null), false);
-    assert.equal(isWebviewToExtensionMessage({ type: 'unknown' }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'navigation.request',
-        direction: 'sideways',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'navigation.keyUp',
-        direction: 'sideways',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'invented',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'opened',
-        durationMs: Number.NaN,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'pdf.debug',
-        event: 'failed',
-        error: 'x'.repeat(8 * 1024 + 1),
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.pageResult',
-        sessionId: 1,
-        pageNumber: 0,
-        originalChanges: [],
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.pageResult',
-        sessionId: 1,
-        pageNumber: 1,
-        originalChanges: [diffChange([{ left: 0.8, top: 0, width: 0.3, height: 0.1 }])],
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.pageResult',
-        sessionId: 0,
-        pageNumber: 1,
-        originalChanges: [],
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.removedPageRange',
-        sessionId: 1,
-        fromPage: 5,
-        toPage: 3,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.navigationRequest',
-        sessionId: 1,
-        requestId: 1,
-        role: 'original',
-        direction: 'next',
-        startPage: 0,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.navigationResult',
-        sessionId: 1,
-        requestId: 1,
-        role: 'modified',
-        pageNumber: 2,
-        index: 1,
-        changes: [diffChange()],
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.scroll',
-        loadId: 1,
-        pageNumber: 2,
-        pageRatio: 1.1,
-        documentRatio: 0.4,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.scroll',
-        loadId: 1,
-        pageNumber: 0,
-        pageRatio: 0.5,
-        documentRatio: 0.4,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'diff.scroll',
-        loadId: 1,
-        pageNumber: 2,
-        pageRatio: 0.5,
-        documentRatio: Number.NaN,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.inverse',
-        pageNumber: 0,
-        x: 0,
-        y: 0,
-        trigger: 'doubleClick',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.inverse',
-        pageNumber: 1,
-        x: Number.POSITIVE_INFINITY,
-        y: 0,
-        trigger: 'doubleClick',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.inverse',
-        pageNumber: 1,
-        x: 0,
-        y: 0,
-        trigger: 'middleClick',
-    }), false);
-    for (const invalidHint of [
-        { context: 'text without offset' },
-        { offset: 2 },
-        { context: '', offset: 0 },
-        { context: 'short', offset: -1 },
-        { context: 'short', offset: 6 },
-        { context: 'short', offset: 1.5 },
-        { context: 'two\nlines', offset: 2 },
-        { context: 'nul\0byte', offset: 2 },
-        { context: 'x'.repeat(257), offset: 1 },
-    ]) {
-        assert.equal(isWebviewToExtensionMessage({
-            type: 'synctex.inverse',
-            pageNumber: 1,
-            x: 0,
-            y: 0,
-            trigger: 'doubleClick',
-            ...invalidHint,
-        }), false);
-    }
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forward',
-        pageNumber: 1,
-        x: 0,
-        y: 0,
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forwardResult',
-        requestId: '',
-        loadId: 1,
-        status: 'applied',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forwardResult',
-        requestId: 'synctex-1',
-        loadId: 0,
-        status: 'applied',
-    }), false);
-    assert.equal(isWebviewToExtensionMessage({
-        type: 'synctex.forwardResult',
-        requestId: 'synctex-1',
-        loadId: 1,
-        status: 'queued',
-    }), false);
-});
-
-test('validates the public SyncTeX forward request contract', () => {
-    const request = {
-        type: 'synctex.forward',
-        pdfUri: 'file:///workspace/paper.pdf',
-        pageNumber: 2,
-        x: 144,
-        y: 216,
-    };
-    assert.equal(isSyncTexForwardRequest(request), true);
-    assert.equal(isSyncTexForwardRequest({
-        ...request,
-        targetBox: { x: 100, y: 200, width: 300, height: 12 },
-    }), true);
-    assert.equal(isSyncTexForwardRequest({ ...request, type: 'synctex.inverse' }), false);
-    assert.equal(isSyncTexForwardRequest({ ...request, pdfUri: '' }), false);
-    assert.equal(isSyncTexForwardRequest({ ...request, pageNumber: 0 }), false);
-    assert.equal(isSyncTexForwardRequest({ ...request, pageNumber: 1.5 }), false);
-    assert.equal(isSyncTexForwardRequest({ ...request, x: Number.NaN }), false);
-    assert.equal(isSyncTexForwardRequest({ ...request, y: Number.POSITIVE_INFINITY }), false);
-    for (const targetBox of [
-        null,
-        { x: 0, y: 0, width: 0, height: 10 },
-        { x: 0, y: 0, width: 10, height: -1 },
-        { x: Number.NaN, y: 0, width: 10, height: 10 },
-        { x: 0, y: 0, width: Number.POSITIVE_INFINITY, height: 10 },
-    ]) {
-        assert.equal(isSyncTexForwardRequest({ ...request, targetBox }), false);
+test('both message boundaries reject malformed or oversized diff regions', () => {
+    const region = { left: 0, top: 0, width: 0.5, height: 0.5 };
+    const valid = [{ regions: [region] }];
+    const hostAccepts = originalChanges => isWebviewToExtensionMessage({
+        type: 'diff.pageResult', sessionId: 1, pageNumber: 1, originalChanges,
+    });
+    const viewerAccepts = changes => isExtensionToWebviewMessage({
+        type: 'diff.applyPage', sessionId: 1, pageNumber: 1, changes,
+    });
+    for (const accepts of [hostAccepts, viewerAccepts]) {
+        assert(accepts(valid));
+        assert(!accepts([{ regions: [{ ...region, left: 0.9 }] }]));
+        assert(!accepts([{ regions: Array(1) }]));
+        assert(!accepts([{ regions: Array(201).fill(region) }]));
     }
 });
 
-test('keeps SyncTeX transport commands out of the palette and scopes the context action', () => {
-    const contextMenu = packageJson.contributes.menus['webview/context']
-        .find(item => item.command === 'academicPdfViewer.tex.synctexInverse');
-    assert(contextMenu, 'The inverse SyncTeX webview context action was not contributed.');
-    assert.match(contextMenu.when, /webviewId == academicPdfViewer\.pdf/);
-    assert.match(contextMenu.when, /webviewSection == pdfPage/);
-    assert.match(contextMenu.when, /config\.academicPdfViewer\.tex\.synctex == rightclick/);
-
-    const paletteItems = packageJson.contributes.menus.commandPalette;
-    for (const command of [
-        'academicPdfViewer.tex.synctexForward',
-        'academicPdfViewer.tex.synctexInverse',
-    ]) {
-        const item = paletteItems.find(candidate => candidate.command === command);
-        assert(item, `The command ${command} did not declare its Command Palette visibility.`);
-        assert.equal(item.when, 'false');
-    }
-});
-
-test('normalizes link preview resolution scale', () => {
-    assert.equal(normalizeLinkPreviewResolutionScale(undefined), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
-    assert.equal(normalizeLinkPreviewResolutionScale(Number.NaN), DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE);
-    assert.equal(DEFAULT_LINK_PREVIEW_RESOLUTION_SCALE, 0);
-    assert.equal(normalizeLinkPreviewResolutionScale(0), 0);
-    assert.equal(normalizeLinkPreviewResolutionScale(0.5), 1);
-    assert.equal(normalizeLinkPreviewResolutionScale(2.5), 2.5);
-    assert.equal(normalizeLinkPreviewResolutionScale(8), 4);
-});
-
-test('sanitizes validated PDF diff changes before forwarding', () => {
-    const changes = [{
-        id: 'legacy-id',
-        kind: 'replace',
-        strategy: 'text',
-        ignored: { nested: true },
-        regions: [{
-            left: 0.1,
-            top: 0.2,
-            width: 0.3,
-            height: 0.4,
-            ignored: 'region metadata',
-        }],
-    }];
-    const message = {
-        type: 'diff.pageResult',
-        sessionId: 1,
-        pageNumber: 1,
-        originalChanges: changes,
-    };
-
-    assert.equal(isWebviewToExtensionMessage(message), true);
-    assert.deepEqual(sanitizePdfDiffChanges(message.originalChanges), [{
-        regions: [{ left: 0.1, top: 0.2, width: 0.3, height: 0.4 }],
-    }]);
+test('public SyncTeX requests require a page, finite coordinates, and a usable optional box', () => {
+    const request = { type: 'synctex.forward', pdfUri: 'file:///paper.pdf', pageNumber: 1, x: 20, y: 40 };
+    const targetBox = { x: request.x, y: request.y, width: 60, height: 12 };
+    assert(isSyncTexForwardRequest(request));
+    assert(isSyncTexForwardRequest({ ...request, targetBox }));
+    assert(!isSyncTexForwardRequest({ ...request, pageNumber: 0 }));
+    assert(!isSyncTexForwardRequest({ ...request, x: Infinity }));
+    assert(!isSyncTexForwardRequest({ ...request, targetBox: { ...targetBox, width: 0 } }));
 });

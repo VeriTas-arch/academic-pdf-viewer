@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 
-import { createDevLogger } from './extension/devLogger';
 import {
     PDF_VIEW_TYPE,
     PdfEditorProvider,
@@ -20,22 +19,18 @@ export interface AcademicPdfViewerApi {
 }
 
 export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi {
-    const logger = createDevLogger(context);
-    logger?.info('extension.activate', {
-        extensionMode: 'development',
-        version: context.extension.packageJSON.version,
-    });
-    const provider = new PdfEditorProvider(context, logger);
     const manifest = context.extension.packageJSON as { enabledApiProposals?: string[] };
-    const diffEnabled = manifest.enabledApiProposals?.includes('customEditorDiffs');
+    const diffEnabled = manifest.enabledApiProposals?.includes('customEditorDiffs') === true;
+    const provider = new PdfEditorProvider(context, diffEnabled);
     const editorProvider = diffEnabled ? provider : {
         openCustomDocument: provider.openCustomDocument.bind(provider),
         resolveCustomEditor: provider.resolveCustomEditor.bind(provider),
     };
-    registerSyncTexCliBridge(context, {
+    const tex = {
         onDidRequestInverseSyncTex: provider.onDidRequestInverseSyncTex,
-        synctexForward: request => provider.synctexForward(request),
-    });
+        synctexForward: (request: unknown) => isSyncTexForwardRequest(request) && provider.synctexForward(request),
+    };
+    registerSyncTexCliBridge(context, tex, PDF_VIEW_TYPE);
 
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(PDF_VIEW_TYPE, editorProvider, {
@@ -50,12 +45,7 @@ export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi
         vscode.commands.registerCommand('academicPdfViewer.reload', () => {
             return provider.reloadActive();
         }),
-        vscode.commands.registerCommand('academicPdfViewer.tex.synctexForward', (request: unknown) => {
-            if (!isSyncTexForwardRequest(request)) {
-                return false;
-            }
-            return provider.synctexForward(request);
-        }),
+        vscode.commands.registerCommand('academicPdfViewer.tex.synctexForward', tex.synctexForward),
         vscode.commands.registerCommand('academicPdfViewer.tex.synctexInverse', () => (
             provider.inverseSyncTexFromContextMenu()
         )),
@@ -113,12 +103,5 @@ export function activate(context: vscode.ExtensionContext): AcademicPdfViewerApi
         );
     }
 
-    return {
-        tex: {
-            onDidRequestInverseSyncTex: provider.onDidRequestInverseSyncTex,
-            synctexForward: request => (
-                isSyncTexForwardRequest(request) && provider.synctexForward(request)
-            ),
-        },
-    };
+    return { tex };
 }

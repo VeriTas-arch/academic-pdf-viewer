@@ -3,7 +3,6 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import type { SyncTexForwardRequest, SyncTexInverseEvent } from '../shared/protocol';
-import { PDF_VIEW_TYPE } from './pdfEditorProvider';
 import {
     createLatestRequestTracker,
     querySyncTexForward,
@@ -12,7 +11,6 @@ import {
     runSyncTexProcess,
     syncTexTextHint,
     type SyncTexRunner,
-    type LatestRequestGuard,
 } from './synctexCli';
 
 export const SYNCTEX_FORWARD_FROM_CURSOR_COMMAND = 'academicPdfViewer.tex.synctexForwardFromCursor';
@@ -31,6 +29,7 @@ interface SyncTexBridgeConfiguration {
 export function registerSyncTexCliBridge(
     context: vscode.ExtensionContext,
     viewer: SyncTexViewer,
+    viewType: string,
     processRunner: SyncTexRunner = runSyncTexProcess,
 ): void {
     const output = vscode.window.createOutputChannel('Academic PDF Viewer SyncTeX');
@@ -38,7 +37,7 @@ export function registerSyncTexCliBridge(
     const inverseRequests = createLatestRequestTracker();
     let disposed = false;
     const runner: SyncTexRunner = async request => {
-        output.appendLine(formatCommand(request.executable, request.args));
+        output.appendLine([request.executable, ...request.args].map(argument => JSON.stringify(argument)).join(' '));
         const result = await processRunner(request);
         if (!disposed && !request.signal?.aborted) {
             appendProcessOutput(output, result.stdout);
@@ -73,35 +72,44 @@ export function registerSyncTexCliBridge(
             if (disposed) {
                 return false;
             }
-            const isCurrent = forwardRequests.begin();
+            const signal = forwardRequests.begin();
             try {
-                return await forwardFromCursor(viewer, runner, output, isCurrent);
+                return await forwardFromCursor(viewer, viewType, runner, output, signal);
             } catch (error) {
-                if (isCurrent()) {
+                if (!signal.aborted) {
                     reportError(error);
                 }
                 return false;
             }
         }),
         viewer.onDidRequestInverseSyncTex(event => {
-            if (disposed || !isBridgeEnabled(vscode.Uri.parse(event.pdfUri, true))) {
+            if (disposed) {
                 return;
             }
-            const isCurrent = inverseRequests.begin();
-            void inverseToSource(event, runner, output, isCurrent).catch(error => {
-                if (isCurrent()) {
-                    reportError(error);
+            try {
+                const pdfUri = vscode.Uri.parse(event.pdfUri, true);
+                if (!isBridgeEnabled(pdfUri)) {
+                    return;
                 }
-            });
+                const signal = inverseRequests.begin();
+                void inverseToSource(event, pdfUri, runner, output, signal).catch(error => {
+                    if (!signal.aborted) {
+                        reportError(error);
+                    }
+                });
+            } catch (error) {
+                reportError(error);
+            }
         }),
     );
 }
 
 async function forwardFromCursor(
     viewer: SyncTexViewer,
+    viewType: string,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
-    isCurrent: LatestRequestGuard,
+    signal: AbortSignal,
 ): Promise<boolean> {
     const editor = vscode.window.activeTextEditor;
     if (!editor
@@ -124,7 +132,7 @@ async function forwardFromCursor(
     if ((pdfStat.type & vscode.FileType.File) === 0) {
         throw new Error(`The configured SyncTeX PDF is not a file: ${pdfPath}`);
     }
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return false;
     }
 
@@ -135,18 +143,18 @@ async function forwardFromCursor(
         pdfPath,
         position.line + 1,
         position.character + 1,
-        isCurrent.signal,
+        signal,
     );
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return false;
     }
     await vscode.commands.executeCommand(
         'vscode.openWith',
         pdfUri,
-        PDF_VIEW_TYPE,
+        viewType,
         vscode.ViewColumn.Beside,
     );
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return false;
     }
     const accepted = viewer.synctexForward({
@@ -163,12 +171,12 @@ async function forwardFromCursor(
 
 async function inverseToSource(
     event: SyncTexInverseEvent,
+    pdfUri: vscode.Uri,
     runner: SyncTexRunner,
     output: vscode.OutputChannel,
-    isCurrent: LatestRequestGuard,
+    signal: AbortSignal,
 ): Promise<void> {
     ensureTrustedWorkspace();
-    const pdfUri = vscode.Uri.parse(event.pdfUri, true);
     if (pdfUri.scheme !== 'file') {
         throw new Error(`The built-in SyncTeX bridge only supports local file URIs, not ${pdfUri.scheme}: URIs.`);
     }
@@ -183,16 +191,16 @@ async function inverseToSource(
         event.x,
         event.y,
         textHint,
-        isCurrent.signal,
+        signal,
     );
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return;
     }
     const sourcePath = path.isAbsolute(result.input)
         ? result.input
         : path.resolve(path.dirname(pdfUri.fsPath), result.input);
     const sourceDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(sourcePath));
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return;
     }
     if (result.line > sourceDocument.lineCount) {
@@ -215,7 +223,7 @@ async function inverseToSource(
     const sourceEditor = await vscode.window.showTextDocument(sourceDocument, {
         viewColumn: vscode.ViewColumn.One,
     });
-    if (!isCurrent()) {
+    if (signal.aborted) {
         return;
     }
     sourceEditor.selection = new vscode.Selection(target.start, target.end);
@@ -255,10 +263,6 @@ function ensureTrustedWorkspace(): void {
     if (!vscode.workspace.isTrusted) {
         throw new Error('Trust this workspace before running the built-in SyncTeX bridge.');
     }
-}
-
-function formatCommand(executable: string, args: string[]): string {
-    return [executable, ...args].map(argument => JSON.stringify(argument)).join(' ');
 }
 
 function appendProcessOutput(output: vscode.OutputChannel, text: string): void {

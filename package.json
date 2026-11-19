@@ -303,18 +303,18 @@
         "pdfjs:check": "node ./scripts/pdfjsVendor.mts check",
         "pdfjs:update": "node ./scripts/pdfjsVendor.mts update",
         "pdfjs:verify": "node ./scripts/pdfjsVendor.mts verify",
-        "test": "node --test test/protocol.test.cjs test/extensionMessages.test.cjs test/pdfSizeLimits.test.cjs test/pdfDiffAlgorithm.test.mjs test/pdfDiffScheduler.test.mjs test/citationPreviewLines.test.mjs test/webviewState.test.mjs test/keybindings.test.cjs test/synctexCli.test.cjs test/pdfDataSource.test.cjs test/pdfEditorProvider.test.cjs test/synctexCliBridge.test.cjs test/viewerHtml.test.cjs",
+        "test": "node --test \"test/*.test.*\"",
         "test:extension": "node test/extensionHost/run.mjs",
-        "test:viewer": "node --test test/viewerSmoke.test.mjs"
+        "test:viewer": "node --test test/viewer/smoke.test.mjs"
     },
     "devDependencies": {
         "@types/node": "24.x",
         "@types/vscode": "1.134.0",
         "@vscode/test-electron": "^3.1.0",
         "@vscode/vsce": "4.1.1",
-        "eslint": "^10.11.0",
-        "playwright-core": "^1.63.0",
+        "eslint": "^10.15.0",
+        "playwright-core": "^1.65.1",
         "typescript": "^6.0.3",
-        "typescript-eslint": "^8.71.0"
+        "typescript-eslint": "^8.73.0"
     }
 }

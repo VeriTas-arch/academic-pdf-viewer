@@ -1,18 +1,6 @@
 "use strict";
 
 (function () {
-    interface ViewerConfig {
-        cMapUrl: string;
-        debug: boolean;
-        iccUrl: string;
-        imageResourcesPath: string;
-        standardFontDataUrl: string;
-        wasmUrl: string;
-        workerSrc: string;
-        defaultSidebar?: unknown;
-        syncTexMode?: 'off' | 'doubleclick' | 'rightclick';
-    }
-
     interface ViewerOptions {
         set(name: string, value: unknown): void;
     }
@@ -30,27 +18,13 @@
         sidebar: AcademicSidebarState | null;
     }
 
-    type DocumentLoadMessage = Extract<AcademicExtensionToWebviewMessage, { type: "document.load" }>;
+    type DocumentLoadMessage = Extract<AcademicExtensionToWebviewMessage, { type: "document.load" | "document.loadRange" }>;
+    type DocumentStartMessage = DocumentLoadMessage | Extract<AcademicExtensionToWebviewMessage, { type: "document.loadError" }>;
     type SyncTexForwardMessage = Extract<AcademicExtensionToWebviewMessage, { type: "synctex.forward" }>;
     type SyncTexForwardIdentity = Pick<SyncTexForwardMessage, "requestId" | "loadId">;
     type SyncTexTargetBox = NonNullable<SyncTexForwardMessage["targetBox"]>;
 
-    interface PendingFirstPageRender {
-        fingerprint: string;
-        startedAt: number;
-        opened: boolean;
-    }
-
-    function loadConfig(): ViewerConfig {
-        const element = document.getElementById("pdf-preview-config");
-        const value = element?.getAttribute("data-config");
-        if (!value) {
-            throw new Error("Could not load configuration.");
-        }
-        return JSON.parse(value) as ViewerConfig;
-    }
-
-    function configureViewerOptions(targetWindow: ViewerWindow, config: ViewerConfig): boolean {
+    function configureViewerOptions(targetWindow: ViewerWindow, config: AcademicViewerConfiguration): boolean {
         const options = targetWindow.PDFViewerApplicationOptions;
         if (!options) {
             return false;
@@ -90,7 +64,7 @@
         };
     }
 
-    function restoreViewerState(
+    async function restoreViewerState(
         application: PdfJsApplication,
         state: ViewerState | null,
         isCurrentLoad: () => boolean,
@@ -98,32 +72,30 @@
         const viewer = application.pdfViewer;
         const container = viewer?.container;
         if (!viewer || !container || !state || !isCurrentLoad()) {
-            return Promise.resolve();
+            return;
         }
 
         if (state.sidebar) {
             window.academicPdfJsAdapter.restoreSidebarState(state.sidebar);
         }
 
-        return new Promise<void>(resolve => requestAnimationFrame(() => {
-            if (isCurrentLoad()) {
-                if (typeof state.scaleValue === "string" && state.scaleValue.length > 0) {
-                    viewer.currentScaleValue = state.scaleValue;
-                } else if (Number.isFinite(state.scale) && state.scale > 0) {
-                    viewer.currentScaleValue = String(state.scale);
-                }
-                if (Number.isInteger(state.pageNumber)) {
-                    viewer.currentPageNumber = Math.min(state.pageNumber, viewer.pagesCount);
-                }
-            }
-            requestAnimationFrame(() => {
-                if (isCurrentLoad()) {
-                    container.scrollLeft = state.scrollLeft;
-                    container.scrollTop = state.scrollTop;
-                }
-                resolve();
-            });
-        }));
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (!isCurrentLoad()) {
+            return;
+        }
+        if (state.scaleValue) {
+            viewer.currentScaleValue = state.scaleValue;
+        } else if (Number.isFinite(state.scale) && state.scale > 0) {
+            viewer.currentScaleValue = String(state.scale);
+        }
+        if (Number.isInteger(state.pageNumber)) {
+            viewer.currentPageNumber = Math.min(state.pageNumber, viewer.pagesCount);
+        }
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (isCurrentLoad()) {
+            container.scrollLeft = state.scrollLeft;
+            container.scrollTop = state.scrollTop;
+        }
     }
 
     let syncTexTargetMarker: HTMLElement | null = null;
@@ -328,21 +300,36 @@
             || value === "layers";
     }
 
-    const config = loadConfig();
+    const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
+    if (!value) {
+        throw new Error("Could not load the PDF viewer configuration.");
+    }
+    const config = window.academicViewerConfiguration = JSON.parse(value) as AcademicViewerConfiguration;
+    const firstPageMeasure = "Academic PDF Viewer: first page";
     const pdfjsAdapter = window.academicPdfJsAdapter;
-    const reportDebug = (event: string, fields: Record<string, unknown> = {}): void => {
-        if (!config.debug) {
-            return;
+    const { post, subscribe } = window.academicExtensionMessages;
+    const releaseUnopenedRange = (message: DocumentStartMessage | null | undefined): void => {
+        if (message?.type === "document.loadRange") {
+            post({ type: "document.rangeClose", loadId: message.loadId });
         }
-        window.dispatchEvent(new CustomEvent("academic-pdf-debug", {
-            detail: { type: "pdf.debug", event, ...fields }
-        }));
     };
-    const elapsedSince = (startedAt: number): number => Math.round(performance.now() - startedAt);
-    const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
+    let handleHostMessage: ((message: AcademicExtensionToWebviewMessage) => void) | undefined;
+    let earlyLoad: DocumentStartMessage | undefined;
+    subscribe(message => {
+        if (handleHostMessage) {
+            handleHostMessage(message);
+        } else if (message.type === "document.load" || message.type === "document.loadRange"
+            || message.type === "document.loadError") {
+            if (!earlyLoad || message.loadId > earlyLoad.loadId) {
+                releaseUnopenedRange(earlyLoad);
+                earlyLoad = message;
+            } else if (message.loadId < earlyLoad.loadId) {
+                releaseUnopenedRange(message);
+            }
+        }
+    });
     let workerBlobUrl: string | null = null;
     const prepareWorkerSource = async (): Promise<void> => {
-        const startedAt = performance.now();
         const localWorkerSrc = config.workerSrc;
         try {
             const response = await fetch(localWorkerSrc);
@@ -355,19 +342,12 @@
                 type: "text/javascript"
             }));
             config.workerSrc = workerBlobUrl;
-            reportDebug("workerSourcePrepared", {
-                durationMs: elapsedSince(startedAt),
-                sizeBytes: source.byteLength
-            });
         } catch (error) {
-            reportDebug("workerSourceFallback", {
-                durationMs: elapsedSince(startedAt),
-                error: errorMessage(error)
-            });
+            console.warn("Could not start the bundled PDF worker. Falling back to PDF.js's main-thread worker.", error);
             await import(localWorkerSrc);
         }
     };
-    const workerSourceReady = prepareWorkerSource();
+    const workerSourceReady = prepareWorkerSource().catch((error: unknown) => ({ error }));
     window.addEventListener("pagehide", () => {
         if (workerBlobUrl) {
             URL.revokeObjectURL(workerBlobUrl);
@@ -387,13 +367,15 @@
         // Cross-origin embedding dispatches the event on this document instead.
     }
 
-    window.addEventListener("load", async () => {
+    async function initializeViewer(): Promise<void> {
         const application = pdfjsAdapter.getApplication();
         if (!application) {
             throw new Error("PDF.js viewer application is unavailable.");
         }
-        const initializedAt = performance.now();
-        await workerSourceReady;
+        const workerFailure = await workerSourceReady;
+        if (workerFailure) {
+            throw workerFailure.error;
+        }
         if (!configureViewerOptions(window, config)) {
             throw new Error("PDF.js viewer options are unavailable.");
         }
@@ -407,36 +389,23 @@
             standardFontDataUrl: config.standardFontDataUrl,
             wasmUrl: config.wasmUrl
         } as const;
-        let pendingFirstPageRender: PendingFirstPageRender | null = null;
+        let firstPageStart: number | undefined;
         let defaultSidebar: AcademicSidebarView = isSidebarView(config.defaultSidebar)
             ? config.defaultSidebar
             : "pages";
 
-        reportDebug("viewerInitializing", {
-            workerSource: workerBlobUrl ? "blob" : "mainThreadFallback"
-        });
         await application.initializedPromise;
-        reportDebug("viewerInitialized", {
-            durationMs: elapsedSince(initializedAt),
-            workerSource: workerBlobUrl ? "blob" : "mainThreadFallback"
-        });
 
         application.eventBus.on<{ source: PdfJsPageView }>("annotationlayerrendered", event => {
             pdfjsAdapter.scaleLinkBorders(event.source);
         });
-        application.eventBus.on<{ pageNumber: number }>("pagerendered", event => {
-            if (!pendingFirstPageRender?.opened) {
-                return;
+        application.eventBus.on<{ error?: unknown; cssTransform?: boolean; isDetailView?: boolean }>("pagerendered", event => {
+            if (firstPageStart !== undefined && !event.error && !event.cssTransform && !event.isDetailView) {
+                performance.measure(firstPageMeasure, {
+                    start: firstPageStart, detail: latestDocumentLoadId,
+                });
+                firstPageStart = undefined;
             }
-
-            const pending = pendingFirstPageRender;
-            pendingFirstPageRender = null;
-            reportDebug("firstPageRendered", {
-                fingerprint: pending.fingerprint,
-                durationMs: elapsedSince(pending.startedAt),
-                pages: application.pdfDocument?.numPages,
-                pageNumber: event.pageNumber
-            });
         });
         application.eventBus.on("documentinit", () => {
             pdfjsAdapter.setSidebarView(defaultSidebar);
@@ -448,6 +417,39 @@
         let pendingDocumentLoad: DocumentLoadMessage | null = null;
         let documentLoadDrain: Promise<void> | null = null;
         let documentLoadStartFrame: number | null = null;
+        let rangeTransport: ReturnType<Window["createAcademicPdfRangeTransport"]> | undefined;
+        let rangeClosing: Promise<void> | undefined;
+        let cancelRangeWait: (() => void) | undefined;
+        let replacementView: ViewerState | null = null;
+        const closeRangedDocument = (readFailed = false): void => {
+            if (rangeClosing) {
+                if (readFailed) {
+                    // close() may already be waiting for a save on the failed source.
+                    void application.pdfLoadingTask?.destroy().catch(error => console.error(error));
+                }
+                return;
+            }
+            if (!rangeTransport) {
+                return;
+            }
+            const closing = rangeTransport;
+            cancelRangeWait?.();
+            if (readFailed) {
+                application.pdfDocument?.annotationStorage.resetModified();
+            }
+            // PDF.js saves edited forms before destroying the task and its transport.
+            rangeClosing = application.close().catch(error => {
+                console.error("Could not close the PDF range loading task.", error);
+            }).finally(() => {
+                closing.range.abort();
+                rangeTransport = undefined;
+            });
+        };
+        window.addEventListener("pagehide", () => rangeTransport?.range.abort(), { once: true });
+        application.eventBus.on<{ query: unknown }>("find", event => {
+            rangeTransport?.setSearchPrefetch(typeof event.query === "string" && event.query.length > 0);
+        });
+        application.eventBus.on("findbarclose", () => rangeTransport?.setSearchPrefetch(false));
         let pendingSyncTexForward: SyncTexForwardMessage | null = null;
         let syncTexForwardDrain: Promise<void> | null = null;
 
@@ -459,14 +461,7 @@
             message: SyncTexForwardMessage,
             status: "applied" | "rejected",
         ): void => {
-            window.dispatchEvent(new CustomEvent("academic-pdf-message", {
-                detail: {
-                    type: "synctex.forwardResult",
-                    requestId: message.requestId,
-                    loadId: message.loadId,
-                    status,
-                },
-            }));
+            post({ type: "synctex.forwardResult", requestId: message.requestId, loadId: message.loadId, status });
         };
         const rejectPendingSyncTexForward = (): void => {
             if (!pendingSyncTexForward) {
@@ -543,13 +538,21 @@
         );
         const processDocumentLoad = async (message: DocumentLoadMessage): Promise<void> => {
             const startedAt = performance.now();
-            const fingerprint = message.fingerprint;
-            await application.initializedPromise;
             if (!isLatestDocumentLoad(message)) {
+                releaseUnopenedRange(message);
                 return;
             }
-            if (message.isEmptyRevision) {
-                pendingFirstPageRender = null;
+            const preservedState = message.preserveView ? replacementView ?? captureViewerState(application) : null;
+            replacementView = null;
+            if (rangeClosing) {
+                await rangeClosing;
+                rangeClosing = undefined;
+            }
+            if (!isLatestDocumentLoad(message)) {
+                releaseUnopenedRange(message);
+                return;
+            }
+            if (message.type === "document.load" && message.isEmptyRevision) {
                 if (application.pdfLoadingTask) {
                     await application.close();
                 }
@@ -557,69 +560,58 @@
                     return;
                 }
                 showDocumentState("This file does not exist in this revision.");
-                reportDebug("emptyRevision", {
-                    fingerprint,
-                    durationMs: elapsedSince(startedAt)
-                });
                 completeDocumentLoad(message, false);
                 return;
             }
 
-            const data = new Uint8Array(message.data);
             showDocumentState(null);
             const oldLoad = application.load;
             application.load = function (pdfDocument: PdfJsDocument): unknown {
-                pdfjsAdapter.setDocumentFingerprint(pdfDocument, fingerprint);
+                if (isLatestDocumentLoad(message)) {
+                    firstPageStart = startedAt;
+                }
+                pdfjsAdapter.setDocumentFingerprint(pdfDocument, message.fingerprint);
                 return oldLoad.call(this, pdfDocument);
             };
 
-            const preservedState = message.preserveView ? captureViewerState(application) : null;
-            let documentInitPending = true;
-            let resolveDocumentInit = (): void => {};
-            const documentInitPromise = new Promise<void>(resolve => {
-                resolveDocumentInit = resolve;
-            });
+            let resolveDocumentInit!: (value: Promise<void>) => void;
+            const documentInitPromise = new Promise<void>(resolve => { resolveDocumentInit = resolve; });
+            // Init can reject before application.open() settles.
+            void documentInitPromise.catch(() => undefined);
             const onDocumentInit = (): void => {
                 application.eventBus.off("documentinit", onDocumentInit);
-                documentInitPending = false;
-                // Restore promptly to avoid flashing PDF.js's default view.
-                void restoreViewerState(
-                    application,
-                    preservedState,
-                    () => isLatestDocumentLoad(message),
-                ).then(resolveDocumentInit);
+                resolveDocumentInit(restoreViewerState(application, preservedState, () => isLatestDocumentLoad(message)));
             };
             application.eventBus.on("documentinit", onDocumentInit);
-            const cancelPendingDocumentInit = (): void => {
-                if (!documentInitPending) {
-                    return;
-                }
-                application.eventBus.off("documentinit", onDocumentInit);
-                documentInitPending = false;
-            };
 
-            const pendingRender = { fingerprint, startedAt, opened: false };
-            pendingFirstPageRender = pendingRender;
+            let input: Record<string, unknown> = { data: new Uint8Array(message.data) };
+            let interrupted: Promise<boolean> | undefined;
+            const waitForLoadStep = (promise: Promise<unknown>): Promise<boolean> => {
+                const completed = promise.then(() => true);
+                return interrupted ? Promise.race([completed, interrupted]) : completed;
+            };
             try {
-                await application.open({ data, ...loadOptions });
-                if (!isLatestDocumentLoad(message)) {
-                    cancelPendingDocumentInit();
-                    if (pendingFirstPageRender === pendingRender) {
-                        pendingFirstPageRender = null;
-                    }
+                if (message.type === "document.loadRange") {
+                    interrupted = new Promise(resolve => { cancelRangeWait = () => resolve(false); });
+                    rangeTransport = window.createAcademicPdfRangeTransport(message, error => {
+                        if (isLatestDocumentLoad(message)) {
+                            showDocumentState("Unable to read the PDF. Use PDF: Reload to try again.");
+                            console.error("Could not read the PDF range.", error);
+                            completeDocumentLoad(message, false);
+                        }
+                        closeRangedDocument(true);
+                    });
+                    input = { range: rangeTransport.range, rangeChunkSize: 64 * 1024, disableStream: true, disableAutoFetch: true };
+                }
+                if (!await waitForLoadStep(application.open({ ...input, ...loadOptions }))) {
                     return;
                 }
-                pendingRender.opened = true;
-                reportDebug("opened", {
-                    fingerprint,
-                    durationMs: elapsedSince(startedAt),
-                    pages: application.pdfDocument?.numPages
-                });
-                await documentInitPromise;
-                if (!isLatestDocumentLoad(message)) {
+                if (!isLatestDocumentLoad(message) || !await waitForLoadStep(documentInitPromise) || !isLatestDocumentLoad(message)) {
                     return;
                 }
-                await application.pdfViewer.pagesPromise;
+                if (!await waitForLoadStep(application.pdfViewer.pagesPromise)) {
+                    return;
+                }
                 await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
                 if (!isLatestDocumentLoad(message)) {
                     return;
@@ -636,12 +628,16 @@
                 }
                 completeDocumentLoad(message, true);
             } catch (error) {
-                cancelPendingDocumentInit();
-                if (pendingFirstPageRender === pendingRender) {
-                    pendingFirstPageRender = null;
+                if (isLatestDocumentLoad(message)) {
+                    firstPageStart = undefined;
+                }
+                if (message.type === "document.loadRange") {
+                    closeRangedDocument();
                 }
                 throw error;
             } finally {
+                cancelRangeWait = undefined;
+                application.eventBus.off("documentinit", onDocumentInit);
                 application.load = oldLoad;
             }
         };
@@ -656,10 +652,6 @@
                         continue;
                     }
                     console.error("Failed to load PDF document.", error);
-                    reportDebug("failed", {
-                        fingerprint: message.fingerprint,
-                        error: errorMessage(error)
-                    });
                     completeDocumentLoad(message, false);
                 }
             }
@@ -689,17 +681,7 @@
                 startDocumentLoadDrain();
             });
         };
-        window.addEventListener("message", (event: MessageEvent<unknown>) => {
-            if (!window.academicExtensionMessages.isMessage(event.data)) {
-                return;
-            }
-            const message = event.data;
-            if (message.type === "synctex.configure") {
-                window.dispatchEvent(new CustomEvent("academic-pdf-synctex-configure", {
-                    detail: message.mode,
-                }));
-                return;
-            }
+        handleHostMessage = message => {
             if (message.type === "synctex.forward") {
                 queueSyncTexForward(message);
                 return;
@@ -717,19 +699,57 @@
                 }
                 return;
             }
-            if (message.type !== "document.load" || message.loadId <= latestDocumentLoadId) {
+            if ((message.type !== "document.load" && message.type !== "document.loadRange"
+                && message.type !== "document.loadError")) {
                 return;
             }
+            if (message.loadId <= latestDocumentLoadId) {
+                if (message.loadId < latestDocumentLoadId) {
+                    releaseUnopenedRange(message);
+                }
+                return;
+            }
+            releaseUnopenedRange(pendingDocumentLoad);
+            if (rangeTransport && message.type !== "document.loadError" && message.preserveView) {
+                replacementView = captureViewerState(application) ?? replacementView;
+            }
+            closeRangedDocument();
             latestDocumentLoadId = message.loadId;
+            firstPageStart = undefined;
+            performance.clearMeasures(firstPageMeasure);
+            if (message.type === "document.loadError") {
+                pendingDocumentLoad = null;
+                showDocumentState("Unable to open the PDF. Use PDF: Reload to try again.");
+                return;
+            }
             clearSyncTexTarget();
             if (pendingSyncTexForward && pendingSyncTexForward.loadId < latestDocumentLoadId) {
                 rejectPendingSyncTexForward();
             }
             pendingDocumentLoad = message;
             scheduleDocumentLoadDrain();
-        });
+        };
+
+        if (earlyLoad) {
+            handleHostMessage(earlyLoad);
+            earlyLoad = undefined;
+        }
 
         window.dispatchEvent(new CustomEvent("academic-pdf-viewer-ready"));
+    }
+
+    window.addEventListener("load", () => {
+        void initializeViewer().catch(error => {
+            releaseUnopenedRange(earlyLoad);
+            earlyLoad = undefined;
+            handleHostMessage = message => {
+                if (message.type === "document.loadRange") {
+                    releaseUnopenedRange(message);
+                }
+            };
+            showDocumentState("Unable to start the PDF viewer. Reopen the editor to try again.");
+            console.error("Failed to initialize the PDF viewer.", error);
+        });
     }, { once: true });
 
     function showDocumentState(message: string | null): void {
@@ -752,22 +772,4 @@
         state.hidden = false;
         document.body.classList.add("academicPdfDocumentUnavailable");
     }
-
-    window.addEventListener("unhandledrejection", event => {
-        reportDebug("unhandledRejection", {
-            error: errorMessage(event.reason)
-        });
-    });
-
-    window.onerror = function (message, source, line, column, error): void {
-        reportDebug("windowError", {
-            error: error ? errorMessage(error) : String(message),
-            source: source || "",
-            line: line || 0,
-            column: column || 0
-        });
-        const errorBody = document.createElement("body");
-        errorBody.innerText = "An error occurred while loading the file. Please open it again.";
-        document.body = errorBody;
-    };
 }());

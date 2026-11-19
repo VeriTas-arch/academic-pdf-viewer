@@ -1,6 +1,7 @@
 "use strict";
 
 type AcademicExtensionToWebviewMessage = import("./protocol").ExtensionToWebviewMessage;
+type AcademicWebviewToExtensionMessage = import("./protocol").WebviewToExtensionMessage;
 type AcademicDiffNavigationDirection = import("./protocol").DiffNavigationDirection;
 type AcademicDiffRole = import("./protocol").DiffRole;
 type AcademicMouseButtonMapping = import("./protocol").MouseButtonMapping;
@@ -11,6 +12,8 @@ type AcademicSyncTexTargetBox = import("./protocol").SyncTexTargetBox;
 
 interface AcademicExtensionMessageProtocol {
     isMessage(value: unknown): value is AcademicExtensionToWebviewMessage;
+    subscribe(listener: (message: AcademicExtensionToWebviewMessage) => void): () => void;
+    post(message: AcademicWebviewToExtensionMessage): void;
 }
 
 interface Window {
@@ -21,6 +24,9 @@ interface Window {
     const maximumMessageStringLength = 8 * 1024;
     const maximumPdfBytes = 512 * 1024 * 1024;
     const maximumRegionsPerPage = 200;
+    const listeners = new Set<(message: AcademicExtensionToWebviewMessage) => void>();
+    let vscode: ReturnType<typeof acquireVsCodeApi> | undefined;
+    let listening = false;
 
     function isMessage(value: unknown): value is AcademicExtensionToWebviewMessage {
         if (!isRecord(value) || typeof value.type !== "string") {
@@ -54,6 +60,20 @@ interface Window {
                     && isPdfData(value.data, value.isEmptyRevision)
                     && isBoundedNonEmptyString(value.fingerprint)
                     && typeof value.preserveView === "boolean";
+            case "document.loadRange":
+                return isPositiveInteger(value.loadId)
+                    && isPositiveInteger(value.size) && value.size <= maximumPdfBytes
+                    && value.data instanceof ArrayBuffer && value.data.byteLength > 0
+                    && value.data.byteLength === Math.min(value.size, 64 * 1024)
+                    && isBoundedNonEmptyString(value.fingerprint) && isBoundedNonEmptyString(value.filename)
+                    && typeof value.preserveView === "boolean";
+            case "document.rangeData":
+                return isPositiveInteger(value.loadId) && isPositiveInteger(value.requestId)
+                    && value.data instanceof ArrayBuffer && value.data.byteLength > 0
+                    && value.data.byteLength <= 512 * 1024;
+            case "document.rangeError":
+            case "document.loadError":
+                return isPositiveInteger(value.loadId);
             case "diff.setEnabled":
                 return isDiffSetEnabledMessage(value);
             case "diff.applyPage":
@@ -112,7 +132,6 @@ interface Window {
         return value.modifiedIsEmptyRevision || (
             typeof value.originalIsEmptyRevision === "boolean"
             && isPdfData(value.originalData, value.originalIsEmptyRevision)
-            && isBoundedNonEmptyString(value.originalFingerprint)
         );
     }
 
@@ -137,13 +156,17 @@ interface Window {
         for (const change of value) {
             if (!isRecord(change)
                 || !Array.isArray(change.regions)
-                || change.regions.length === 0
-                || !change.regions.every(isPdfDiffRegion)) {
+                || change.regions.length === 0) {
                 return false;
             }
             regionCount += change.regions.length;
             if (regionCount > maximumRegionsPerPage) {
                 return false;
+            }
+            for (const region of change.regions) {
+                if (!isPdfDiffRegion(region)) {
+                    return false;
+                }
             }
         }
         return true;
@@ -207,6 +230,30 @@ interface Window {
 
     const runtimeGlobal = globalThis as typeof globalThis & { window?: Window };
     if (runtimeGlobal.window) {
-        runtimeGlobal.window.academicExtensionMessages = { isMessage };
+        runtimeGlobal.window.academicExtensionMessages = {
+            isMessage,
+            subscribe(listener) {
+                if (!listening) {
+                    listening = true;
+                    window.addEventListener("message", (event: MessageEvent<unknown>) => {
+                        const message = event.data;
+                        if (isMessage(message)) {
+                            for (const receive of listeners) {
+                                try {
+                                    receive(message);
+                                } catch (error) {
+                                    window.reportError(error);
+                                }
+                            }
+                        }
+                    });
+                }
+                listeners.add(listener);
+                return () => { listeners.delete(listener); };
+            },
+            post(message) {
+                (vscode ??= acquireVsCodeApi()).postMessage(message);
+            },
+        };
     }
 }());

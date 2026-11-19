@@ -1,3 +1,7 @@
+export const PDF_RANGE_CHUNK_BYTES = 64 * 1024;
+export const PDF_RANGE_FRAME_BYTES = 512 * 1024;
+export const PDF_RANGE_CONCURRENCY = 4;
+
 export type ExtensionToWebviewMessage =
     | { type: 'navigation.back' }
     | { type: 'navigation.forward' }
@@ -15,6 +19,10 @@ export type ExtensionToWebviewMessage =
     | { type: 'navigation.configure'; mouseButtonsEnabled: boolean; mouseButtonMapping: MouseButtonMapping }
     | { type: 'sidebar.configure'; defaultSidebar: SidebarView }
     | { type: 'document.load'; loadId: number; data: ArrayBuffer; isEmptyRevision: boolean; fingerprint: string; preserveView: boolean }
+    | { type: 'document.loadRange'; loadId: number; size: number; data: ArrayBuffer; fingerprint: string; preserveView: boolean; filename: string }
+    | { type: 'document.rangeData'; loadId: number; requestId: number; data: ArrayBuffer }
+    | { type: 'document.rangeError'; loadId: number }
+    | { type: 'document.loadError'; loadId: number }
     | { type: 'diff.setEnabled'; enabled: false; sessionId: number }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'original'; allPagesChanged: boolean }
     | { type: 'diff.setEnabled'; enabled: true; sessionId: number; role: 'modified'; modifiedIsEmptyRevision: true }
@@ -24,7 +32,6 @@ export type ExtensionToWebviewMessage =
         sessionId: number;
         role: 'modified';
         originalData: ArrayBuffer;
-        originalFingerprint: string;
         originalIsEmptyRevision: boolean;
         modifiedIsEmptyRevision: false;
     }
@@ -126,26 +133,6 @@ export interface SyncTexInverseEvent {
     offset?: number;
 }
 
-const pdfDebugEventValues = [
-    'viewerInitializing',
-    'viewerInitialized',
-    'workerSourcePrepared',
-    'workerSourceFallback',
-    'opened',
-    'firstPageRendered',
-    'failed',
-    'emptyRevision',
-    'unhandledRejection',
-    'windowError',
-    'diffComputed',
-    'diffTextFallback',
-    'diffFailed',
-    'linkPreviewRendered',
-    'linkPreviewEncoded',
-] as const;
-
-type PdfDebugEvent = typeof pdfDebugEventValues[number];
-
 export type WebviewToExtensionMessage =
     | { type: 'navigation.request'; direction: NavigationDirection }
     | { type: 'navigation.keyUp'; direction: NavigationDirection }
@@ -161,7 +148,11 @@ export type WebviewToExtensionMessage =
     | { type: 'workbench.quickOpen' }
     | { type: 'workbench.showCommands' }
     | { type: 'webview.ready' }
+    | { type: 'webview.documentReady' }
+    | { type: 'document.rangeRequest'; loadId: number; requestId: number; begin: number; length: number }
+    | { type: 'document.rangeClose'; loadId: number }
     | { type: 'diff.pageResult'; sessionId: number; pageNumber: number; originalChanges: PdfDiffChange[] }
+    | { type: 'diff.failed'; sessionId: number }
     | { type: 'diff.removedPageRange'; sessionId: number; fromPage: number; toPage: number }
     | {
         type: 'diff.navigationRequest';
@@ -180,29 +171,9 @@ export type WebviewToExtensionMessage =
         index: number;
         changes: PdfDiffChange[];
     }
-    | { type: 'diff.scroll'; loadId: number; pageNumber: number; pageRatio: number; documentRatio: number }
-    | {
-        type: 'pdf.debug';
-        event: PdfDebugEvent;
-        fingerprint?: string;
-        durationMs?: number;
-        originalFingerprint?: string;
-        pages?: number;
-        pageNumber?: number;
-        regions?: number;
-        changedPixels?: number;
-        strategy?: 'page' | 'raster' | 'text';
-        sizeBytes?: number;
-        workerSource?: 'blob' | 'mainThreadFallback';
-        error?: string;
-        source?: string;
-        line?: number;
-        column?: number;
-    };
+    | { type: 'diff.scroll'; loadId: number; pageNumber: number; pageRatio: number; documentRatio: number };
 
-const pdfDebugEvents: ReadonlySet<string> = new Set(pdfDebugEventValues);
-
-const maximumDebugStringLength = 8 * 1024;
+const maximumDiffRegionsPerPage = 200;
 
 export function isWebviewToExtensionMessage(value: unknown): value is WebviewToExtensionMessage {
     if (!isRecord(value) || typeof value.type !== 'string') {
@@ -229,11 +200,20 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
         case 'workbench.quickOpen':
         case 'workbench.showCommands':
         case 'webview.ready':
+        case 'webview.documentReady':
             return true;
+        case 'document.rangeClose':
+            return isPositiveInteger(value.loadId);
+        case 'document.rangeRequest':
+            return isPositiveInteger(value.loadId) && isPositiveInteger(value.requestId)
+                && typeof value.begin === 'number' && Number.isSafeInteger(value.begin) && value.begin >= 0
+                && isPositiveInteger(value.length) && value.length <= PDF_RANGE_FRAME_BYTES;
         case 'diff.pageResult':
             return isPositiveInteger(value.sessionId)
                 && isPositiveInteger(value.pageNumber)
                 && isPdfDiffChanges(value.originalChanges);
+        case 'diff.failed':
+            return isPositiveInteger(value.sessionId);
         case 'diff.removedPageRange':
             return isPositiveInteger(value.sessionId)
                 && isPositiveInteger(value.fromPage)
@@ -260,28 +240,6 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
                 && isPositiveInteger(value.pageNumber)
                 && isNormalizedNumber(value.pageRatio)
                 && isNormalizedNumber(value.documentRatio);
-        case 'pdf.debug':
-            return typeof value.event === 'string'
-                && pdfDebugEvents.has(value.event)
-                && isOptionalDebugString(value.fingerprint)
-                && isOptionalDebugString(value.originalFingerprint)
-                && isOptionalDebugString(value.error)
-                && isOptionalDebugString(value.source)
-                && isOptionalFiniteNumber(value.durationMs)
-                && isOptionalFiniteNumber(value.pages)
-                && isOptionalFiniteNumber(value.pageNumber)
-                && isOptionalFiniteNumber(value.regions)
-                && isOptionalFiniteNumber(value.changedPixels)
-                && isOptionalFiniteNumber(value.sizeBytes)
-                && isOptionalFiniteNumber(value.line)
-                && isOptionalFiniteNumber(value.column)
-                && (value.strategy === undefined
-                    || value.strategy === 'page'
-                    || value.strategy === 'raster'
-                    || value.strategy === 'text')
-                && (value.workerSource === undefined
-                    || value.workerSource === 'blob'
-                    || value.workerSource === 'mainThreadFallback');
         default:
             return false;
     }
@@ -358,28 +316,26 @@ function isPdfDiffRegion(value: unknown): value is PdfDiffRegion {
 }
 
 function isPdfDiffChanges(value: unknown): value is PdfDiffChange[] {
-    if (!Array.isArray(value) || value.length > 200) {
+    if (!Array.isArray(value) || value.length > maximumDiffRegionsPerPage) {
         return false;
     }
 
     let regionCount = 0;
     for (const change of value) {
-        if (!isPdfDiffChange(change)) {
+        if (!isRecord(change) || !Array.isArray(change.regions) || change.regions.length === 0) {
             return false;
         }
         regionCount += change.regions.length;
-        if (regionCount > 200) {
+        if (regionCount > maximumDiffRegionsPerPage) {
             return false;
+        }
+        for (const region of change.regions) {
+            if (!isPdfDiffRegion(region)) {
+                return false;
+            }
         }
     }
     return true;
-}
-
-function isPdfDiffChange(value: unknown): value is PdfDiffChange {
-    return isRecord(value)
-        && Array.isArray(value.regions)
-        && value.regions.length > 0
-        && value.regions.every(isPdfDiffRegion);
 }
 
 function isNormalizedNumber(value: unknown): value is number {
@@ -395,14 +351,4 @@ function isFiniteCoordinate(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
-}
-
-function isOptionalDebugString(value: unknown): boolean {
-    return value === undefined
-        || (typeof value === 'string' && value.length <= maximumDebugStringLength);
-}
-
-function isOptionalFiniteNumber(value: unknown): boolean {
-    return value === undefined
-        || (typeof value === 'number' && Number.isFinite(value));
 }

@@ -37,6 +37,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         _annotationCache = new Map();
         _textContentCache = new Map();
         _pageRenderIds = new Map();
+        _nextPageRenderId = 0;
         _documentGeneration = 0;
         _pageOverlays = new Map();
         _previewRequestId = 0;
@@ -46,7 +47,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         _closeTimer = null;
         _suppressHoverUntil = 0;
         _activeRenderTask = null;
-        _debug;
         _enabled;
         _resolutionScale;
         _controlPressed = false;
@@ -58,13 +58,12 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
         _displayWidth = 0;
         _displayDensity = 0;
         constructor(app) {
-            const initialConfiguration = readInitialConfiguration();
+            const config = window.academicViewerConfiguration;
             this._app = app;
             this._eventBus = app.eventBus;
             this._popup = this._createPopup();
-            this._debug = initialConfiguration.debug;
-            this._enabled = initialConfiguration.enabled;
-            this._resolutionScale = initialConfiguration.resolutionScale;
+            this._enabled = config.linkPreviewEnabled !== false;
+            this._resolutionScale = normalizeResolutionScale(config.linkPreviewResolutionScale);
         }
         initialize() {
             const refresh = () => this._schedulePreviewRefresh();
@@ -99,7 +98,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 this._hoveredPreview = null;
                 this._clearAllOverlays();
                 if (this._enabled) {
-                    this._renderVisiblePages();
+                    this._renderCachedPages();
                 }
             });
             this._eventBus.on("pagerendered", (event) => {
@@ -123,10 +122,8 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 this._hidePopup();
                 this._openHoveredPreview(true);
             });
-            window.addEventListener("message", event => {
-                if (window.academicExtensionMessages.isMessage(event.data)
-                    && event.data.type === "linkPreview.configure") {
-                    const message = event.data;
+            window.academicExtensionMessages.subscribe(message => {
+                if (message.type === "linkPreview.configure") {
                     this._configure(message.enabled, message.resolutionScale);
                 }
             });
@@ -248,7 +245,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             this._cancelScheduledScaleRender();
             this._clearAllOverlays();
             if (enabled) {
-                this._renderVisiblePages();
+                this._renderCachedPages();
             }
         }
         _scheduleScaleRender() {
@@ -257,7 +254,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             }
             this._scaleRenderTimer = setTimeout(() => {
                 this._scaleRenderTimer = null;
-                this._renderVisiblePages();
+                this._renderCachedPages();
             }, SCALE_RENDER_DEBOUNCE_MS);
         }
         _cancelScheduledScaleRender() {
@@ -267,16 +264,13 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             clearTimeout(this._scaleRenderTimer);
             this._scaleRenderTimer = null;
         }
-        async _renderVisiblePages() {
-            await this._app.pdfViewer.pagesPromise;
+        _renderCachedPages() {
             if (!this._enabled) {
                 return;
             }
-            const viewer = this._app.pdfViewer;
-            for (let index = 0; index < viewer.pagesCount; index++) {
-                const pageView = viewer.getPageView(index);
-                if (pageView && pageView.renderingState === 3) {
-                    this._renderPage(pageView.id);
+            for (const { id, renderingState } of this._app.pdfViewer.getCachedPageViews()) {
+                if (renderingState === 3) {
+                    this._renderPage(id);
                 }
             }
         }
@@ -284,7 +278,7 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             if (!this._enabled || !this._pdfDocument) {
                 return;
             }
-            const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
+            const renderId = ++this._nextPageRenderId;
             const documentGeneration = this._documentGeneration;
             rememberBoundedEntry(this._pageRenderIds, pageNumber, renderId, MAX_DOCUMENT_CACHE_ENTRIES);
             const pageView = this._app.pdfViewer.getPageView(pageNumber - 1);
@@ -671,7 +665,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             return text;
         }
         async _getImagePreview(destination, requestId) {
-            const startedAt = performance.now();
             const key = imagePreviewKey(destination);
             const pdfDocument = this._pdfDocument;
             const generation = this._previewGeneration;
@@ -733,11 +726,10 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 await renderTask.promise;
             }
             catch (error) {
+                canvas.width = canvas.height = 0;
                 if (isRenderingCancelled(error)) {
-                    canvas.width = canvas.height = 0;
                     return null;
                 }
-                canvas.width = canvas.height = 0;
                 throw error;
             }
             finally {
@@ -761,20 +753,14 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
-            this._reportDebug("linkPreviewRendered", {
-                pageNumber: destination.pageNumber,
-                durationMs: performance.now() - startedAt,
-                sizeBytes: canvas.width * canvas.height * 4
-            });
-            this._startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, generation, destination.pageNumber);
+            this._startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, generation);
             return image;
         }
-        _startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, generation, pageNumber) {
+        _startPreviewEncoding(key, encodingKey, image, canvas, pdfDocument, generation) {
             if (this._pendingPreviewEncodings.has(encodingKey)
                 || this._pendingPreviewEncodings.size >= MAX_PENDING_PREVIEW_ENCODINGS) {
                 return;
             }
-            const encodingStartedAt = performance.now();
             const encoding = canvasToPngBlob(canvas).then((blob) => {
                 if (this._pdfDocument !== pdfDocument || this._previewGeneration !== generation
                     || (this._previewCache.get(key)?.pixelWidth ?? 0) > canvas.width) {
@@ -791,11 +777,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                     targetYRatio: image.targetYRatio
                 };
                 this._rememberImagePreview(key, encodedPreview);
-                this._reportDebug("linkPreviewEncoded", {
-                    pageNumber,
-                    durationMs: performance.now() - encodingStartedAt,
-                    sizeBytes: blob.size
-                });
                 return encodedPreview;
             }).catch((error) => {
                 console.warn("Failed to cache PDF link image preview.", error);
@@ -807,14 +788,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
                 this._releasePreviewCanvas(image);
             });
             this._pendingPreviewEncodings.set(encodingKey, { image, task: encoding });
-        }
-        _reportDebug(event, fields) {
-            if (!this._debug) {
-                return;
-            }
-            window.dispatchEvent(new CustomEvent("academic-pdf-debug", {
-                detail: { type: "pdf.debug", event, ...fields }
-            }));
         }
         _getCachedImagePreview(destination) {
             const key = imagePreviewKey(destination);
@@ -930,24 +903,6 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             && (Array.isArray(annotation.dest)
                 || typeof annotation.dest === "string" && annotation.dest.length > 0)
             && Array.isArray(annotation.rect);
-    }
-    function readInitialConfiguration() {
-        const configElement = document.getElementById("pdf-preview-config");
-        const config = configElement?.getAttribute("data-config");
-        if (!config) {
-            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
-        }
-        try {
-            const settings = JSON.parse(config);
-            return {
-                debug: settings.debug === true,
-                enabled: settings.linkPreviewEnabled !== false,
-                resolutionScale: normalizeResolutionScale(settings.linkPreviewResolutionScale)
-            };
-        }
-        catch {
-            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
-        }
     }
     function viewportRect(viewport, pdfRect) {
         const [x1, y1] = viewport.convertToViewportPoint(pdfRect[0], pdfRect[1]);
@@ -1180,22 +1135,16 @@ import { collectNearbyLinesFromRows } from "./citationPreviewLines.mjs";
             + Math.max(0, bottom - (window.innerHeight - margin));
         return visibleWidth * visibleHeight - overflow * 10000;
     }
-    async function initialize() {
-        const app = pdfjsAdapter.getApplication();
-        if (!app) {
-            return;
-        }
-        await app.initializedPromise;
-        const controller = new CitationPreviewController(app);
-        controller.initialize();
-    }
     let initializationStarted = false;
     function startInitialization() {
-        if (initializationStarted || !pdfjsAdapter.getApplication()) {
+        const app = pdfjsAdapter.getApplication();
+        if (initializationStarted || !app) {
             return;
         }
         initializationStarted = true;
-        initialize().catch(error => {
+        void app.initializedPromise.then(() => {
+            new CitationPreviewController(app).initialize();
+        }).catch(error => {
             console.error("Failed to initialize Academic PDF citation preview layer.", error);
         });
     }

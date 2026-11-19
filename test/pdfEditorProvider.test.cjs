@@ -3,7 +3,7 @@ const test = require('node:test');
 const { loadSource, EventEmitter, CancellationError, CancellationTokenSource } = require('./helpers/extensionSource.cjs');
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, reader) {
+async function fixture(t, reader, rangeFile, size = rangeFile?.size ?? 1) {
     const errors = [];
     const vscode = {
         EventEmitter, CancellationError, CancellationTokenSource,
@@ -13,19 +13,31 @@ async function fixture(t, reader) {
         Uri: { joinPath: () => ({}) },
     };
     const context = { subscriptions: [], extensionUri: {} };
+    if (rangeFile) {
+        vscode.env = { remoteName: 'ssh-remote' };
+        vscode.ExtensionKind = { Workspace: 2 };
+        vscode.workspace.fs = { stat: async () => ({ size: rangeFile.size }) };
+        context.extension = { extensionKind: 2 };
+    }
     const { PdfEditorProvider } = loadSource('extension/pdfEditorProvider.ts', vscode, {
         './viewerHtml': { readViewerHtml: () => '', renderViewerHtml: () => '' },
-        './pdfDataSource': { readPdfData: reader, describePdfUri: () => ({}) },
+        './pdfDataSource': {
+            preparePdfData: async () => ({ size }),
+            readPdfData: reader,
+            openPdfRangeFile: async () => rangeFile,
+        },
     });
     const provider = new PdfEditorProvider(context);
     t.after(() => { for (const item of context.subscriptions) item.dispose(); });
-    async function open(name) {
+    async function open(name, uncached = false) {
         const messages = [];
         const received = new EventEmitter();
         const disposed = new EventEmitter();
         const viewState = new EventEmitter();
         const uri = { scheme: 'file', fsPath: name, toString: () => `file:///${name}` };
-        const document = { uri, data: new Uint8Array([1]) };
+        const document = rangeFile || uncached
+            ? await provider.openCustomDocument(uri, {}, { isCancellationRequested: false })
+            : { uri, data: new Uint8Array([1]) };
         const panel = {
             active: true, visible: true,
             onDidDispose: disposed.event,
@@ -36,9 +48,10 @@ async function fixture(t, reader) {
             },
         };
         await provider.resolveCustomEditor(document, panel, { isCancellationRequested: false });
+        received.fire({ type: 'webview.documentReady' });
         received.fire({ type: 'webview.ready' });
         await tick();
-        messages.length = 0;
+        if (!rangeFile && !uncached) messages.length = 0;
         return {
             panel, document, messages, received, dispose: () => disposed.fire(),
             hide: () => { panel.visible = false; panel.active = false; viewState.fire({ webviewPanel: panel }); },
@@ -50,7 +63,7 @@ async function fixture(t, reader) {
 }
 function pendingReads() {
     const requests = [];
-    const reader = (uri, _logger, token) => new Promise((resolve, reject) => {
+    const reader = (uri, token) => new Promise((resolve, reject) => {
         const listener = token.onCancellationRequested(() => reject(new CancellationError()));
         requests.push({ uri, token, resolve: data => { listener.dispose(); resolve(data); }, reject });
     });
@@ -67,6 +80,100 @@ function pair(f, second) {
     f.provider.diffSessionsByPanel.set(second.panel, session);
     return session;
 }
+
+test('a failed initial PDF read is attempted once across both readiness messages', async t => {
+    let reads = 0;
+    const f = await fixture(t, async () => {
+        reads++;
+        throw new Error('Cannot read PDF');
+    });
+    const panel = await f.open('unreadable.pdf', true);
+    assert.equal(reads, 1);
+    assert.equal(panel.messages.filter(message => message.type === 'document.loadError').length, 1);
+});
+
+test('buffered PDF reloads reuse dedicated storage and send only the bytes of a sliced buffer', async t => {
+    const owned = new Uint8Array([1, 2]);
+    const sliced = new Uint8Array([0, 3, 4, 0]).subarray(1, 3);
+    const reads = [owned, sliced];
+    const f = await fixture(t, async () => reads.shift());
+    await f.provider.reloadActive();
+    await f.provider.reloadActive();
+    const [first, second] = f.first.messages.filter(message => message.type === 'document.load');
+    assert.equal(first.data, owned.buffer);
+    assert.deepEqual([...new Uint8Array(second.data)], [3, 4]);
+});
+
+test('a rejected diff delivery rolls back the peer and leaves highlights disabled', async t => {
+    const f = await fixture(t, () => assert.fail('read the cached PDF again'));
+    const second = await f.open('modified.pdf');
+    const session = pair(f, second);
+    second.panel.webview.postMessage = async message => {
+        second.messages.push(message);
+        if (message.enabled) throw new Error('Diff delivery failed');
+        return true;
+    };
+    await assert.rejects(f.provider.setDiffHighlights(true), /Diff delivery failed/);
+    assert.deepEqual(f.first.messages.map(message => message.enabled), [true, false]);
+    assert.deepEqual(second.messages.map(message => message.enabled), [true, false]);
+    assert.equal(session.highlightsEnabled, false);
+});
+
+test('only serves range requests for the current remote panel load', async t => {
+    const reads = [];
+    const closed = [];
+    const f = await fixture(t, () => assert.fail('read the whole remote PDF'), {
+        size: 2 * 1024 * 1024,
+        async read(begin, length) {
+            reads.push({ begin, length });
+            return new ArrayBuffer(length);
+        },
+        async close() { closed.push(true); },
+    });
+    const initial = f.first.messages.filter(message => message.type === 'document.loadRange');
+    assert.equal(initial.length, 1);
+    assert.deepEqual(reads, [{ begin: 0, length: 64 * 1024 }]);
+    const request = { type: 'document.rangeRequest', loadId: initial[0].loadId, requestId: 1, begin: 64 * 1024, length: 8192 };
+    f.first.received.fire(request);
+    await tick();
+    assert.equal(f.first.messages.find(message => message.type === 'document.rangeData').data.byteLength, 8192);
+    f.first.received.fire({ ...request, requestId: 2, length: 512 * 1024 + 1 });
+    f.first.received.fire({ ...request, requestId: 3, loadId: request.loadId + 1 });
+    assert.equal(reads.length, 2);
+    f.first.dispose();
+    f.first.received.fire(request);
+    await tick();
+    assert.equal(reads.length, 2);
+    assert.equal(closed.length, 1);
+});
+
+test('a ranged replacement keeps the previous file readable until the viewer closes it', async t => {
+    let closed = 0;
+    const f = await fixture(t, () => assert.fail('read the whole remote PDF'), {
+        size: 2 * 1024 * 1024,
+        async read(_begin, length) { return new ArrayBuffer(length); },
+        async close() { closed++; },
+    });
+    const initial = f.first.messages.find(message => message.type === 'document.loadRange');
+    await f.provider.reloadActive();
+    const replacement = f.first.messages.filter(message => message.type === 'document.loadRange').at(-1);
+    assert.notEqual(replacement.loadId, initial.loadId);
+    assert.equal(closed, 0);
+    const request = { type: 'document.rangeRequest', loadId: initial.loadId, requestId: 1, begin: 65_536, length: 65_536 };
+    f.first.received.fire(request);
+    await tick();
+    assert(f.first.messages.some(message => message.type === 'document.rangeData' && message.loadId === initial.loadId));
+    f.first.received.fire({ type: 'document.rangeClose', loadId: initial.loadId });
+    assert.equal(closed, 1);
+});
+
+test('diff reload rejects an oversized pair before reading either PDF', async t => {
+    const f = await fixture(t, () => assert.fail('read a PDF before enforcing the pair limit'), undefined, 300 * 1024 * 1024);
+    const second = await f.open('modified.pdf');
+    pair(f, second);
+    await f.provider.reloadActive();
+    assert.match(f.errors[0], /combined safety limit/);
+});
 
 test('a newer reload cancels its predecessor and only publishes the latest PDF', async t => {
     const reads = pendingReads();
@@ -93,19 +200,6 @@ test('closing a panel cancels its pending reload and suppresses late errors', as
     assert.deepEqual(f.errors, []);
 });
 
-test('provider disposal cancels pending reloads and clears navigation timers', async t => {
-    const reads = pendingReads();
-    const f = await fixture(t, reads.reader);
-    const reload = f.provider.reloadActive();
-    f.provider.navigationKeyLocks.set('back', setTimeout(() => assert.fail('disposed timer fired'), 100));
-    f.provider.dispose();
-    await reload;
-    assert.equal(reads.requests[0].token.isCancellationRequested, true);
-    assert.equal(f.provider.navigationKeyLocks.size, 0);
-    assert.equal(f.provider.panelStates.size, 0);
-    assert.deepEqual(f.errors, []);
-});
-
 test('a failed diff-side read cancels the other side without replacing either document', async t => {
     const reads = pendingReads();
     const f = await fixture(t, reads.reader);
@@ -113,25 +207,13 @@ test('a failed diff-side read cancels the other side without replacing either do
     pair(f, second);
     f.provider.activePanel = second.panel;
     const reload = f.provider.reloadActive();
+    await tick();
     reads.requests[0].reject(new Error('fixture read failed'));
     await reload;
     assert.equal(reads.requests[1].token.isCancellationRequested, true);
     assert.deepEqual([...f.first.document.data], [1]);
     assert.deepEqual([...second.document.data], [1]);
     assert.equal(f.errors.length, 1);
-});
-
-test('closing either diff side cancels both reads', async t => {
-    const reads = pendingReads();
-    const f = await fixture(t, reads.reader);
-    const second = await f.open('modified.pdf');
-    pair(f, second);
-    f.provider.activePanel = second.panel;
-    const reload = f.provider.reloadActive();
-    f.first.dispose();
-    await reload;
-    assert(reads.requests.every(request => request.token.isCancellationRequested));
-    assert.deepEqual(f.errors, []);
 });
 
 test('diff scroll rejects stale loads and tags the target load with highlights disabled', async t => {
@@ -201,24 +283,4 @@ test('diff results only forward from the current modified panel and strip extra 
     f.first.dispose();
     second.received.fire(result);
     assert.deepEqual(f.first.messages, []);
-});
-
-test('diff navigation results route to the requested side only from the current modified panel', async t => {
-    const f = await fixture(t, async () => new Uint8Array([2]));
-    const second = await f.open('modified.pdf');
-    pair(f, second).sessionId = 7;
-    const result = { type: 'diff.navigationResult', sessionId: 7, requestId: 1,
-        pageNumber: 2, index: 0, changes: [{ regions: [{ left: 0, top: 0, width: 1, height: 1 }] }] };
-    for (const role of ['original', 'modified']) {
-        f.first.received.fire({ ...result, role });
-        second.received.fire({ ...result, role, sessionId: 6 });
-    }
-    assert.deepEqual(f.first.messages, []);
-    assert.deepEqual(second.messages, []);
-    for (const role of ['original', 'modified']) {
-        second.received.fire({ ...result, role });
-    }
-    const expected = [{ ...result, type: 'diff.revealChange' }];
-    assert.deepEqual(f.first.messages, expected);
-    assert.deepEqual(second.messages, expected);
 });

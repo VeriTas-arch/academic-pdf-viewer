@@ -70,14 +70,6 @@
             return window.PDFViewerApplication?.pdfViewer ?? null;
         },
 
-        getViewerContainer(viewer = adapter.getViewer()): HTMLElement | null {
-            return viewer?.container ?? document.getElementById("viewerContainer");
-        },
-
-        getToolbarHost(): HTMLElement | null {
-            return document.getElementById("toolbarViewerLeft");
-        },
-
         scaleLinkBorders(pageView: PdfJsPageView): void {
             const layer = pageView.div.querySelector<HTMLElement>(".annotationLayer");
             if (!layer) {
@@ -114,23 +106,6 @@
                     link.append(frame);
                 }
             }
-        },
-
-        getCapabilities(
-            document = adapter.getApplication()?.pdfDocument ?? null,
-            viewer = adapter.getViewer()
-        ): AcademicPdfJsCapabilities {
-            const privateDocument = document as PrivatePdfJsDocument | null;
-            const privateViewer = viewer as PrivatePdfJsViewer | null;
-            return {
-                viewer: viewer !== null,
-                viewerContainer: adapter.getViewerContainer(viewer) !== null,
-                toolbarHost: adapter.getToolbarHost() !== null,
-                location: privateViewer?._location !== undefined,
-                fingerprintOverride: privateDocument?._pdfInfo !== undefined,
-                pageNumberInterception: typeof privateViewer?._setCurrentPageNumber === "function",
-                sidebarView: getViewsManager() !== null
-            };
         },
 
         getPdfLocation(viewer: PdfJsViewer): PdfJsLocation {

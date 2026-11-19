@@ -18,8 +18,12 @@ try {
     runDirectory = await fs.mkdtemp(path.join(runsDirectory, 'run-'));
     const userDataDirectory = path.join(runDirectory, 'user-data');
     const extensionsDirectory = path.join(runDirectory, 'extensions');
+    const workspaceDirectory = path.join(runDirectory, 'workspace');
+    const pdfFixture = path.join(root, 'test', 'fixtures', 'viewer-smoke.pdf');
     await fs.mkdir(path.join(userDataDirectory, 'User'), { recursive: true });
     await fs.mkdir(extensionsDirectory);
+    await fs.mkdir(workspaceDirectory);
+    await Promise.all(['original.pdf', 'modified.pdf'].map(name => fs.copyFile(pdfFixture, path.join(workspaceDirectory, name))));
     await fs.writeFile(path.join(userDataDirectory, 'User', 'settings.json'), JSON.stringify({
         'chat.disableAIFeatures': true,
         'chat.agentHost.claudeAgent.enabled': false,
@@ -37,7 +41,7 @@ try {
         extensionDevelopmentPath,
         extensionTestsPath: path.join(testDirectory, 'suite.cjs'),
         launchArgs: [
-            path.join(root, 'manual-tests'),
+            workspaceDirectory,
             `--user-data-dir=${userDataDirectory}`,
             `--extensions-dir=${extensionsDirectory}`,
             '--disable-extensions',

@@ -1,17 +1,18 @@
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
-const generatedPaths = [
-    'out',
-    'tmp/webview-build',
-    'assets/academic/citationPreview.js',
-    'assets/academic/citationPreviewLines.js',
-    'assets/academic/citationPreviewLines.mjs',
-    'assets/academic/extensionMessages.js',
-    'assets/academic/pdfDiff.js',
-    'assets/academic/pdfDiffAlgorithm.mjs',
-    'assets/academic/pdfjsAdapter.js',
-    'assets/academic/pdfViewerBootstrap.js',
-    'assets/academic/reader.js',
-];
+const root = resolve(import.meta.dirname, '..');
+const assets = resolve(root, 'assets', 'academic');
+const entries = await readdir(assets, { withFileTypes: true }).catch(error => {
+    if (error.code !== 'ENOENT') {
+        throw error;
+    }
+    return [];
+});
 
-await Promise.all(generatedPaths.map(path => rm(path, { force: true, recursive: true })));
+await Promise.all([
+    rm(resolve(root, 'out'), { force: true, recursive: true }),
+    rm(resolve(root, 'tmp', 'webview-build'), { force: true, recursive: true }),
+    ...entries.filter(entry => entry.isFile() && /\.m?js$/.test(entry.name))
+        .map(entry => rm(resolve(assets, entry.name), { force: true })),
+]);

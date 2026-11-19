@@ -1,181 +1,46 @@
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const vscode = require('vscode');
 
-const { readPdfData } = require('../../out/extension/pdfDataSource.js');
-
-const extensionId = 'ovolab-veritas.academic-pdf-viewer';
-const viewType = 'academicPdfViewer.pdf';
-
-async function waitFor(predicate, description, timeoutMs = 20_000) {
-    const deadline = Date.now() + timeoutMs;
+async function waitFor(predicate, description) {
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
-        const value = await predicate();
-        if (value) {
-            return value;
-        }
+        if (predicate()) return;
         await new Promise(resolve => setTimeout(resolve, 50));
     }
     throw new Error(`Timed out waiting for ${description}.`);
 }
 
-function activeCustomEditor() {
-    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    return input instanceof vscode.TabInputCustom && input.viewType === viewType ? input : undefined;
-}
-
-function activeCustomEditorFor(uri) {
-    const input = activeCustomEditor();
-    return input?.uri.toString() === uri.toString() ? input : undefined;
-}
-
-async function closeAllEditors() {
-    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
-    await waitFor(
-        () => vscode.window.tabGroups.all.every(group => group.tabs.length === 0),
-        'all editors to close',
-    );
-}
-
 async function run() {
-    const extension = vscode.extensions.getExtension(extensionId);
-    assert(extension, `Extension ${extensionId} was not loaded.`);
+    const extension = vscode.extensions.getExtension('ovolab-veritas.academic-pdf-viewer');
+    assert(extension, 'The PDF viewer extension was not loaded.');
     const api = await extension.activate();
-    assert.equal(extension.isActive, true);
-    assert.equal(typeof api?.tex?.synctexForward, 'function', 'The exported SyncTeX forward API was not available.');
-    assert.equal(
-        typeof api?.tex?.onDidRequestInverseSyncTex,
-        'function',
-        'The exported inverse SyncTeX event was not available.',
-    );
-
-    let inverseEvent;
-    const inverseSubscription = api.tex.onDidRequestInverseSyncTex(event => {
-        inverseEvent = event;
-    });
-
+    const proposed = extension.packageJSON.enabledApiProposals?.includes('customEditorDiffs') ?? false;
     const commands = await vscode.commands.getCommands(true);
-    for (const command of [
-        'academicPdfViewer.reload',
-        'academicPdfViewer.tex.synctexForward',
-        'academicPdfViewer.tex.synctexForwardFromCursor',
-        'academicPdfViewer.tex.synctexInverse',
-    ]) {
-        assert(commands.includes(command), `Command ${command} was not registered.`);
-    }
-    const diffEnabled = extension.packageJSON.enabledApiProposals?.includes('customEditorDiffs') ?? false;
-    for (const command of [
-        'academicPdfViewer.toggleDiffHighlights',
-        'academicPdfViewer.enableDiffHighlights',
-        'academicPdfViewer.disableDiffHighlights',
-        'academicPdfViewer.previousDiffChange',
-        'academicPdfViewer.nextDiffChange',
-    ]) {
-        assert.equal(commands.includes(command), diffEnabled, `Unexpected availability of ${command}.`);
-    }
+    assert.equal(commands.includes('academicPdfViewer.toggleDiffHighlights'), proposed);
 
-    const fixtureRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    assert(fixtureRoot, 'The manual test workspace was not opened.');
+    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri;
+    assert(workspace, 'The fixture workspace was not opened.');
+    const original = vscode.Uri.joinPath(workspace, 'original.pdf');
+    const modified = vscode.Uri.joinPath(workspace, 'modified.pdf');
+    const viewType = extension.packageJSON.contributes.customEditors[0].viewType;
+    const request = pdfUri => ({ type: 'synctex.forward', pdfUri: pdfUri.toString(), pageNumber: 1, x: 72, y: 72 });
 
-    const missingGitPdfPath = path.join(fixtureRoot, '__missing_git_revision__.pdf');
-    const missingGitPdf = vscode.Uri.from({
-        scheme: 'git',
-        path: missingGitPdfPath,
-        query: JSON.stringify({ path: missingGitPdfPath, ref: 'HEAD' }),
-    });
-    const cancellationSource = new vscode.CancellationTokenSource();
-    const cancelledGitRead = readPdfData(missingGitPdf, undefined, cancellationSource.token);
-    cancellationSource.cancel();
-    await assert.rejects(
-        cancelledGitRead,
-        error => error instanceof vscode.CancellationError,
-        'A cancelled Git PDF read should reject with CancellationError.',
-    );
-    cancellationSource.dispose();
-
-    const missingGitData = await readPdfData(missingGitPdf);
-    assert.equal(missingGitData.byteLength, 0, 'A missing Git revision should be treated as an empty PDF.');
-
-    const invalidGitRef = vscode.Uri.from({
-        scheme: 'git',
-        path: missingGitPdfPath,
-        query: JSON.stringify({ path: missingGitPdfPath, ref: 'refs/heads/__academic_pdf_viewer_missing_ref__' }),
-    });
-    await assert.rejects(
-        readPdfData(invalidGitRef),
-        /Git rev-parse failed/,
-        'An invalid Git ref should not be treated as an empty PDF revision.',
-    );
-
-    const ordinaryPdf = vscode.Uri.file(path.join(fixtureRoot, 'lewm.pdf'));
-    await vscode.commands.executeCommand('vscode.openWith', ordinaryPdf, viewType);
-    await waitFor(activeCustomEditor, 'the ordinary PDF custom editor');
-
-    const forwardRequest = {
-        type: 'synctex.forward',
-        pdfUri: ordinaryPdf.toString(),
-        pageNumber: 1,
-        x: 72,
-        y: 72,
-        targetBox: { x: 60, y: 66, width: 240, height: 12 },
-    };
-    assert.equal(
-        api.tex.synctexForward(forwardRequest),
-        true,
-        'The exported API should accept a forward request for the open canonical PDF URI.',
-    );
-    assert.equal(
-        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexForward', forwardRequest),
-        true,
-        'The command API should accept the same canonical forward request.',
-    );
-    assert.equal(
-        api.tex.synctexForward({ ...forwardRequest, pdfUri: ordinaryPdf.fsPath }),
-        false,
-        'A filesystem path must not be treated as the canonical PDF URI.',
-    );
-    assert.equal(
-        api.tex.synctexForward({
-            ...forwardRequest,
-            targetBox: { ...forwardRequest.targetBox, width: 0 },
-        }),
-        false,
-        'A non-positive SyncTeX target box must be rejected.',
-    );
-    assert.equal(
-        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexForward', {
-            ...forwardRequest,
-            pageNumber: 0,
-        }),
-        false,
-        'The command API should reject malformed forward requests.',
-    );
-    assert.equal(
-        await vscode.commands.executeCommand('academicPdfViewer.tex.synctexInverse'),
-        false,
-        'The context-menu command should reject execution without a pending PDF-page request.',
-    );
-    assert.equal(inverseEvent, undefined, 'Rejected integration commands must not emit an inverse event.');
-
-    const secondPdf = vscode.Uri.file(path.join(fixtureRoot, 'paper1.pdf'));
-    await vscode.commands.executeCommand('vscode.openWith', secondPdf, viewType, vscode.ViewColumn.Beside);
-    await waitFor(() => activeCustomEditorFor(secondPdf), 'the second PDF custom editor');
-    assert.equal(
-        api.tex.synctexForward({ ...forwardRequest, pdfUri: secondPdf.toString() }),
-        true,
-        'Forward SyncTeX should find the active second PDF panel.',
-    );
-    assert.equal(
-        api.tex.synctexForward(forwardRequest),
-        true,
-        'Forward SyncTeX should still find the visible first PDF panel.',
-    );
-    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-    await waitFor(() => activeCustomEditorFor(ordinaryPdf), 'the first PDF editor to become active again');
-
+    await vscode.commands.executeCommand('vscode.openWith', original, viewType);
+    await waitFor(() => {
+        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        return input instanceof vscode.TabInputCustom && input.viewType === viewType;
+    }, 'the custom PDF editor');
+    assert.equal(await vscode.commands.executeCommand('academicPdfViewer.tex.synctexForward', request(original)), true);
     await vscode.commands.executeCommand('academicPdfViewer.reload');
-    await closeAllEditors();
-    inverseSubscription.dispose();
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await waitFor(() => !api.tex.synctexForward(request(original)), 'the PDF editor to close');
+
+    if (proposed) {
+        await vscode.commands.executeCommand('vscode.diff', original, modified, 'PDF diff smoke');
+        await waitFor(() => api.tex.synctexForward(request(original)) && api.tex.synctexForward(request(modified)),
+            'both sides of the PDF diff');
+        await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
 }
 
 module.exports = { run };

@@ -1,77 +1,96 @@
 import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, sep } from 'node:path';
 import * as vscode from 'vscode';
 
-import type { DevLogFields, DevLogger } from './devLogger';
 import { assertPdfSize, MAX_PDF_BYTES } from './pdfSizeLimits';
 
 const gitRootCache = new Map<string, string>();
 const GIT_TIMEOUT_MS = 60_000;
 const GIT_METADATA_MAX_BYTES = 1024 * 1024;
 
-export async function readPdfData(
-    uri: vscode.Uri,
-    logger?: DevLogger,
-    token?: vscode.CancellationToken,
-): Promise<Uint8Array> {
-    const startedAt = Date.now();
-    const fields = describePdfUri(uri);
-    const source = uri.scheme === 'git' ? 'gitBlob' : 'workspaceFs';
-    logger?.info('pdf.read.start', { ...fields, source });
+export interface PdfRangeFile {
+    readonly size: number;
+    read(begin: number, length: number): Promise<ArrayBuffer>;
+    close(): Promise<void>;
+}
 
+export interface PdfDataSource {
+    readonly size: number;
+    read(token?: vscode.CancellationToken): Thenable<Uint8Array>;
+}
+
+export async function openPdfRangeFile(uri: vscode.Uri): Promise<PdfRangeFile> {
+    const file = await open(uri.fsPath, 'r');
     try {
-        throwIfCancellationRequested(token);
-        let data: Uint8Array;
-        if (uri.scheme === 'git') {
-            data = await readGitBlob(uri, token);
-        } else {
-            const stat = await vscode.workspace.fs.stat(uri);
-            throwIfCancellationRequested(token);
-            assertPdfSize(stat.size);
-            data = await vscode.workspace.fs.readFile(uri);
+        const snapshot = await file.stat();
+        assertPdfSize(snapshot.size);
+        if (!snapshot.isFile() || snapshot.size === 0) {
+            throw new Error('PDF range reads require a nonempty regular file.');
         }
-        throwIfCancellationRequested(token);
-        assertPdfSize(data.byteLength);
-        logger?.info('pdf.read.done', {
-            ...fields,
-            source,
-            bytes: data.byteLength,
-            durationMs: Date.now() - startedAt,
-        });
-        return data;
-    } catch (error) {
-        const resultFields = {
-            ...fields,
-            source,
-            durationMs: Date.now() - startedAt,
+        const checkSnapshot = async (): Promise<void> => {
+            const current = await file.stat();
+            if (current.size !== snapshot.size || current.mtimeMs !== snapshot.mtimeMs
+                || current.ctimeMs !== snapshot.ctimeMs) {
+                throw new Error('PDF changed while it was being read. Reload the PDF to open the new version.');
+            }
         };
-        if (error instanceof vscode.CancellationError) {
-            logger?.info('pdf.read.cancelled', resultFields);
-        } else {
-            logger?.error('pdf.read.failed', error, resultFields);
-        }
+        return {
+            size: snapshot.size,
+            async read(begin, length) {
+                if (!Number.isSafeInteger(begin) || begin < 0 || !Number.isSafeInteger(length)
+                    || length <= 0 || length > snapshot.size - begin) {
+                    throw new Error('PDF range is outside the file.');
+                }
+                const data = new ArrayBuffer(length);
+                const bytes = new Uint8Array(data);
+                let offset = 0;
+                while (offset < length) {
+                    const { bytesRead } = await file.read(bytes, offset, length - offset, begin + offset);
+                    if (bytesRead === 0) {
+                        throw new Error('PDF ended before the requested range was read.');
+                    }
+                    offset += bytesRead;
+                }
+                await checkSnapshot();
+                return data;
+            },
+            close: () => file.close(),
+        };
+    } catch (error) {
+        await file.close();
         throw error;
     }
 }
 
-export function describePdfUri(uri: vscode.Uri): DevLogFields {
-    if (uri.scheme !== 'git') {
-        return { scheme: uri.scheme, path: uri.fsPath };
+export async function preparePdfData(uri: vscode.Uri, token?: vscode.CancellationToken): Promise<PdfDataSource> {
+    throwIfCancellationRequested(token);
+    if (uri.scheme === 'git') {
+        return prepareGitBlob(uri, token);
     }
-
-    try {
-        const query = JSON.parse(uri.query) as Record<string, unknown>;
-        return { scheme: uri.scheme, path: query.path, ref: query.ref };
-    } catch {
-        return { scheme: uri.scheme, uri: uri.toString() };
-    }
+    const { size } = await vscode.workspace.fs.stat(uri);
+    throwIfCancellationRequested(token);
+    assertPdfSize(size);
+    return { size, read: () => vscode.workspace.fs.readFile(uri) };
 }
 
-async function readGitBlob(
+export async function readPdfData(
     uri: vscode.Uri,
     token?: vscode.CancellationToken,
+    prepared?: PdfDataSource,
 ): Promise<Uint8Array> {
+    throwIfCancellationRequested(token);
+    const input = prepared ?? await preparePdfData(uri, token);
+    const data = await input.read(token);
+    throwIfCancellationRequested(token);
+    assertPdfSize(data.byteLength);
+    return data;
+}
+
+async function prepareGitBlob(
+    uri: vscode.Uri,
+    token?: vscode.CancellationToken,
+): Promise<PdfDataSource> {
     const query: unknown = JSON.parse(uri.query);
     if (query === null || typeof query !== 'object' || Array.isArray(query)
         || !('path' in query) || typeof query.path !== 'string' || !isAbsolute(query.path)
@@ -89,7 +108,7 @@ async function readGitBlob(
     const gitPath = repositoryPath.replace(/\\/g, '/');
     const objectName = await resolveGitObjectName(repositoryRoot, gitPath, query.ref, token);
     if (!objectName) {
-        return new Uint8Array();
+        return { size: 0, read: async () => new Uint8Array() };
     }
     const stat = await runGit(['cat-file', '-s', '--', objectName], repositoryRoot, token);
     const objectSize = Number.parseInt(stat.toString('utf8').trim(), 10);
@@ -98,7 +117,10 @@ async function readGitBlob(
     }
     assertPdfSize(objectSize);
 
-    return runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, token);
+    return {
+        size: objectSize,
+        read: readToken => runGit(['cat-file', 'blob', '--', objectName], repositoryRoot, readToken),
+    };
 }
 
 async function resolveGitObjectName(

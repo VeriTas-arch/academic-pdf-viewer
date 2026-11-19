@@ -48,11 +48,11 @@ function fixture(t) {
     };
     const context = { subscriptions: [] };
     const { registerSyncTexCliBridge, SYNCTEX_FORWARD_FROM_CURSOR_COMMAND } = loadSource(
-        'extension/synctexCliBridge.ts', vscode, { './pdfEditorProvider': { PDF_VIEW_TYPE: 'academicPdfViewer.pdf' } });
+        'extension/synctexCliBridge.ts', vscode);
     registerSyncTexCliBridge(context, {
         onDidRequestInverseSyncTex: inverse.event,
         synctexForward: request => { forwarded.push(request); return true; },
-    }, request => new Promise((resolve, reject) => calls.push({ request, resolve, reject })));
+    }, 'academicPdfViewer.pdf', request => new Promise((resolve, reject) => calls.push({ request, resolve, reject })));
     const dispose = () => { for (const item of context.subscriptions) item.dispose(); };
     t.after(dispose);
     return {

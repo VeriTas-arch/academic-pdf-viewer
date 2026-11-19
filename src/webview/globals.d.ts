@@ -58,6 +58,7 @@ interface PdfJsPage {
 }
 
 interface PdfJsDocument {
+    annotationStorage: { resetModified(): void };
     numPages: number;
     cachedPageNumber?(destinationReference: object): number | null;
     getDestination(name: string): Promise<unknown[] | null>;
@@ -83,6 +84,7 @@ interface PdfJsViewer {
     pagesCount: number;
     pagesPromise: Promise<void>;
     getPageView(index: number): PdfJsPageView | undefined;
+    getCachedPageViews(): ReadonlySet<PdfJsPageView>;
     update(): void;
     scrollPageIntoView(options: {
         pageNumber: number;
@@ -104,7 +106,7 @@ interface PdfJsApplication {
     eventBus: PdfJsEventBus;
     pdfDocument: PdfJsDocument | null;
     pdfLinkService: PdfJsLinkService;
-    pdfLoadingTask: unknown;
+    pdfLoadingTask: PdfJsLoadingTask | null;
     pdfViewer: PdfJsViewer;
     supportsMouseWheelZoomCtrlKey: boolean;
     supportsMouseWheelZoomMetaKey: boolean;
@@ -132,26 +134,10 @@ interface AcademicSidebarState {
     isOpen: boolean;
 }
 
-interface AcademicPdfJsCapabilities {
-    viewer: boolean;
-    viewerContainer: boolean;
-    toolbarHost: boolean;
-    location: boolean;
-    fingerprintOverride: boolean;
-    pageNumberInterception: boolean;
-    sidebarView: boolean;
-}
-
 interface AcademicPdfJsAdapter {
     getApplication(): PdfJsApplication | null;
     getViewer(): PdfJsViewer | null;
-    getViewerContainer(viewer?: PdfJsViewer | null): HTMLElement | null;
-    getToolbarHost(): HTMLElement | null;
     scaleLinkBorders(pageView: PdfJsPageView): void;
-    getCapabilities(
-        document?: PdfJsDocument | null,
-        viewer?: PdfJsViewer | null
-    ): AcademicPdfJsCapabilities;
     getPdfLocation(viewer: PdfJsViewer): PdfJsLocation;
     setDocumentFingerprint(document: PdfJsDocument, fingerprint: string): boolean;
     getSidebarState(): AcademicSidebarState | null;
@@ -163,13 +149,34 @@ interface AcademicPdfJsAdapter {
     ): boolean;
 }
 
+interface AcademicViewerConfiguration {
+    cMapUrl: string;
+    iccUrl: string;
+    imageResourcesPath: string;
+    standardFontDataUrl: string;
+    wasmUrl: string;
+    workerSrc: string;
+    defaultSidebar?: unknown;
+    diffRole?: AcademicDiffRole;
+    diffLabel?: string;
+    linkPreviewEnabled?: boolean;
+    linkPreviewResolutionScale?: number;
+    mouseNavigationEnabled?: boolean;
+    mouseButtonMapping?: AcademicMouseButtonMapping;
+    syncTexMode?: "off" | "doubleclick" | "rightclick";
+}
+
 interface Window {
+    academicViewerConfiguration: AcademicViewerConfiguration;
     academicPdfJsAdapter: AcademicPdfJsAdapter;
     PDFViewerApplication: PdfJsApplication;
     PDFViewerApplicationOptions?: PdfJsViewerOptions;
 }
 
 declare const pdfjsLib: {
+    PDFDataRangeTransport: new (
+        length: number, initialData: Uint8Array, progressiveDone: boolean, filename: string
+    ) => PdfRangeTransport;
     getDocument(options: Record<string, unknown>): PdfJsLoadingTask;
     Util: {
         transform(first: number[], second: number[]): number[];

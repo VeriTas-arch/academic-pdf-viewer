@@ -25,30 +25,26 @@
         y: number;
     }
 
-    const vscode = acquireVsCodeApi();
+    const { post, subscribe } = window.academicExtensionMessages;
     const pdfjsAdapter = window.academicPdfJsAdapter;
-    const initialConfiguration = readInitialConfiguration();
-    let mouseNavigationEnabled = initialConfiguration.mouseNavigationEnabled;
-    let mouseButtonMapping = initialConfiguration.mouseButtonMapping;
+    const config = window.academicViewerConfiguration;
+    if (!config.diffRole) {
+        post({ type: "webview.documentReady" });
+    }
+    let mouseNavigationEnabled = config.mouseNavigationEnabled !== false;
+    let mouseButtonMapping: AcademicMouseButtonMapping = config.mouseButtonMapping === "swapped" ? "swapped" : "standard";
     let syncTexMode: "off" | "doubleclick" | "rightclick" = "off";
     window.addEventListener("academic-pdf-viewer-ready", () => {
-        vscode.postMessage({ type: "webview.ready" });
+        post({ type: "webview.ready" });
     }, { once: true });
-    window.addEventListener("academic-pdf-debug", event => {
-        vscode.postMessage((event as CustomEvent<unknown>).detail);
-    });
-    window.addEventListener("academic-pdf-message", event => {
-        vscode.postMessage((event as CustomEvent<unknown>).detail);
-    });
     window.addEventListener("keydown", handleViewerShortcutBoundary, true);
     window.addEventListener("mousedown", handleMouseNavigation, true);
     window.addEventListener("dblclick", handleSyncTexDoubleClick, true);
     window.addEventListener("contextmenu", handleSyncTexContextMenu, true);
-    configureSyncTexMode(initialConfiguration.syncTexMode);
-    window.addEventListener("academic-pdf-synctex-configure", event => {
-        const mode = (event as CustomEvent<unknown>).detail;
-        if (mode === "off" || mode === "doubleclick" || mode === "rightclick") {
-            configureSyncTexMode(mode);
+    configureSyncTexMode(config.syncTexMode === "off" || config.syncTexMode === "rightclick" ? config.syncTexMode : "doubleclick");
+    subscribe(message => {
+        if (message.type === "synctex.configure") {
+            configureSyncTexMode(message.mode);
         }
     });
     window.addEventListener("mouseup", consumeMouseNavigation, true);
@@ -94,30 +90,17 @@
             this._forwardStack = [];
         }
 
-        back(currentLocation: NavigationPoint | null): void {
-            if (this._backStack.length === 0) {
+        go(direction: NavigationDirection, currentLocation: NavigationPoint | null): void {
+            const from = direction === "back" ? this._backStack : this._forwardStack;
+            const to = direction === "back" ? this._forwardStack : this._backStack;
+            const destination = from.pop();
+            if (!destination) {
                 return;
             }
-            if (currentLocation && !locationsEqual(this._forwardStack[this._forwardStack.length - 1], currentLocation)) {
-                this._forwardStack.push(currentLocation);
+            if (currentLocation && !locationsEqual(to.at(-1), currentLocation)) {
+                to.push(currentLocation);
             }
-            const destination = this._backStack.pop();
-            if (destination) {
-                this._onNavigate(destination);
-            }
-        }
-
-        forward(currentLocation: NavigationPoint | null): void {
-            if (this._forwardStack.length === 0) {
-                return;
-            }
-            if (currentLocation && !locationsEqual(this._backStack[this._backStack.length - 1], currentLocation)) {
-                this._backStack.push(currentLocation);
-            }
-            const destination = this._forwardStack.pop();
-            if (destination) {
-                this._onNavigate(destination);
-            }
+            this._onNavigate(destination);
         }
     }
 
@@ -155,11 +138,11 @@
 
     function captureLocation(): NavigationPoint | null {
         const viewer = pdfjsAdapter.getViewer();
-        const container = pdfjsAdapter.getViewerContainer(viewer);
-        if (!viewer || !container) {
+        if (!viewer) {
             return null;
         }
 
+        const { container } = viewer;
         const pdfLocation = pdfjsAdapter.getPdfLocation(viewer);
 
         return normalizeLocation({
@@ -174,8 +157,7 @@
 
     function restoreLocation(location: NavigationPoint): void {
         const viewer = pdfjsAdapter.getViewer();
-        const container = pdfjsAdapter.getViewerContainer();
-        if (!viewer || !container || !location) {
+        if (!viewer) {
             return;
         }
 
@@ -196,7 +178,7 @@
                 allowNegativeOffset: true,
                 ignoreDestinationZoom: false
             });
-            finishRestore(location);
+            finishRestore(viewer.container, location);
             return;
         }
 
@@ -204,7 +186,7 @@
         if (app && app.pdfLinkService) {
             app.pdfLinkService.goToPage(location.pageNumber);
         }
-        finishRestore(location);
+        finishRestore(viewer.container, location);
     }
 
     function canRestoreWithPdfDestination(location: NavigationPoint, viewer: PdfJsViewer): boolean {
@@ -218,12 +200,7 @@
             && typeof viewer.scrollPageIntoView === "function";
     }
 
-    function finishRestore(location: NavigationPoint): void {
-        const container = pdfjsAdapter.getViewerContainer();
-        if (!container) {
-            restoring = false;
-            return;
-        }
+    function finishRestore(container: HTMLElement, location: NavigationPoint): void {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 container.scrollTop = location.scrollTop;
@@ -272,25 +249,15 @@
         });
     }
 
-    function handleNavigationMessage(data: unknown, allowPressedKey = false): void {
-        if (!window.academicExtensionMessages.isMessage(data)) {
-            return;
-        }
+    function handleNavigationMessage(data: AcademicExtensionToWebviewMessage): void {
         if (data.type === "navigation.configure") {
             mouseNavigationEnabled = data.mouseButtonsEnabled;
             mouseButtonMapping = data.mouseButtonMapping;
-        } else if (!history) {
-            return;
-        } else if (data.type === "navigation.back") {
-            if (!allowPressedKey && pressedNavigationKeys.back) {
-                return;
+        } else if (data.type === "navigation.back" || data.type === "navigation.forward") {
+            const direction = data.type === "navigation.back" ? "back" : "forward";
+            if (!pressedNavigationKeys[direction]) {
+                history?.go(direction, captureLocation());
             }
-            history.back(captureLocation());
-        } else if (data.type === "navigation.forward") {
-            if (!allowPressedKey && pressedNavigationKeys.forward) {
-                return;
-            }
-            history.forward(captureLocation());
         }
     }
 
@@ -299,7 +266,7 @@
         const primaryModifier = event.ctrlKey || event.metaKey;
         if (primaryModifier && !event.altKey && key === "p") {
             if (!event.repeat) {
-                vscode.postMessage({
+                post({
                     type: event.shiftKey ? "workbench.showCommands" : "workbench.quickOpen"
                 });
             }
@@ -308,7 +275,7 @@
         }
         if (primaryModifier && !event.altKey && !event.shiftKey && key === "o") {
             if (!event.repeat) {
-                vscode.postMessage({ type: "workbench.openFile" });
+                post({ type: "workbench.openFile" });
             }
             consumeShortcut(event);
             return;
@@ -327,7 +294,7 @@
             return;
         }
         consumeMouseEvent(event);
-        vscode.postMessage({ type: "navigation.request", direction });
+        post({ type: "navigation.request", direction });
     }
 
     const syncTexPageContext = JSON.stringify({ webviewSection: "pdfPage" });
@@ -466,13 +433,13 @@
         }
         const point = getSyncTexPointer(event);
         if (point) {
-            vscode.postMessage({ type: "synctex.inverse", ...point, trigger });
+            post({ type: "synctex.inverse", ...point, trigger });
         }
     }
 
     function configureSyncTexMode(mode: "off" | "doubleclick" | "rightclick"): void {
         syncTexMode = mode;
-        vscode.postMessage({ type: "synctex.inverseClear" });
+        post({ type: "synctex.inverseClear" });
     }
 
     function handleSyncTexDoubleClick(event: MouseEvent): void {
@@ -483,7 +450,7 @@
     }
 
     function handleSyncTexContextMenu(event: MouseEvent): void {
-        vscode.postMessage({ type: "synctex.inverseClear" });
+        post({ type: "synctex.inverseClear" });
         if (syncTexMode !== "rightclick") {
             return;
         }
@@ -493,30 +460,6 @@
     function consumeMouseNavigation(event: MouseEvent): void {
         if (mouseNavigationEnabled && mouseNavigationDirection(event)) {
             consumeMouseEvent(event);
-        }
-    }
-
-    function readInitialConfiguration(): {
-        mouseNavigationEnabled: boolean;
-        mouseButtonMapping: AcademicMouseButtonMapping;
-        syncTexMode: "off" | "doubleclick" | "rightclick";
-    } {
-        const value = document.getElementById("pdf-preview-config")?.getAttribute("data-config");
-        try {
-            const settings = JSON.parse(value || "{}") as {
-                mouseNavigationEnabled?: unknown;
-                mouseButtonMapping?: unknown;
-                syncTexMode?: unknown;
-            };
-            return {
-                mouseNavigationEnabled: settings.mouseNavigationEnabled !== false,
-                mouseButtonMapping: settings.mouseButtonMapping === "swapped" ? "swapped" : "standard",
-                syncTexMode: settings.syncTexMode === "off" || settings.syncTexMode === "rightclick"
-                    ? settings.syncTexMode
-                    : "doubleclick"
-            };
-        } catch {
-            return { mouseNavigationEnabled: true, mouseButtonMapping: "standard", syncTexMode: "doubleclick" };
         }
     }
 
@@ -552,20 +495,14 @@
         if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
             return;
         }
-        if (event.key === "ArrowLeft") {
-            event.preventDefault();
-            if (event.repeat || pressedNavigationKeys.back) {
-                return;
-            }
-            pressedNavigationKeys.back = true;
-            handleNavigationMessage({ type: "navigation.back" }, true);
-        } else if (event.key === "ArrowRight") {
-            event.preventDefault();
-            if (event.repeat || pressedNavigationKeys.forward) {
-                return;
-            }
-            pressedNavigationKeys.forward = true;
-            handleNavigationMessage({ type: "navigation.forward" }, true);
+        const direction = event.key === "ArrowLeft" ? "back" : event.key === "ArrowRight" ? "forward" : undefined;
+        if (!direction) {
+            return;
+        }
+        event.preventDefault();
+        if (!event.repeat && !pressedNavigationKeys[direction]) {
+            pressedNavigationKeys[direction] = true;
+            history?.go(direction, captureLocation());
         }
     }
 
@@ -585,7 +522,7 @@
             return;
         }
         pressedNavigationKeys[direction] = false;
-        vscode.postMessage({
+        post({
             type: "navigation.keyUp",
             direction
         });
@@ -699,12 +636,7 @@
     let history: NavigationHistory | null = null;
     let restoring = false;
 
-    async function initialize(): Promise<void> {
-        const app = pdfjsAdapter.getApplication();
-        if (!app) {
-            return;
-        }
-
+    async function initialize(app: PdfJsApplication): Promise<void> {
         await app.initializedPromise;
         history = new NavigationHistory(restoreLocation);
         patchExplicitNavigation(app);
@@ -713,14 +645,11 @@
         app.eventBus.on("pagesinit", setSyncTexPageContexts);
 
         app.eventBus.on("documentloaded", () => {
-            if (history) {
-                history.reset();
-            }
+            history?.reset();
             patchExplicitNavigation(app);
-            setSyncTexPageContexts();
         });
 
-        window.addEventListener("message", event => handleNavigationMessage(event.data));
+        subscribe(handleNavigationMessage);
         window.addEventListener("keydown", handleKeyDown, true);
         window.addEventListener("keyup", handleKeyUp, true);
         window.addEventListener("wheel", handleWheel, { capture: true, passive: false });
@@ -728,11 +657,12 @@
 
     let initializationStarted = false;
     function startInitialization(): void {
-        if (initializationStarted || !pdfjsAdapter.getApplication()) {
+        const app = pdfjsAdapter.getApplication();
+        if (initializationStarted || !app) {
             return;
         }
         initializationStarted = true;
-        initialize().catch(error => {
+        void initialize(app).catch(error => {
             console.error("Failed to initialize Academic PDF navigation layer.", error);
         });
     }

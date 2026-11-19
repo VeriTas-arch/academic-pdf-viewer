@@ -39,24 +39,19 @@ const minimumSameLineHeightRatio = 0.6;
 const minimumPairedRegionHeightRatio = 0.6;
 export function compareRasters(original, modified) {
     if (original.width !== modified.width || original.height !== modified.height) {
-        return symmetricResult([fullPageRegion()], -1, "page");
+        return symmetricResult([fullPageRegion()], "page");
     }
     const components = [];
     let previousRuns = [];
-    let changedPixels = 0;
     let totalRuns = 0;
     for (let y = 0; y < modified.height; y += 1) {
         const currentRuns = collectChangedRuns(original, modified, y);
-        changedPixels += currentRuns.reduce((sum, run) => sum + run.changedPixels, 0);
         totalRuns += currentRuns.length;
         if (totalRuns > maximumRunsPerPage) {
-            return symmetricResult([fullPageRegion()], -1, "page");
+            return symmetricResult([fullPageRegion()], "page");
         }
         connectRuns(currentRuns, previousRuns, y, components);
         previousRuns = currentRuns;
-    }
-    if (changedPixels === 0) {
-        return symmetricResult([], changedPixels, "raster");
     }
     let pixelRegions = components
         .filter((component, index) => findComponent(components, index) === index
@@ -69,7 +64,7 @@ export function compareRasters(original, modified) {
         changedPixels: component.changedPixels
     }));
     if (pixelRegions.length === 0) {
-        return symmetricResult([], changedPixels, "raster");
+        return symmetricResult([], "raster");
     }
     pixelRegions = pixelRegions.length <= maximumComponentsToMerge
         ? mergeNearbyRegions(pixelRegions)
@@ -78,7 +73,7 @@ export function compareRasters(original, modified) {
         pixelRegions = [boundingPixelRegion(pixelRegions)];
     }
     const regions = pixelRegions.map(region => toNormalizedRegion(region, modified.width, modified.height));
-    return symmetricResult(regions, changedPixels, "raster");
+    return symmetricResult(regions, "raster");
 }
 export function compareTextTokens(original, modified, originalPageWidth, originalPageHeight, modifiedPageWidth, modifiedPageHeight) {
     const changes = compareTextTokenChanges(original, modified);
@@ -104,7 +99,7 @@ export function mergeTextAndRasterResults(textResult, rasterResult) {
         modifiedRegions: alignVisualRegionsToTextLines(change.modifiedRegions, textResult.modifiedRegions)
     }));
     if (visualChanges.length === 0) {
-        return { ...textResult, changedPixels: rasterResult.changedPixels };
+        return textResult;
     }
     const visualOriginalRegions = visualChanges.flatMap(change => change.originalRegions);
     const visualModifiedRegions = visualChanges.flatMap(change => change.modifiedRegions);
@@ -116,7 +111,6 @@ export function mergeTextAndRasterResults(textResult, rasterResult) {
         changes: [...textResult.changes, ...visualChanges],
         originalRegions: [...textResult.originalRegions, ...visualOriginalRegions],
         modifiedRegions: [...textResult.modifiedRegions, ...visualModifiedRegions],
-        changedPixels: rasterResult.changedPixels,
         strategy: "text"
     };
 }
@@ -223,7 +217,6 @@ function textResult(changes, originalPageWidth, originalPageHeight, modifiedPage
         changes: normalizedChanges,
         originalRegions,
         modifiedRegions,
-        changedPixels: -1,
         strategy: "text"
     };
 }
@@ -340,7 +333,7 @@ function resizePixelRegionHeight(region, pixelHeight) {
         bottom: center + pixelHeight / 2
     };
 }
-function symmetricResult(regions, changedPixels, strategy) {
+function symmetricResult(regions, strategy) {
     const changes = regions.map((region, index) => ({
         id: `${strategy}-${index + 1}`,
         kind: "replace",
@@ -352,7 +345,6 @@ function symmetricResult(regions, changedPixels, strategy) {
         changes,
         originalRegions: regions,
         modifiedRegions: regions,
-        changedPixels,
         strategy
     };
 }

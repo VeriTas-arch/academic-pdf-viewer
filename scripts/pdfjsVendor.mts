@@ -12,8 +12,7 @@ import {
     stat,
     writeFile,
 } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 interface VendorMetadata {
@@ -40,11 +39,10 @@ interface Release {
     assets: ReleaseAsset[];
 }
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(import.meta.dirname, '..');
 const vendorRoot = join(projectRoot, 'assets', 'pdfviewer');
 const libraryPath = join(vendorRoot, 'lib');
 const metadataPath = join(vendorRoot, 'vendor.json');
-const vendorMarkdownPath = join(vendorRoot, 'VENDOR.md');
 const runFile = promisify(execFile);
 const maximumArchiveBytes = 100 * 1024 * 1024;
 const versionPattern = /^\d+\.\d+\.\d+$/;
@@ -181,10 +179,8 @@ async function updateVendor(options: { version: string; sha256?: string }): Prom
         await verifyVendorTree(candidateLibrary, metadata);
 
         const nextMetadataPath = join(stagingPath, 'vendor.json');
-        const nextMarkdownPath = join(stagingPath, 'VENDOR.md');
         await writeFile(nextMetadataPath, `${JSON.stringify(metadata, null, 4)}\n`, 'utf8');
-        await writeFile(nextMarkdownPath, renderVendorMarkdown(metadata), 'utf8');
-        await applyStagedUpdate(candidateLibrary, nextMetadataPath, nextMarkdownPath, stagingPath);
+        await applyStagedUpdate(candidateLibrary, nextMetadataPath, stagingPath);
         completed = true;
         console.log(`[pdfjs] Updated bundled PDF.js ${current.version} -> ${metadata.version}.`);
         console.log('[pdfjs] Run npm run check, npm test, and the manual PDF smoke checklist before committing.');
@@ -271,11 +267,8 @@ async function extractArchive(archivePath: string, destination: string): Promise
 
 async function findDistributionRoot(searchRoot: string): Promise<string> {
     const queue = [searchRoot];
-    while (queue.length > 0) {
-        const candidate = queue.shift();
-        if (!candidate) {
-            break;
-        }
+    for (let index = 0; index < queue.length; index++) {
+        const candidate = queue[index];
         if (await pathExists(join(candidate, 'build', 'pdf.mjs'))
             && await pathExists(join(candidate, 'web', 'viewer.html'))) {
             return candidate;
@@ -312,26 +305,19 @@ async function copyDistribution(sourceRoot: string, targetRoot: string, metadata
 async function verifyInstalledVendor(): Promise<VendorMetadata> {
     const metadata = parseMetadata(JSON.parse(await readFile(metadataPath, 'utf8')) as unknown);
     await verifyVendorTree(libraryPath, metadata);
-    const markdown = await readFile(vendorMarkdownPath, 'utf8');
-    if (!markdown.includes(metadata.version) || !markdown.includes(metadata.sha256)) {
-        throw new Error('VENDOR.md does not match vendor.json.');
-    }
     return metadata;
 }
 
 async function verifyVendorTree(root: string, metadata: VendorMetadata): Promise<void> {
-    parseMetadata(metadata);
     for (const path of requiredFiles) {
-        const info = await stat(join(root, path)).catch(() => undefined);
-        if (!info?.isFile()) {
-            throw new Error(`Missing required PDF.js file: ${path}`);
+        if (!(await stat(join(root, path))).isFile()) {
+            throw new Error(`Required PDF.js asset is not a file: ${path}`);
         }
     }
     for (const path of requiredDirectories) {
         const directory = join(root, path);
-        const info = await stat(directory).catch(() => undefined);
-        if (!info?.isDirectory() || (await readdir(directory)).length === 0) {
-            throw new Error(`Missing or empty PDF.js directory: ${path}`);
+        if (!(await stat(directory)).isDirectory() || (await readdir(directory)).length === 0) {
+            throw new Error(`Required PDF.js directory is invalid or empty: ${path}`);
         }
     }
     for (const path of metadata.excludedPaths) {
@@ -384,13 +370,11 @@ function parseMetadata(value: unknown): VendorMetadata {
 async function applyStagedUpdate(
     candidateLibrary: string,
     nextMetadataPath: string,
-    nextMarkdownPath: string,
     stagingPath: string,
 ): Promise<void> {
     const swaps = [
         { current: libraryPath, next: candidateLibrary, backup: join(stagingPath, 'previous-lib') },
         { current: metadataPath, next: nextMetadataPath, backup: join(stagingPath, 'previous-vendor.json') },
-        { current: vendorMarkdownPath, next: nextMarkdownPath, backup: join(stagingPath, 'previous-VENDOR.md') },
     ];
     const completed: typeof swaps = [];
     try {
@@ -411,27 +395,6 @@ async function applyStagedUpdate(
         }
         throw new Error(`Could not apply the staged PDF.js update: ${getErrorMessage(error)}`);
     }
-}
-
-function renderVendorMarkdown(metadata: VendorMetadata): string {
-    const exclusions = metadata.excludedPaths.map(path => `- \`${path}\``).join('\n');
-    return `# PDF.js vendor
-
-The runtime files under \`lib/build\` and \`lib/web\` come from the official PDF.js
-${metadata.version} generic distribution:
-
-- Release: <${metadata.releaseUrl}>
-- Archive: \`${metadata.asset}\`
-- SHA-256: \`${metadata.sha256}\`
-
-\`lib/pdf.css\` is an extension-owned integration file and is not part of the
-upstream archive. Source maps and these unused scripting/debug assets are omitted:
-
-${exclusions}
-
-Use the independent \`npm run pdfjs:check\`, \`npm run pdfjs:update\`, and
-\`npm run pdfjs:verify\` commands to maintain this bundle.
-`;
 }
 
 async function listFiles(root: string): Promise<string[]> {
@@ -458,8 +421,12 @@ async function pathExists(path: string): Promise<boolean> {
     try {
         await access(path);
         return true;
-    } catch {
-        return false;
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+            return false;
+        }
+        throw error;
     }
 }
 

@@ -67,12 +67,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         top: number;
     }
 
-    interface LinkPreviewConfiguration {
-        debug: boolean;
-        enabled: boolean;
-        resolutionScale: number;
-    }
-
     const OPEN_DELAY_MS = 200;
     const TEXT_RADIUS_PX = 90;
     const DEFAULT_RESOLUTION_SCALE = 0;
@@ -109,6 +103,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         _annotationCache: Map<number, Promise<PdfJsAnnotation[]>> = new Map();
         _textContentCache: Map<number, Promise<PdfJsTextContent>> = new Map();
         _pageRenderIds: Map<number, number> = new Map();
+        _nextPageRenderId = 0;
         _documentGeneration: number = 0;
         _pageOverlays = new Map<HTMLElement, { layer: HTMLElement; links: Map<HTMLElement, PreviewLink> }>();
         _previewRequestId: number = 0;
@@ -118,7 +113,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         _closeTimer: Timer = null;
         _suppressHoverUntil: number = 0;
         _activeRenderTask: PdfJsRenderTask | null = null;
-        _debug: boolean;
         _enabled: boolean;
         _resolutionScale: number;
         _controlPressed: boolean = false;
@@ -131,13 +125,12 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         _displayDensity = 0;
 
         constructor(app: PdfJsApplication) {
-            const initialConfiguration = readInitialConfiguration();
+            const config = window.academicViewerConfiguration;
             this._app = app;
             this._eventBus = app.eventBus;
             this._popup = this._createPopup();
-            this._debug = initialConfiguration.debug;
-            this._enabled = initialConfiguration.enabled;
-            this._resolutionScale = initialConfiguration.resolutionScale;
+            this._enabled = config.linkPreviewEnabled !== false;
+            this._resolutionScale = normalizeResolutionScale(config.linkPreviewResolutionScale);
         }
 
         initialize(): void {
@@ -173,7 +166,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 this._hoveredPreview = null;
                 this._clearAllOverlays();
                 if (this._enabled) {
-                    this._renderVisiblePages();
+                    this._renderCachedPages();
                 }
             });
 
@@ -201,10 +194,8 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 this._openHoveredPreview(true);
             });
 
-            window.addEventListener("message", event => {
-                if (window.academicExtensionMessages.isMessage(event.data)
-                    && event.data.type === "linkPreview.configure") {
-                    const message = event.data;
+            window.academicExtensionMessages.subscribe(message => {
+                if (message.type === "linkPreview.configure") {
                     this._configure(message.enabled, message.resolutionScale);
                 }
             });
@@ -330,7 +321,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             this._cancelScheduledScaleRender();
             this._clearAllOverlays();
             if (enabled) {
-                this._renderVisiblePages();
+                this._renderCachedPages();
             }
         }
 
@@ -340,7 +331,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             }
             this._scaleRenderTimer = setTimeout(() => {
                 this._scaleRenderTimer = null;
-                this._renderVisiblePages();
+                this._renderCachedPages();
             }, SCALE_RENDER_DEBOUNCE_MS);
         }
 
@@ -352,16 +343,13 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             this._scaleRenderTimer = null;
         }
 
-        async _renderVisiblePages(): Promise<void> {
-            await this._app.pdfViewer.pagesPromise;
+        _renderCachedPages(): void {
             if (!this._enabled) {
                 return;
             }
-            const viewer = this._app.pdfViewer;
-            for (let index = 0; index < viewer.pagesCount; index++) {
-                const pageView = viewer.getPageView(index);
-                if (pageView && pageView.renderingState === 3) {
-                    this._renderPage(pageView.id);
+            for (const { id, renderingState } of this._app.pdfViewer.getCachedPageViews()) {
+                if (renderingState === 3) {
+                    this._renderPage(id);
                 }
             }
         }
@@ -370,7 +358,7 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             if (!this._enabled || !this._pdfDocument) {
                 return;
             }
-            const renderId = (this._pageRenderIds.get(pageNumber) || 0) + 1;
+            const renderId = ++this._nextPageRenderId;
             const documentGeneration = this._documentGeneration;
             rememberBoundedEntry(this._pageRenderIds, pageNumber, renderId, MAX_DOCUMENT_CACHE_ENTRIES);
 
@@ -803,7 +791,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         }
 
         async _getImagePreview(destination: ResolvedDestination, requestId: number): Promise<ImagePreview | null> {
-            const startedAt = performance.now();
             const key = imagePreviewKey(destination);
             const pdfDocument = this._pdfDocument;
             const generation = this._previewGeneration;
@@ -870,11 +857,10 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             try {
                 await renderTask.promise;
             } catch (error) {
+                canvas.width = canvas.height = 0;
                 if (isRenderingCancelled(error)) {
-                    canvas.width = canvas.height = 0;
                     return null;
                 }
-                canvas.width = canvas.height = 0;
                 throw error;
             } finally {
                 if (this._activeRenderTask === renderTask) {
@@ -897,20 +883,13 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 targetXRatio: clamp((point[0] - crop.left) / crop.width, 0, 1),
                 targetYRatio: clamp((point[1] - crop.top) / crop.height, 0, 1)
             };
-            this._reportDebug("linkPreviewRendered", {
-                pageNumber: destination.pageNumber,
-                durationMs: performance.now() - startedAt,
-                sizeBytes: canvas.width * canvas.height * 4
-            });
-
             this._startPreviewEncoding(
                 key,
                 encodingKey,
                 image,
                 canvas,
                 pdfDocument,
-                generation,
-                destination.pageNumber
+                generation
             );
             return image;
         }
@@ -921,14 +900,12 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             image: ImagePreview,
             canvas: HTMLCanvasElement,
             pdfDocument: PdfJsDocument | null,
-            generation: number,
-            pageNumber: number
+            generation: number
         ): void {
             if (this._pendingPreviewEncodings.has(encodingKey)
                 || this._pendingPreviewEncodings.size >= MAX_PENDING_PREVIEW_ENCODINGS) {
                 return;
             }
-            const encodingStartedAt = performance.now();
             const encoding = canvasToPngBlob(canvas).then((blob): ImagePreview | null => {
                 if (this._pdfDocument !== pdfDocument || this._previewGeneration !== generation
                     || (this._previewCache.get(key)?.pixelWidth ?? 0) > canvas.width) {
@@ -945,11 +922,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                     targetYRatio: image.targetYRatio
                 };
                 this._rememberImagePreview(key, encodedPreview);
-                this._reportDebug("linkPreviewEncoded", {
-                    pageNumber,
-                    durationMs: performance.now() - encodingStartedAt,
-                    sizeBytes: blob.size
-                });
                 return encodedPreview;
             }).catch((error: unknown): null => {
                 console.warn("Failed to cache PDF link image preview.", error);
@@ -961,15 +933,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
                 this._releasePreviewCanvas(image);
             });
             this._pendingPreviewEncodings.set(encodingKey, { image, task: encoding });
-        }
-
-        _reportDebug(event: string, fields: Record<string, unknown>): void {
-            if (!this._debug) {
-                return;
-            }
-            window.dispatchEvent(new CustomEvent("academic-pdf-debug", {
-                detail: { type: "pdf.debug", event, ...fields }
-            }));
         }
 
         _getCachedImagePreview(destination: ResolvedDestination): ImagePreview | undefined {
@@ -1102,28 +1065,6 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
             && (Array.isArray(annotation.dest)
                 || typeof annotation.dest === "string" && annotation.dest.length > 0)
             && Array.isArray(annotation.rect);
-    }
-
-    function readInitialConfiguration(): LinkPreviewConfiguration {
-        const configElement = document.getElementById("pdf-preview-config");
-        const config = configElement?.getAttribute("data-config");
-        if (!config) {
-            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
-        }
-        try {
-            const settings = JSON.parse(config) as {
-                linkPreviewEnabled?: unknown;
-                linkPreviewResolutionScale?: unknown;
-                debug?: unknown;
-            };
-            return {
-                debug: settings.debug === true,
-                enabled: settings.linkPreviewEnabled !== false,
-                resolutionScale: normalizeResolutionScale(settings.linkPreviewResolutionScale)
-            };
-        } catch {
-            return { debug: false, enabled: true, resolutionScale: DEFAULT_RESOLUTION_SCALE };
-        }
     }
 
     function viewportRect(viewport: PdfJsViewport, pdfRect: number[]): ViewportRect {
@@ -1385,24 +1326,16 @@ import { collectNearbyLinesFromRows, type PositionedTextRow } from "./citationPr
         return visibleWidth * visibleHeight - overflow * 10000;
     }
 
-    async function initialize(): Promise<void> {
-        const app = pdfjsAdapter.getApplication();
-        if (!app) {
-            return;
-        }
-
-        await app.initializedPromise;
-        const controller = new CitationPreviewController(app);
-        controller.initialize();
-    }
-
     let initializationStarted = false;
     function startInitialization(): void {
-        if (initializationStarted || !pdfjsAdapter.getApplication()) {
+        const app = pdfjsAdapter.getApplication();
+        if (initializationStarted || !app) {
             return;
         }
         initializationStarted = true;
-        initialize().catch(error => {
+        void app.initializedPromise.then(() => {
+            new CitationPreviewController(app).initialize();
+        }).catch(error => {
             console.error("Failed to initialize Academic PDF citation preview layer.", error);
         });
     }

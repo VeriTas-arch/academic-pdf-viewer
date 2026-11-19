@@ -3,33 +3,12 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-    createLatestRequestTracker,
     querySyncTexForward,
     querySyncTexInverse,
     resolveSourceColumn,
     runSyncTexProcess,
     syncTexTextHint,
 } = require('../src/extension/synctexCli.ts');
-
-test('marks an earlier SyncTeX operation stale when a newer one begins', () => {
-    const tracker = createLatestRequestTracker();
-    const firstIsCurrent = tracker.begin();
-    assert.equal(firstIsCurrent(), true);
-
-    const secondIsCurrent = tracker.begin();
-    assert.equal(firstIsCurrent(), false);
-    assert.equal(firstIsCurrent.signal.aborted, true);
-    assert.equal(secondIsCurrent(), true);
-});
-
-test('cancelling a SyncTeX tracker invalidates its final request', () => {
-    const tracker = createLatestRequestTracker();
-    const isCurrent = tracker.begin();
-    tracker.cancel();
-    assert.equal(isCurrent(), false);
-    assert.equal(isCurrent.signal.aborted, true);
-    assert.equal(tracker.begin()(), true);
-});
 
 test('terminates an in-flight SyncTeX process when its request is aborted', async t => {
     const controller = new AbortController();
@@ -45,8 +24,8 @@ test('terminates an in-flight SyncTeX process when its request is aborted', asyn
 
 test('queries forward SyncTeX through the injected runner and converts its line box', async () => {
     const calls = [];
-    const sourcePath = path.resolve('manual-tests', 'synctex', 'fixture.tex');
-    const pdfPath = path.resolve('manual-tests', 'synctex', 'fixture.pdf');
+    const sourcePath = path.resolve('fixture.tex');
+    const pdfPath = path.resolve('fixture.pdf');
     const runner = async request => {
         calls.push(request);
         return {
@@ -114,7 +93,7 @@ test('omits the optional SyncTeX line box when one of its fields is empty', asyn
 
 test('queries inverse SyncTeX with the validated PDF text hint', async () => {
     const calls = [];
-    const pdfPath = path.resolve('manual-tests', 'synctex', 'fixture.pdf');
+    const pdfPath = path.resolve('fixture.pdf');
     const hint = syncTexTextHint('The final target', 10);
     const runner = async request => {
         calls.push(request);

@@ -6,7 +6,6 @@ import type { MouseButtonMapping, SidebarView, SyncTexMode } from '../shared/pro
 const VIEWER_HTML_RELATIVE_PATH = ['assets', 'pdfviewer', 'lib', 'web', 'viewer.html'];
 
 interface ViewerHtmlOptions {
-    debug: boolean;
     diffRole?: 'original' | 'modified';
     diffLabel?: string;
     linkPreviewEnabled: boolean;
@@ -58,7 +57,6 @@ export function renderViewerHtml(
     ).toString();
     const settings = {
         cMapUrl: `${libUri('web', 'cmaps')}/`,
-        debug: options.debug,
         iccUrl: `${libUri('web', 'iccs')}/`,
         imageResourcesPath: `${libUri('web', 'images')}/`,
         standardFontDataUrl: `${libUri('web', 'standard_fonts')}/`,
@@ -87,6 +85,7 @@ export function renderViewerHtml(
 <link rel="stylesheet" href="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.css'))}">
 <script src="${escapeHtmlAttribute(assetUri('academic', 'extensionMessages.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'pdfjsAdapter.js'))}"></script>
+<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfRangeTransport.js'))}"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'pdfViewerBootstrap.js'))}"></script>
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.mjs'))}" type="module"></script>
