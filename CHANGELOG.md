@@ -2,6 +2,19 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.3.4] - 2026-11-20
+
+### Changed
+
+- Open large PDFs from remote disk workspaces with on-demand byte ranges. The viewer can render the first page before receiving the whole file. Search uses bounded read-ahead.
+- Update bundled PDF.js to 6.5.438 with offline fonts, CMaps, and WASM assets.
+- Simplify Webview configuration and messaging. First-page rendering time is available in the Webview Performance panel.
+
+### Fixed
+
+- Keep the previous ranged PDF readable while PDF.js saves edited form fields during reload. A failed view restore no longer blocks later opens.
+- In Beta, check the combined PDF size before reading both revisions. Wait for the original revision before computing highlights, and clear highlights if comparison fails.
+
 ## [1.3.3] - 2026-11-19
 
 - The stable release opens PDFs, previews references, and supports SyncTeX on VS Code 1.134 or later with standard VS Code settings. It includes the reader fixes from 1.3.2.
