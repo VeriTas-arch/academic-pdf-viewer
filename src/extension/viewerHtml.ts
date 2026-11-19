@@ -91,8 +91,9 @@ export function renderViewerHtml(
 <script src="${escapeHtmlAttribute(libUri('build', 'pdf.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(libUri('web', 'viewer.mjs'))}" type="module"></script>
 <script src="${escapeHtmlAttribute(assetUri('academic', 'reader.js'))}"></script>
-<script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}" type="module"></script>
-<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfDiff.js'))}" type="module"></script>`;
+<script src="${escapeHtmlAttribute(assetUri('academic', 'citationPreview.js'))}" type="module"></script>${options.diffRole
+        ? `\n<script src="${escapeHtmlAttribute(assetUri('academic', 'pdfDiff.js'))}" type="module"></script>`
+        : ''}`;
 
     return viewerHtml
         .replace('<title>PDF.js viewer</title>', `${injectedHead}\n<title>Academic PDF Viewer</title>`)

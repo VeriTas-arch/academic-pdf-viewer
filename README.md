@@ -9,13 +9,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases"><img alt="Latest preview release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?include_prereleases&amp;label=preview&amp;color=7c3aed&amp;style=flat-square"></a>
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases/latest"><img alt="Latest stable release" src="https://img.shields.io/github/v/release/VeriTas-arch/academic-pdf-viewer?label=stable&amp;color=2563eb&amp;style=flat-square"></a>
   <img alt="VS Code 1.134 or later" src="https://img.shields.io/badge/VS%20Code-1.134%2B-007ACC?logo=visualstudiocode&amp;logoColor=white&amp;style=flat-square">
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/VeriTas-arch/academic-pdf-viewer?color=2563eb&amp;style=flat-square"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases">Download Preview</a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=ovolab-veritas.academic-pdf-viewer">VS Code Marketplace</a>
+  ·
+  <a href="https://github.com/VeriTas-arch/academic-pdf-viewer/releases">GitHub Releases</a>
   ·
   <a href="#install-and-start-reading">Get started</a>
   ·
@@ -26,42 +28,11 @@
 
 ## Install and start reading
 
-> **Preview build · VS Code 1.134+**
->
-> Enable Proposed API access for `customEditorDiffs`, including when using the extension as an ordinary PDF reader.
+On VS Code 1.134 or later, install the stable extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ovolab-veritas.academic-pdf-viewer). You can also download the [latest stable VSIX](https://github.com/VeriTas-arch/academic-pdf-viewer/releases/latest) and use **Extensions: Install from VSIX...**. The stable release works with standard VS Code settings.
 
-1. Download the `.vsix` from [GitHub Releases](https://github.com/VeriTas-arch/academic-pdf-viewer/releases).
-2. Run **Extensions: Install from VSIX...** in VS Code and select the file.
-3. Fully quit all VS Code windows, then launch from an external PowerShell window:
-
-   ```powershell
-   code --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-window .
-   ```
-
-4. Open a `.pdf`. If another editor opens, choose **Reopen Editor With...** → **Academic PDF Viewer** from the tab context menu.
+Open a PDF. If another editor opens, choose **Reopen Editor With...** → **Academic PDF Viewer** from the tab context menu.
 
 Use the PDF.js toolbar for search, zoom, outline, page navigation, text selection, printing, and download.
-
-<details>
-<summary>Command-line installation and persistent Proposed API access</summary>
-
-Install or update from PowerShell:
-
-```powershell
-code --install-extension .\academic-pdf-viewer-x.y.z.vsix --force
-```
-
-To enable access on every launch, run **Preferences: Configure Runtime Arguments** and add this field to `argv.json`, preserving existing fields and extension IDs:
-
-```json
-{
-    "enable-proposed-api": ["ovolab-veritas.academic-pdf-viewer"]
-}
-```
-
-Fully restart VS Code afterward. Insiders is not required. Proposed APIs can change between versions; keep VS Code and the extension aligned.
-
-</details>
 
 ## Preview internal references
 
@@ -83,9 +54,20 @@ Inspect embedded citation, figure, equation, and section links without leaving y
 
 PDFs without internal link annotations remain readable but cannot provide previews. Preview quality depends on the PDF's destinations and text layer.
 
-## Review PDF revisions *(Preview)*
+## Review PDF revisions *(Beta)*
 
-After [Preview installation](#install-and-start-reading), open a changed or staged PDF from Source Control for side-by-side comparison. Badges distinguish `HEAD`, `Index`, and `Working Tree` when available.
+Git PDF comparison is available in the Beta build and requires VS Code's `customEditorDiffs` Proposed API.
+
+1. Download the `*-beta.vsix` asset from a [GitHub pre-release](https://github.com/VeriTas-arch/academic-pdf-viewer/releases) and install it using **Extensions: Install from VSIX...**.
+2. Fully quit VS Code, then launch it from an external terminal with the proposal enabled.
+
+   ```powershell
+   code --enable-proposed-api ovolab-veritas.academic-pdf-viewer --new-window .
+   ```
+
+3. Open a changed or staged PDF from Source Control for side-by-side comparison. Badges distinguish `HEAD`, `Index`, and `Working Tree` when available.
+
+Stable and Beta share the extension ID and version. To switch builds from the command line, use `code --install-extension <path-to-vsix> --force` and restart VS Code. To enable the proposal on every launch, use **Preferences: Configure Runtime Arguments** and add `"enable-proposed-api": ["ovolab-veritas.academic-pdf-viewer"]` to `argv.json`, preserving any existing fields and extension IDs. The Beta is tested on VS Code 1.134.0. Proposed APIs may change in later versions.
 
 <p align="center">
   <img
@@ -110,7 +92,7 @@ Pages are compared on demand, so navigating across many uncached or complex page
 | Back / forward | Mouse Back / Forward or <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd> | Any viewer tab |
 | Zoom around pointer | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Wheel</kbd> | Any viewer tab |
 | Preview internal link | Hold <kbd>Ctrl</kbd> while hovering | PDFs with internal links |
-| Toggle diff highlights | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Active PDF diff |
+| Toggle diff highlights | <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Active PDF diff in Beta |
 
 `PDF: Reload`, `PDF: Toggle Link Preview`, and `PDF Diff: Previous Change` / `PDF Diff: Next Change` are available in the Command Palette when applicable. Assign custom bindings in VS Code's Keyboard Shortcuts editor.
 

@@ -2,6 +2,12 @@
 
 All notable changes to the Academic PDF Viewer extension are documented in this file.
 
+## [1.3.3] - 2026-11-19
+
+- The stable release opens PDFs, previews references, and supports SyncTeX on VS Code 1.134 or later with standard VS Code settings. It includes the reader fixes from 1.3.2.
+- The GitHub Beta pre-release adds side-by-side Git PDF comparison, synchronized scrolling, highlight navigation, and the 1.3.2 diff fixes. It requires the `customEditorDiffs` Proposed API.
+- Build both VSIX variants from the same source with `npm run package:vsix`.
+
 ## [1.3.2] - 2026-10-01
 
 ### Changed

@@ -60,11 +60,18 @@ async function run() {
         'academicPdfViewer.tex.synctexForward',
         'academicPdfViewer.tex.synctexForwardFromCursor',
         'academicPdfViewer.tex.synctexInverse',
+    ]) {
+        assert(commands.includes(command), `Command ${command} was not registered.`);
+    }
+    const diffEnabled = extension.packageJSON.enabledApiProposals?.includes('customEditorDiffs') ?? false;
+    for (const command of [
         'academicPdfViewer.toggleDiffHighlights',
+        'academicPdfViewer.enableDiffHighlights',
+        'academicPdfViewer.disableDiffHighlights',
         'academicPdfViewer.previousDiffChange',
         'academicPdfViewer.nextDiffChange',
     ]) {
-        assert(commands.includes(command), `Command ${command} was not registered.`);
+        assert.equal(commands.includes(command), diffEnabled, `Unexpected availability of ${command}.`);
     }
 
     const fixtureRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

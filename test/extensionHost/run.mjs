@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { runTests } from '@vscode/test-electron';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
-const extensionDevelopmentPath = path.resolve(testDirectory, '..', '..');
-const cacheDirectory = path.join(extensionDevelopmentPath, '.vscode-test');
+const root = path.resolve(testDirectory, '..', '..');
+const extensionDevelopmentPath = path.resolve(process.argv[2] ?? root);
+const manifest = JSON.parse(await fs.readFile(path.join(extensionDevelopmentPath, 'package.json'), 'utf8'));
+const cacheDirectory = path.join(root, '.vscode-test');
 const runsDirectory = path.join(cacheDirectory, 'runs');
 const failedRunDirectory = path.join(runsDirectory, 'last-failed');
 let runDirectory;
@@ -35,14 +37,16 @@ try {
         extensionDevelopmentPath,
         extensionTestsPath: path.join(testDirectory, 'suite.cjs'),
         launchArgs: [
-            path.join(extensionDevelopmentPath, 'manual-tests'),
+            path.join(root, 'manual-tests'),
             `--user-data-dir=${userDataDirectory}`,
             `--extensions-dir=${extensionsDirectory}`,
             '--disable-extensions',
             '--disable-workspace-trust',
             '--skip-release-notes',
             '--skip-welcome',
-            '--enable-proposed-api=ovolab-veritas.academic-pdf-viewer',
+            ...(manifest.enabledApiProposals?.includes('customEditorDiffs')
+                ? ['--enable-proposed-api=ovolab-veritas.academic-pdf-viewer']
+                : []),
         ],
     });
 
